@@ -296,7 +296,24 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
   const refreshRef = useRef<(() => void) | null>(null)
   // 图片最大化查看浮层（本地状态，不进全局 store）
   const [lightbox, setLightbox] = useState<LightboxInfo | null>(null)
-  const closeLightbox = useCallback(() => setLightbox(null), [])
+  // 关闭浮层后偶发回到文档顶部（诱因不稳定，疑似滚动锚定/布局重置的竞争）：打开时记录
+  // 正文滚动位置，关闭后按 立即/下一帧/120ms/350ms 多次恢复，覆盖同步与异步两种时机（v0.5.4）
+  const scrollGuardRef = useRef<{ pos: number; docPath: string } | null>(null)
+  const closeLightbox = useCallback(() => {
+    setLightbox(null)
+    const guard = scrollGuardRef.current
+    scrollGuardRef.current = null
+    if (!guard) return
+    const restore = (): void => {
+      if (useStore.getState().activeDoc?.path !== guard.docPath) return
+      const body = document.querySelector('.reader-body')
+      if (body && Math.abs(body.scrollTop - guard.pos) > 2) body.scrollTop = guard.pos
+    }
+    restore()
+    requestAnimationFrame(restore)
+    window.setTimeout(restore, 120)
+    window.setTimeout(restore, 350)
+  }, [])
   annotationsRef.current = annotations
   selectRef.current = onSelectAnn
 
@@ -431,6 +448,11 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
         // 拦截本次点击，避免 Vditor 的图片气泡在浮层背后弹出（与上面链接分支同理）
         event.preventDefault()
         event.stopPropagation()
+        // 记录当前滚动位置，供 closeLightbox 恢复（防偶发回顶）
+        scrollGuardRef.current = {
+          pos: document.querySelector('.reader-body')?.scrollTop ?? 0,
+          docPath
+        }
         setLightbox({
           src: image.src,
           origSrc: image.dataset.anOrigSrc ?? image.getAttribute('src') ?? '',

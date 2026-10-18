@@ -462,7 +462,19 @@ input, textarea { user-select: text; }
 .markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type.an-vcenter:not(:has(.vditor-input)) {
   transform: translate(-100%, 0);
 }
-.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:not(:has(.vditor-input)) button {
+/* 标题块工具栏：Vditor 给标题弹层附带「ID」输入框（.vditor-input），会被上面的
+   :not(:has(.vditor-input)) 排除规则漏掉，弹层停在默认位置（块左缘）盖住标题文字（v0.5.4 修复）。
+   该输入框外层 tooltipped 的 aria-label 以 "ID" 开头，据此单独识别标题弹层并同样左移。 */
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type:has(> .vditor-tooltipped[aria-label^="ID"] > .vditor-input) {
+  left: calc(var(--prose-left, 0px) + 50px) !important;
+  transform: translate(-100%, 26px);
+  opacity: 1;
+}
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type.an-vcenter:has(> .vditor-tooltipped[aria-label^="ID"] > .vditor-input) {
+  transform: translate(-100%, 0);
+}
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:not(:has(.vditor-input)) button,
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:has(> .vditor-tooltipped[aria-label^="ID"] > .vditor-input) button {
   padding: 4px 5px;
 }
 
@@ -1582,65 +1594,68 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
   font-family: var(--font-mono);
 }
 
-/* ---- Logo 动画（0.5.2） ---- */
-/* 树干版入场（约 1.6s，只播一次，both 定格终态）：树干经 clipPath 自下而上“生长”
-   （裁剪矩形以底边为原点 scaleY 0→1），树皮纹理线/枝茬/锯断面/木节/顶部断面/地面阴影
-   随后 stagger 淡入（各元素 animationDelay 在 Logo.tsx 内联），最后枝茬末端的绿叶
-   以叶根为原点 scale 0→1 冒出；常驻微动：入场结束后整棵树绕树干底部中心极缓慢轻摆，务必克制 */
+/* ---- Logo 动画（0.5.3） ---- */
+/* Kimi 式 squircle + Timber 的「树干 · 开枝散叶」：入场约 1.8s、只播一次、both 定格终态。
+   主干自下而上描边生长（pathLength=100 归一化，dashoffset 100→0，延迟/时长由 Logo.tsx
+   行内注入）→ 主枝展开 → 次枝抽出 → 枝端叶片逐片冒出 → 树冠最高处蓝点最后点亮，
+   随后以 2.6s 周期极轻微脉动。 */
 @keyframes timber-fade-in {
   from { opacity: 0; }
-  /* 不写 to：终值回落到元素自身的 opacity（树皮线/阴影等自带透明度属性），避免定格成 1 */
+  /* 不写 to：终值回落到元素自身 opacity（叶片等自带不透明度），避免定格成 1 */
 }
-/* 树干生长：裁剪矩形纵向展开；transform-box: fill-box + 底边原点，保证从根脚向上长出 */
-@keyframes timber-grow {
-  from { transform: scaleY(0); }
-  to { transform: scaleY(1); }
+/* 枝条描边生长 */
+@keyframes timber-draw {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
 }
-/* 绿叶冒头：以叶根为原点 scale 0→1，略带回旋；缓动的过冲让叶子弹出后轻微回弹再定格 */
+/* 叶片冒出：以自身中心 scale 0→1，过冲缓动带来轻微回弹 */
 @keyframes timber-leaf-pop {
-  from { transform: scale(0) rotate(-14deg); opacity: 0; }
-  to { transform: scale(1) rotate(0deg); opacity: 1; }
+  from { transform: scale(0); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
-/* 常驻轻摆：±0.4°、7s 一周期；0%/100% 归 0，延迟衔接入场结束时不会有跳变 */
-@keyframes timber-sway {
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(0.4deg); }
-  75% { transform: rotate(-0.4deg); }
+/* 常驻脉动：呼应 Kimi「icons pulse as you interact」，不透明度轻微呼吸 */
+@keyframes timber-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
-.timber-logo .timber-grow {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: timber-grow 0.7s cubic-bezier(0.3, 0.7, 0.35, 1) both;
+/* 底板快速淡入，避免整枚图标“闪现” */
+.timber-logo .timber-shell {
+  animation: timber-fade-in 0.3s cubic-bezier(0, 0, 0.2, 1) both;
 }
-/* 统一淡入类：动画本体在此，stagger 先后由 Logo.tsx 行内 animationDelay 决定 */
-.timber-logo .timber-fade {
-  animation: timber-fade-in 0.25s ease-out both;
+/* 枝条：pathLength=100 后 dasharray/offset 与真实长度无关，每段按自身长度精确生长 */
+.timber-logo .timber-stroke {
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation-name: timber-draw;
+  animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  animation-fill-mode: both;
+  /* animation-delay / animation-duration 由 Logo.tsx 行内 stagger 注入 */
 }
-/* 绿叶：变换原点取叶片包围盒的左中，即叶根（叶片沿局部 +x 从 (0,0) 展开）；
-   外层 g 的定位 transform 与这层 CSS transform 分层，互不覆盖。
-   stagger 由 Logo.tsx 行内 animationDelay 决定（880/1000/1120ms） */
+/* 叶片：延迟由 Logo.tsx 行内注入，排在所属枝条画完之后 */
 .timber-logo .timber-leaf {
   transform-box: fill-box;
-  transform-origin: 0% 50%;
-  animation: timber-leaf-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  transform-origin: center;
+  animation: timber-leaf-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
-.timber-logo .timber-sway {
-  /* 变换原点取树干底部中心：view-box 坐标系下的 (256,421)，即根脚着地、地面阴影处 */
-  transform-box: view-box;
-  transform-origin: 256px 421px;
-  animation: timber-sway 7s ease-in-out 1.6s infinite;
+/* 此刻的蓝点：最后弹入（1.36s），随后进入常驻脉动（1.92s 排在弹入结束之后） */
+.timber-logo .timber-now {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    timber-leaf-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 1.36s both,
+    timber-dot-pulse 2.6s ease-in-out 1.92s infinite;
 }
 
-/* 减少动态偏好：禁用全部动画；各元素回落到自身属性值（裁剪矩形无变换、叶子为 scale(1) 终帧、
-   纹理与阴影保留各自透明度），即静态终帧 */
+/* 减少动态偏好：禁用全部动画；dashoffset 归 0，即静态终帧 */
 @media (prefers-reduced-motion: reduce) {
-  .timber-logo .timber-grow,
-  .timber-logo .timber-fade,
+  .timber-logo .timber-shell,
+  .timber-logo .timber-stroke,
   .timber-logo .timber-leaf,
-  .timber-logo .timber-sway {
+  .timber-logo .timber-now {
     animation: none;
   }
+  .timber-logo .timber-stroke { stroke-dashoffset: 0; }
 }
 
 /* ---- 文档 tab 右键菜单 / 刷新（0.5.1） ----

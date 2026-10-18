@@ -1,84 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Timber Logo：Kimi 式 squircle + 树干 · 开枝散叶
+       主干自下而上生长，主枝向两侧展开，枝端叶片结果；树冠最高处的蓝点 = 此刻最新的一次提交 -->
   <defs>
-    <linearGradient id="timber-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1C2B22"/>
-      <stop offset="1" stop-color="#0E1712"/>
-    </linearGradient>
-    <!-- 树干柱面体积光：横向渐变，边缘深、中间暖亮 -->
-    <linearGradient id="timber-trunk" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#7C4820"/>
-      <stop offset="0.28" stop-color="#A9713B"/>
-      <stop offset="0.52" stop-color="#D9A76A"/>
-      <stop offset="0.78" stop-color="#A9713B"/>
-      <stop offset="1" stop-color="#6E3E1D"/>
-    </linearGradient>
-    <!-- 叶面渐变：沿叶片局部 x 轴（叶根→叶尖）由亮到深 -->
-    <linearGradient id="timber-leaf" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#6FBF73"/>
-      <stop offset="1" stop-color="#3E8E4A"/>
+    <linearGradient id="timber-shell" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#1A1A1A"/>
+      <stop offset="1" stop-color="#0D0D0D"/>
     </linearGradient>
   </defs>
 
-  <!-- 底板 -->
-  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#timber-bg)"/>
+  <!-- squircle 底板 -->
+  <path d="M256 8 C396 8 504 116 504 256 C504 396 396 504 256 504 C116 504 8 396 8 256 C8 116 116 8 256 8 Z"
+        fill="url(#timber-shell)" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="2"/>
 
-  <!-- 地面阴影 -->
-  <ellipse cx="256" cy="421" rx="110" ry="13" fill="#000000" opacity="0.28"/>
+  <!-- 主干 -->
+  <path d="M 256 374 L 256 176" fill="none" stroke="#FFFFFF" stroke-opacity="0.95"
+        stroke-width="52" stroke-linecap="round"/>
+  <!-- 一级分枝 -->
+  <path d="M 256 300 L 162 192" fill="none" stroke="#FFFFFF" stroke-opacity="0.82"
+        stroke-width="30" stroke-linecap="round"/>
+  <path d="M 256 272 L 352 178" fill="none" stroke="#FFFFFF" stroke-opacity="0.82"
+        stroke-width="30" stroke-linecap="round"/>
+  <!-- 二级分枝 -->
+  <path d="M 212 250 L 110 210" fill="none" stroke="#FFFFFF" stroke-opacity="0.64"
+        stroke-width="18" stroke-linecap="round"/>
+  <path d="M 304 225 L 388 194" fill="none" stroke="#FFFFFF" stroke-opacity="0.64"
+        stroke-width="18" stroke-linecap="round"/>
 
-  <!-- 树干（ Timber = 木材：主干即项目，纹理即记录 ） -->
-  <g>
-    <!-- 枝茬（压在树干后方，根部被遮住）：右侧一根、左上小枝 -->
-    <path d="M 300 252 L 350 230" fill="none" stroke="#A9713B" stroke-width="26" stroke-linecap="round"/>
-    <path d="M 210 196 L 176 178" fill="none" stroke="#A9713B" stroke-width="19" stroke-linecap="round"/>
+  <!-- 枝端叶片 -->
+  <circle cx="162" cy="192" r="21" fill="#FFFFFF" fill-opacity="0.86"/>
+  <circle cx="352" cy="178" r="21" fill="#FFFFFF" fill-opacity="0.86"/>
+  <circle cx="110" cy="210" r="15" fill="#FFFFFF" fill-opacity="0.68"/>
+  <circle cx="388" cy="194" r="15" fill="#FFFFFF" fill-opacity="0.68"/>
 
-    <!-- 绿叶（静态终帧）：右侧枝茬两片（一上扬一近水平）、左上枝茬一片（顺枝斜上） -->
-    <g transform="translate(353 228) rotate(-58) scale(1.15)">
-      <path d="M 0 0 C 12 -15 38 -17 54 0 C 38 17 12 15 0 0 Z" fill="url(#timber-leaf)"/>
-      <path d="M 3 0 C 18 -2.4 36 -1.6 49 0" fill="none" stroke="#BCE3B0" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
-    </g>
-    <g transform="translate(353 228) rotate(10) scale(0.95)">
-      <path d="M 0 0 C 12 -15 38 -17 54 0 C 38 17 12 15 0 0 Z" fill="url(#timber-leaf)"/>
-      <path d="M 3 0 C 18 -2.4 36 -1.6 49 0" fill="none" stroke="#BCE3B0" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
-    </g>
-    <g transform="translate(173 175) rotate(214) scale(1.05)">
-      <path d="M 0 0 C 12 -15 38 -17 54 0 C 38 17 12 15 0 0 Z" fill="url(#timber-leaf)"/>
-      <path d="M 3 0 C 18 -2.4 36 -1.6 49 0" fill="none" stroke="#BCE3B0" stroke-width="1.8" stroke-linecap="round" opacity="0.7"/>
-    </g>
-
-    <!-- 树干本体：微锥度，底部根脚外张 -->
-    <path fill="url(#timber-trunk)" d="M 212 116
-      C 208 190 204 280 202 358
-      C 200 384 192 400 176 412
-      Q 192 418 206 406
-      Q 224 422 244 408
-      Q 262 422 280 406
-      Q 302 418 322 408
-      C 312 394 310 378 310 358
-      C 308 280 304 190 300 116
-      Z"/>
-
-    <!-- 树皮纹理：纵向深浅交替 -->
-    <g fill="none" stroke-linecap="round">
-      <path d="M 234 150 C 231 215 229 285 227 350" stroke="#7C4820" stroke-width="5.5" opacity="0.85"/>
-      <path d="M 251 142 C 249 212 248 282 247 348" stroke="#E9C08A" stroke-width="3.2" opacity="0.8"/>
-      <path d="M 270 150 C 272 218 274 290 276 352" stroke="#8A5227" stroke-width="4.5" opacity="0.8"/>
-      <path d="M 288 178 C 291 235 293 295 295 342" stroke="#D9A76A" stroke-width="3"   opacity="0.7"/>
-      <path d="M 217 235 C 214 282 212 318 211 348" stroke="#A9713B" stroke-width="4"   opacity="0.7"/>
-    </g>
-
-    <!-- 干身木节 -->
-    <ellipse cx="260" cy="305" rx="13" ry="18" fill="none" stroke="#8A5227" stroke-width="2.5" opacity="0.5"/>
-    <ellipse cx="260" cy="305" rx="8"  ry="12" fill="#7C4820" opacity="0.9"/>
-
-    <!-- 枝茬锯断面 -->
-    <ellipse cx="353" cy="228" rx="8"   ry="12"  fill="#E9C08A" stroke="#B9834C" stroke-width="2.5" transform="rotate(-23.7 353 228)"/>
-    <ellipse cx="353" cy="228" rx="3.6" ry="6.5" fill="none" stroke="#D9A76A" stroke-width="1.8" opacity="0.8" transform="rotate(-23.7 353 228)"/>
-    <ellipse cx="174" cy="176" rx="6.5" ry="9.5" fill="#E9C08A" stroke="#B9834C" stroke-width="2.2" transform="rotate(27.9 174 176)"/>
-
-    <!-- 顶部锯断面：一圈浅环暗示年轮，不再作为主体 -->
-    <ellipse cx="256" cy="116" rx="44" ry="16.5" fill="#E9C08A" stroke="#B9834C" stroke-width="3"/>
-    <ellipse cx="256" cy="116" rx="26" ry="9.5"  fill="none" stroke="#D9A76A" stroke-width="2" opacity="0.75"/>
-    <ellipse cx="256" cy="116" rx="5"  ry="2.2"  fill="#C9894C"/>
-  </g>
-
+  <!-- 此刻：树冠最高处 / Kimi 蓝点 -->
+  <circle cx="256" cy="146" r="30" fill="#1783FF"/>
 </svg>
