@@ -77,9 +77,13 @@ export default function App() {
             <ArchitectureView />
           </main>
         ) : view === 'code' ? (
-          <main className="reader-wrap">
-            <CodeView />
-          </main>
+          // 代码视图：侧栏（项目/文件树/搜索/Git，v0.5.6 起与文档视图一致）+ 只读代码阅读器
+          <>
+            <Sidebar />
+            <main className="reader-wrap">
+              <CodeView />
+            </main>
+          </>
         ) : (
           // docs：现有文档阅读组合，原样保留
           <>

@@ -20,21 +20,23 @@
   line-height: 1.45;
   font-weight: var(--font-weight-bold);
 }
+/* 标题字号用 em 相对正文（--reader-font-size）：设置里调字号时层级同步缩放，
+   且 h4–h6 不再小于正文（v0.5.6 修复「子标题不像标题」） */
 .prose h1 {
-  font-size: var(--md-H1-font-size); line-height: var(--md-H1-line-height);
+  font-size: 1.75em; line-height: 1.4;
   margin: 0 0 20px; padding-bottom: 14px;
   border-bottom: 1px solid var(--line); letter-spacing: 0.3px;
 }
 .prose h2 {
-  font-size: var(--md-H2-font-size); line-height: var(--md-H2-line-height);
+  font-size: 1.45em; line-height: 1.4;
   margin: 36px 0 12px; padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 .prose h2::before { content: "§ "; color: var(--accent); font-weight: 400; }
-.prose h3 { font-size: 16px; margin: 28px 0 8px; }
-.prose h4 { font-size: 15px; margin: 22px 0 6px; }
-.prose h5 { font-size: 14px; margin: 18px 0 6px; }
-.prose h6 { font-size: 13px; margin: 16px 0 6px; color: var(--ink2); }
+.prose h3 { font-size: 1.25em; margin: 28px 0 8px; }
+.prose h4 { font-size: 1.1em; margin: 22px 0 6px; }
+.prose h5 { font-size: 1em; margin: 18px 0 6px; }
+.prose h6 { font-size: 0.95em; margin: 16px 0 6px; color: var(--ink2); }
 
 .prose p { margin: 10px 0; }
 .prose ul, .prose ol { margin: 8px 0 12px; padding-left: 26px; }

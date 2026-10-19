@@ -59,6 +59,12 @@ function ChangeRow({
 /** 侧栏 Git 页签：状态 / 暂存 / 丢弃 / 提交 / 拉推（模仿 VSCode 源代码管理） */
 export default function GitPanel({ projectId }: { projectId: string }) {
   const { openDoc, toast } = useStore()
+  // 代码/架构视图下打开文档需先跳回文档视图（v0.5.6：Git 页签随侧栏进入代码视图）
+  const openDocFromGit = (path: string): void => {
+    void openDoc(path)
+    const s = useStore.getState()
+    if (s.view !== 'docs') s.setView('docs')
+  }
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -182,7 +188,7 @@ export default function GitPanel({ projectId }: { projectId: string }) {
               key={'s-' + c.path}
               change={c}
               code={c.index}
-              onOpen={() => void openDoc(c.path)}
+              onOpen={() => openDocFromGit(c.path)}
               onStage={() => void stage(c)}
               onUnstage={() => void unstage(c)}
               onDiscard={() => discard(c)}
@@ -199,7 +205,7 @@ export default function GitPanel({ projectId }: { projectId: string }) {
               key={'u-' + c.path}
               change={c}
               code={c.index === '?' ? '?' : c.work}
-              onOpen={() => void openDoc(c.path)}
+              onOpen={() => openDocFromGit(c.path)}
               onStage={() => void stage(c)}
               onUnstage={() => void unstage(c)}
               onDiscard={() => discard(c)}
@@ -236,7 +242,7 @@ export default function GitPanel({ projectId }: { projectId: string }) {
               )}
             </div>
             <div className="gd-ops">
-              <button className="btn-ghost sm" onClick={() => void openDoc(diff.path)}>打开文档</button>
+              <button className="btn-ghost sm" onClick={() => openDocFromGit(diff.path)}>打开文档</button>
               <button className="btn-primary sm" onClick={() => setDiff(null)}>关闭</button>
             </div>
           </div>

@@ -352,6 +352,11 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
   const refreshRef = useRef<(() => void) | null>(null)
   // 图片最大化查看浮层（本地状态，不进全局 store）
   const [lightbox, setLightbox] = useState<LightboxInfo | null>(null)
+  // 代码块悬浮「复制」按钮（v0.5.6，参考飞书/Notion）：portal + fixed 定位于块右上角，
+  // 不插入 Vditor DOM（避免污染序列化），滚动时随块重算位置
+  const [codeCopy, setCodeCopy] = useState<{ top: number; right: number } | null>(null)
+  const [codeCopied, setCodeCopied] = useState(false)
+  const codeCopyPreRef = useRef<HTMLElement | null>(null)
   // 关闭浮层后偶发回到文档顶部（诱因不稳定，疑似滚动锚定/布局重置的竞争）：打开时记录
   // 正文滚动位置，关闭后按 立即/下一帧/120ms/350ms 多次恢复，覆盖同步与异步两种时机（v0.5.4）
   const scrollGuardRef = useRef<{ pos: number; docPath: string } | null>(null)
@@ -398,9 +403,11 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
     let annotationRanges: { annotation: Annotation; range: Range }[] = []
     let popObserver: MutationObserver | undefined
 
-    /** 块悬浮工具栏（上移/下移/删除）垂直居中于目标块：Vditor 把弹层钉在块顶上方
-     *  （inline top = 块 offsetTop - 21，并存入 data-top），纯 CSS 只能给固定偏移，
-     *  段落一高就显得是「上对齐」。这里按 data-top 反查目标块，把弹层改到块垂直中线。 */
+    /** 块悬浮工具栏定位：
+     *  - 纯按钮弹层（段落等，上移/下移/删除）：移到行左侧留白区，并与块垂直居中；
+     *  - 含输入框的弹层（标题 ID / 表格行列 / 代码块语言）：弹层较宽，左侧留白放不下
+     *    （会被 reader-body 左缘截断），垂直居中又会盖住块内容（v0.5.6 表格遮挡投诉）——
+     *    改为悬浮在块的上方、左缘对齐正文起始，顶部空间不足时改到块下方。 */
     const centerBlockToolbar = (): void => {
       const popover = container.querySelector<HTMLElement>('.vditor-wysiwyg > div.vditor-panel--none')
       if (!popover || popover.style.display === 'none' || disposed) return
@@ -413,6 +420,19 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       const block = [...proseEl.querySelectorAll<HTMLElement>(':scope > *, li, table')]
         .find((el) => el.offsetTop === blockTop)
       if (!block) return
+      if (popover.querySelector('.vditor-input')) {
+        popover.classList.add('an-above')
+        const ph = popover.offsetHeight
+        const above = blockTop - ph - 6
+        const nextTop = `${above >= 2 ? above : blockTop + block.offsetHeight + 6}px`
+        if (popover.style.top !== nextTop) popover.style.top = nextTop
+        const want = proseEl.offsetLeft + 88
+        const maxLeft = proseEl.offsetLeft + proseEl.offsetWidth - popover.offsetWidth - 8
+        const nextLeft = `${Math.max(4, Math.min(want, maxLeft))}px`
+        if (popover.style.left !== nextLeft) popover.style.left = nextLeft
+        return
+      }
+      popover.classList.remove('an-above')
       const next = `${Math.max(-8, blockTop + block.offsetHeight / 2 - popover.offsetHeight / 2)}px`
       if (popover.style.top !== next) popover.style.top = next
       popover.classList.add('an-vcenter')
@@ -484,6 +504,55 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
     // 侧栏/批注面板开合、窗口缩放都会改版式；--prose-left 需同步刷新
     const resizeObserver = new ResizeObserver(() => refresh())
     resizeObserver.observe(container)
+
+    // ---- 代码块悬浮「复制」按钮：mouseover/mouseout 事件委托，不改动 Vditor 的 pre DOM ----
+    const hideCodeCopy = (): void => {
+      if (codeCopyPreRef.current) {
+        codeCopyPreRef.current = null
+        setCodeCopy(null)
+      }
+    }
+    const positionCodeCopy = (): void => {
+      const pre = codeCopyPreRef.current
+      if (!pre || disposed) return
+      // 代码块进入/退出编辑态时，编辑 pre 与预览 pre 的可见性会互换，隐藏的一副本 rect 为 0
+      if (!pre.isConnected || pre.getBoundingClientRect().width === 0) {
+        hideCodeCopy()
+        return
+      }
+      const rect = pre.getBoundingClientRect()
+      // 块滚出视口后按钮没有附着意义，直接隐藏
+      if (rect.bottom < -8 || rect.top > window.innerHeight + 8) {
+        hideCodeCopy()
+        return
+      }
+      const next = { top: Math.round(rect.top + 6), right: Math.round(window.innerWidth - rect.right + 8) }
+      setCodeCopy((cur) => (cur && cur.top === next.top && cur.right === next.right ? cur : next))
+    }
+    const onCodeOver = (event: MouseEvent): void => {
+      const pre = (event.target as HTMLElement).closest?.('pre')
+      if (!pre || !(pre as HTMLElement).closest('.prose')) return
+      // wysiwyg 代码块含「编辑 pre + 预览 pre」双副本，未编辑时编辑副本隐藏（rect 为 0），跳过
+      const rect = (pre as HTMLElement).getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
+      if (codeCopyPreRef.current === pre) return
+      codeCopyPreRef.current = pre as HTMLElement
+      setCodeCopied(false)
+      positionCodeCopy()
+    }
+    const onCodeOut = (event: MouseEvent): void => {
+      const pre = codeCopyPreRef.current
+      if (!pre) return
+      const to = event.relatedTarget as HTMLElement | null
+      // 在块内子元素间移动、或移到悬浮按钮本身，都不算离开
+      if (to && (pre.contains(to) || to.closest('.code-copy-btn'))) return
+      hideCodeCopy()
+    }
+    const onCodeScroll = (): void => positionCodeCopy()
+    container.addEventListener('mouseover', onCodeOver)
+    container.addEventListener('mouseout', onCodeOut)
+    window.addEventListener('scroll', onCodeScroll, true)
+    window.addEventListener('resize', onCodeScroll)
 
     const syncDraft = (): void => {
       const state = useStore.getState()
@@ -675,6 +744,12 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       container.removeEventListener('focusout', syncDraft)
       container.removeEventListener('keydown', onKeyDown)
       container.removeEventListener('click', onClick, true)
+      container.removeEventListener('mouseover', onCodeOver)
+      container.removeEventListener('mouseout', onCodeOut)
+      window.removeEventListener('scroll', onCodeScroll, true)
+      window.removeEventListener('resize', onCodeScroll)
+      codeCopyPreRef.current = null
+      setCodeCopy(null)
       setTextHighlight('ann-open', [])
       setTextHighlight('ann-done', [])
       setTextHighlight('ann-flash', [])
@@ -688,6 +763,38 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       {/* 浮层 portal 到 body：容器上的原生点击委托（链接/图片/批注）不会拦截浮层内点击，
           也不会被 Vditor 对容器 innerHTML 的重写波及 */}
       {lightbox && createPortal(<ImageLightbox info={lightbox} onClose={closeLightbox} />, document.body)}
+      {/* 代码块悬浮复制钮：fixed 定位于代码块右上角内侧；mousedown 拦截避免改变光标/选区 */}
+      {codeCopy &&
+        createPortal(
+          <button
+            className={`code-copy-btn${codeCopied ? ' copied' : ''}`}
+            style={{ top: codeCopy.top, right: codeCopy.right }}
+            onMouseDown={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              const text = codeCopyPreRef.current?.innerText.replace(/\n+$/, '') ?? ''
+              if (!text) return
+              void navigator.clipboard
+                .writeText(text)
+                .then(() => {
+                  setCodeCopied(true)
+                  window.setTimeout(() => setCodeCopied(false), 1200)
+                })
+                .catch(() => {})
+            }}
+            onMouseLeave={() => {
+              codeCopyPreRef.current = null
+              setCodeCopy(null)
+            }}
+          >
+            {codeCopied ? '✓ 已复制' : '复制'}
+          </button>,
+          document.body
+        )}
     </>
   )
 }

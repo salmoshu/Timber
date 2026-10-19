@@ -5,6 +5,7 @@ import Chevron from './Chevron'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
+import { CodeTree } from './CodeView'
 import {
   blockPath,
   hiddenProjectIds,
@@ -187,7 +188,8 @@ export default function Sidebar() {
     toast,
     sidebarCollapsed,
     sidebarWidth,
-    setSidebarWidth
+    setSidebarWidth,
+    view
   } = useStore()
 
   /** 右缘拖拽调宽（HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件） */
@@ -215,10 +217,10 @@ export default function Sidebar() {
   const [dropTarget, setDropTarget] = useState<string | null>(null) // 拖拽放置目标（'' = 项目根）
   const bump = () => setStoreRev((v) => v + 1)
 
-  const onReconnect = async (remoteId: string) => {
+  const onReconnect = async (remoteId: string, projectId?: string) => {
     setConnecting((s) => new Set(s).add(remoteId))
     try {
-      await reconnectRemote(remoteId)
+      await reconnectRemote(remoteId, projectId)
     } finally {
       setConnecting((s) => {
         const next = new Set(s)
@@ -350,7 +352,7 @@ export default function Sidebar() {
       x: e.clientX,
       y: e.clientY,
       items: [
-        { key: 'reconnect', label: '重新连接', onClick: () => void onReconnect(r.id) },
+        { key: 'reconnect', label: r.connected ? '接入该项目' : '重新连接', onClick: () => void onReconnect(r.id, p.id.slice(r.id.length + 1)) },
         {
           key: 'remove',
           label: '从列表移除…',
@@ -519,8 +521,16 @@ export default function Sidebar() {
 
   const visibleProjects = projects.filter((p) => showHidden || !hiddenIds.includes(p.id))
   const hiddenCount = projects.filter((p) => hiddenIds.includes(p.id)).length
-  // 未连接的远程连接：重启后不自动重连，占位显示 + ⟳ 手动重连（zcode 式）
-  const disconnectedRemotes = remotes.filter((r) => !r.connected)
+  // 未连接的远程连接：重启后不自动重连，占位显示 + ⟳ 手动重连（zcode 式）；
+  // v0.5.6 起分项目管理——连接在线但仅部分项目接入时，其余项目同样显示占位
+  const disconnectedRemotes = remotes
+    .map((r) => {
+      const snaps = r.projects ?? []
+      if (!r.connected) return { remote: r, snaps }
+      if (r.connectedProjectIds === undefined) return { remote: r, snaps: [] as typeof snaps }
+      return { remote: r, snaps: snaps.filter((sp) => !r.connectedProjectIds!.includes(sp.id)) }
+    })
+    .filter((e) => !e.remote.connected || e.snaps.length > 0)
 
   // 折叠态：不渲染侧栏（折叠/展开统一由标题栏 ☰ 按钮控制）
   if (sidebarCollapsed) return null
@@ -564,8 +574,7 @@ export default function Sidebar() {
                 </button>
               )
             })}
-            {disconnectedRemotes.flatMap((r) => {
-              const snaps = r.projects ?? []
+            {disconnectedRemotes.flatMap(({ remote: r, snaps }) => {
               // 无项目快照：保留连接名占位（否则该连接无从重连/移除）
               if (snaps.length === 0) {
                 return [
@@ -587,25 +596,26 @@ export default function Sidebar() {
                   </div>
                 ]
               }
-              // 断开后按原项目名占位（而非连接名）；点击/⟳ 重连，右键可移除单个项目
+              // 断开后按原项目名占位（而非连接名）；点击/⟳ 只接入该项目（分项目管理），
+              // 右键可移除单个项目；连接在线时接入是本地操作（秒回）
               return snaps.map((sp) => {
                 const proj: Project = { ...sp, id: `${r.id}:${sp.id}`, remoteId: r.id, addedAt: '' }
                 return (
                   <div
                     key={proj.id}
                     className="proj-item proj-remote-off"
-                    onClick={() => void onReconnect(r.id)}
+                    onClick={() => void onReconnect(r.id, sp.id)}
                     onContextMenu={(e) => offlineProjectMenu(e, r, proj)}
-                    title={`${displayName(proj)}\n${sp.path}\n未连接${r.lastError ? `（上次失败：${r.lastError}）` : ''}\n（点击重连；右键：重连/移除）`}
+                    title={`${displayName(proj)}\n${sp.path}\n${r.connected ? '未接入' : '未连接'}${!r.connected && r.lastError ? `（上次失败：${r.lastError}）` : ''}\n（点击接入；右键：接入/移除）`}
                   >
                     <span className="proj-name">🌐 {displayName(proj)}</span>
                     <button
                       className={`proj-reconnect ${connecting.has(r.id) ? 'spin' : ''}`}
-                      title="重新连接"
+                      title={r.connected ? '接入该项目' : '重新连接'}
                       disabled={connecting.has(r.id)}
                       onClick={(e) => {
                         e.stopPropagation()
-                        void onReconnect(r.id)
+                        void onReconnect(r.id, sp.id)
                       }}
                     >
                       ⟳
@@ -652,7 +662,7 @@ export default function Sidebar() {
               className={tab === 'docs' ? 'active' : ''}
               onClick={() => setTab('docs')}
             >
-              文档
+              {view === 'code' ? '文件' : '文档'}
             </button>
             <button
               className={tab === 'search' ? 'active' : ''}
@@ -667,6 +677,10 @@ export default function Sidebar() {
           </div>
 
           {tab === 'docs' ? (
+            // 代码视图：首个页签换成源码文件树（搜索/Git 页签不变，项目管理区域共用）
+            view === 'code' ? (
+              <CodeTree />
+            ) : (
             <>
               <div className="sb-filter">
                 <input
@@ -698,6 +712,7 @@ export default function Sidebar() {
                   ))}
               </div>
             </>
+            )
           ) : tab === 'search' ? (
             <div className="sb-tree git-tree">
               <SearchPanel projectId={active.id} />

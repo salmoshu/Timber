@@ -39,6 +39,10 @@ export interface RemoteConfig {
   /** 远程项目的本地快照（连接/同步时刷新）：断开后侧栏按原项目名占位显示，
    *  而不是只呈现一行连接名 */
   projects?: RemoteProjectInfo[]
+  /** 分项目连接管理（v0.5.6）：已接入（可见）的项目快照 id 清单。
+   *  undefined = 全部项目可见（首次连接/整连重连）；
+   *  数组 = 仅这些项目可见，其余快照在侧栏显示为未连接占位，可逐个 ⟳ 接入 */
+  connectedProjectIds?: string[]
 }
 
 /** 远程项目的本地快照条目（id 为远端 timberd 注册 id，路径 sha1 派生；

@@ -100,6 +100,17 @@
   --Syntax-Mark: #526fff;
 
   /* ---------- 圆角 ---------- */
+  /* 语义层（2026-10-19 对齐 Brand 11-圆角体系-实测修正；新代码优先用语义令牌）
+     铁律：普通按钮永不 pill；半径 ÷ 元素高度 ≈ 20–30%；24px 仅 hero 容器 */
+  --radius-badge: 4px;      /* 徽章/标签/快捷键键帽 */
+  --radius-check: 6px;      /* 复选框/关闭小钮 */
+  --radius-button: 8px;     /* 标准按钮（.kimi-button 实测） */
+  --radius-button-2: 10px;  /* 次级按钮/菜单项 */
+  --radius-input: 12px;     /* 输入框/popover/列表容器/代码块 */
+  --radius-card: 16px;      /* 卡片/对话框/面板 */
+  --radius-panel: 20px;     /* 展开态大面板/任务条 */
+  --radius-hero: 24px;      /* 主角输入卡——全产品唯一「很圆」的容器 */
+  /* 数值档（旧别名，保留兼容） */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -126,6 +137,8 @@
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* 营销页大动效：超顺滑缓出 */
+  --ease-marketing: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 /* ============ 深色模式（官方完整暗色调色板） ============ */

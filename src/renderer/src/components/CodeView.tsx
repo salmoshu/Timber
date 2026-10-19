@@ -1,16 +1,9 @@
-// 代码视图：左侧源码文件树（搜索过滤），右侧 highlight.js 只读阅读器（行号、等宽、主题跟随）
+// 代码视图：highlight.js 只读阅读器（行号、等宽、主题跟随）；
+// 源码文件树为 CodeTree（v0.5.6 起挂入侧栏「文件」tab，与文档视图的项目管理区域一致）
 import { useEffect, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
 import type { DocNode } from '@shared/types'
-import { apiFor, origProjectId, rawBaseFor, useStore } from '../store'
-
-/** 源码 + 文本扩展名（树请求参数；沿用契约源码集合） */
-const CODE_EXTS = [
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.py', '.rs', '.java', '.kt',
-  '.vue', '.svelte', '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.swift',
-  '.scala', '.sh', '.ps1', '.css', '.scss', '.html',
-  '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.toml', '.xml', '.csv', '.log'
-]
+import { origProjectId, rawBaseFor, useStore } from '../store'
 
 /** 扩展名 → highlight.js 语言名（common 包内；未知扩展按纯文本） */
 const LANG_BY_EXT: Record<string, string> = {
@@ -73,25 +66,12 @@ function TreeNode({ node, depth }: { node: DocNode; depth: number }) {
 export default function CodeView() {
   const activeProjectId = useStore((s) => s.activeProjectId)
   const codeFile = useStore((s) => s.codeFile)
-  const [tree, setTree] = useState<DocNode | null>(null)
-  const [filter, setFilter] = useState('')
   const [content, setContent] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
   const codeRef = useRef<HTMLDivElement | null>(null)
-
-  // 源码文件树（独立于文档树：扩展名集合不同）
-  useEffect(() => {
-    if (!activeProjectId) return
-    apiFor<DocNode>(activeProjectId)(
-      'GET',
-      `/api/projects/${activeProjectId}/tree?exts=${encodeURIComponent(CODE_EXTS.join(','))}`
-    )
-      .then(setTree)
-      .catch(() => setTree(null))
-  }, [activeProjectId])
 
   // codeFile 变化：经 /raw 拉取原文（远程项目走远端 base），滚到顶
   useEffect(() => {
@@ -132,11 +112,6 @@ export default function CodeView() {
     }
   }, [activeProjectId, codeFile, refreshTick])
 
-  const shownTree = useMemo(() => {
-    if (!tree) return null
-    return filterTree(tree, filter.trim().toLowerCase())
-  }, [tree, filter])
-
   // 语法高亮（失败回退转义纯文本）
   const highlighted = useMemo(() => {
     if (content === null || !codeFile) return null
@@ -162,23 +137,8 @@ export default function CodeView() {
 
   return (
     <div className="code-view">
-      <div className="cv-tree">
-        <div className="cv-search">
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="搜索文件…"
-          />
-        </div>
-        <div className="cv-nodes">
-          {shownTree?.children?.map((c) => <TreeNode key={c.path} node={c} depth={0} />)}
-          {shownTree && (shownTree.children ?? []).length === 0 && (
-            <div className="hv-empty">无匹配文件</div>
-          )}
-        </div>
-      </div>
       <div className="cv-code">
-        {!codeFile && <div className="hv-empty">从左侧选择文件，或在历史详情中点击变更文件</div>}
+        {!codeFile && <div className="hv-empty">从左侧文件树选择文件，或在历史详情中点击变更文件</div>}
         {codeFile && (
           <div className="rt-breadcrumb cv-head" title={codeFile}>
             {codeFile.split('/').map((c, i, arr) => (
@@ -223,5 +183,37 @@ export default function CodeView() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** 源码文件树（侧栏「文件」tab 使用，v0.5.6；数据由 store.loadCodeTree 托管，过滤条件本地维护） */
+export function CodeTree() {
+  const codeTree = useStore((s) => s.codeTree)
+  const codeTreeLoading = useStore((s) => s.codeTreeLoading)
+  const [filter, setFilter] = useState('')
+
+  const shownTree = useMemo(() => {
+    if (!codeTree) return null
+    return filterTree(codeTree, filter.trim().toLowerCase())
+  }, [codeTree, filter])
+
+  return (
+    <>
+      <div className="sb-filter">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="搜索文件…"
+          spellCheck={false}
+        />
+      </div>
+      <div className="sb-tree">
+        {codeTreeLoading && <div className="sb-empty">扫描中…</div>}
+        {!codeTreeLoading && shownTree && (shownTree.children ?? []).length === 0 && (
+          <div className="sb-empty">无匹配文件</div>
+        )}
+        {shownTree?.children?.map((c) => <TreeNode key={c.path} node={c} depth={0} />)}
+      </div>
+    </>
   )
 }

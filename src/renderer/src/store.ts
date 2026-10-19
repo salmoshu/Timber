@@ -27,6 +27,14 @@ function extsQuery(): string {
   return exts.length > 0 ? `&exts=${encodeURIComponent(exts.join(','))}` : ''
 }
 
+/** 源码 + 文本扩展名（代码视图树请求参数；原在 CodeView，v0.5.6 收敛到 store 供侧栏复用） */
+export const CODE_EXTS = [
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.py', '.rs', '.java', '.kt',
+  '.vue', '.svelte', '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.swift',
+  '.scala', '.sh', '.ps1', '.css', '.scss', '.html',
+  '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.toml', '.xml', '.csv', '.log'
+]
+
 export type ViewMode = 'read' | 'source'
 
 /** 文件树操作类型（sidecar /api/projects/:id/fs） */
@@ -300,6 +308,9 @@ interface State {
   commitImpactCache: Map<string, CommitImpact>
   /** CodeView 当前打开的文件路径（相对项目根） */
   codeFile: string | null
+  /** 代码视图的源码文件树（扩展名集合独立于文档树，v0.5.6 起由 store 托管供侧栏复用） */
+  codeTree: DocNode | null
+  codeTreeLoading: boolean
   /** 历史详情「查看架构对比」发起的 delta 请求（architecture 视图消费） */
   archDeltaRequest: ArchDeltaRequest | null
 
@@ -329,7 +340,8 @@ interface State {
   openAddProject(): void
   closeAddProject(): void
   connectRemote(params: ConnectParams, onLog?: (l: LogLine) => void): Promise<string>
-  reconnectRemote(remoteId: string): Promise<void>
+  /** 重连远程连接；带 projectId 时只接入该项目（分项目管理，v0.5.6） */
+  reconnectRemote(remoteId: string, projectId?: string): Promise<void>
   /** 断开连接：远程条目保留在列表中（未连接占位，可 ⟳ 重连），其项目从列表消失 */
   disconnectRemote(remoteId: string): void
   /** 从列表移除：远程条目彻底移除，不再呈现（不影响远端文件） */
@@ -346,6 +358,8 @@ interface State {
   removeProject(id: string): Promise<void>
   selectProject(id: string): Promise<void>
   rescan(): Promise<void>
+  /** 加载/刷新代码视图的源码文件树（selectProject/rescan/fsOp 后调用） */
+  loadCodeTree(): Promise<void>
 
   /** 单击：预览语义（复用预览标签）；双击：固定为新标签 */
   openTab(path: string, opts?: { pinned?: boolean }): Promise<void>
@@ -435,8 +449,14 @@ function sameRemoteTarget(a: RemoteConfig, b: RemoteConfig): boolean {
 }
 
 function mergeProjects(local: Project[], remotes: RemoteConfig[], remoteProjects: Project[]): Project[] {
-  const connected = new Set(remotes.filter((r) => r.connected).map((r) => r.id))
-  return [...local, ...remoteProjects.filter((p) => p.remoteId && connected.has(p.remoteId))]
+  return [...local, ...remoteProjects.filter((p) => {
+    if (!p.remoteId) return false
+    const r = remotes.find((x) => x.id === p.remoteId)
+    if (!r?.connected) return false
+    // 分项目连接管理（v0.5.6）：undefined = 全部可见；数组 = 仅清单内项目可见
+    if (r.connectedProjectIds === undefined) return true
+    return r.connectedProjectIds.includes(p.id.slice(p.remoteId.length + 1))
+  })]
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -481,6 +501,8 @@ export const useStore = create<State>((set, get) => ({
   archHtmlCache: new Map(),
   commitImpactCache: new Map(),
   codeFile: null,
+  codeTree: null,
+  codeTreeLoading: false,
   archDeltaRequest: null,
 
   toggleSidebar() {
@@ -660,12 +682,41 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async reconnectRemote(remoteId) {
+  async reconnectRemote(remoteId, projectId) {
     const remote = get().remotes.find((r) => r.id === remoteId)
     if (!remote) return
+    // 分项目接入（v0.5.6）：连接还活着时，把占位项目加进可见清单即可，
+    // 无需重建 SSH/WSL 通道；可见项目从快照清单重建（被过滤的项目不在当前列表里）
+    if (remote.connected && remote.connId && projectId && remote.connectedProjectIds !== undefined) {
+      const ids = [...new Set([...remote.connectedProjectIds, projectId])]
+      const remotes = get().remotes.map((r) =>
+        r.id === remoteId ? { ...r, connectedProjectIds: ids } : r
+      )
+      saveRemotes(remotes)
+      const mine: Project[] = (remote.projects ?? [])
+        .filter((sp) => ids.includes(sp.id))
+        .map((sp) => ({ ...sp, id: `${remote.id}:${sp.id}`, remoteId: remote.id, addedAt: '' }))
+      set({
+        remotes,
+        projects: mergeProjects(get().localProjects, remotes, [
+          ...get().projects.filter((p) => p.remoteId && p.remoteId !== remoteId),
+          ...mine
+        ])
+      })
+      return
+    }
     try {
       const { remote: ok } = await reestablishRemote(remote)
       const synced = await syncRemoteProjects(ok)
+      // 从某个项目占位发起重连时只接入该项目；从连接级占位重连则全部接入
+      if (projectId) {
+        synced.remote.connectedProjectIds =
+          remote.connectedProjectIds === undefined
+            ? [projectId]
+            : [...new Set([...remote.connectedProjectIds, projectId])]
+      } else {
+        synced.remote.connectedProjectIds = undefined
+      }
       const remotes = get().remotes.map((r) => (r.id === remoteId ? synced.remote : r))
       saveRemotes(remotes)
       set({
@@ -903,8 +954,10 @@ export const useStore = create<State>((set, get) => ({
       archHtmlCache: new Map(),
       commitImpactCache: new Map(),
       codeFile: null,
+      codeTree: null,
       archDeltaRequest: null
     })
+    void get().loadCodeTree()
     try {
       const tree = await apiFor<DocNode>(id)('GET', `/api/projects/${id}/tree?${extsQuery().slice(1)}`)
       set({ tree, treeLoading: false })
@@ -930,9 +983,26 @@ export const useStore = create<State>((set, get) => ({
       const tree = await apiFor<DocNode>(id)('GET', `/api/projects/${id}/tree?${extsQuery().slice(1)}`)
       set({ tree, treeLoading: false })
       get().toast('ok', '已重新扫描')
+      void get().loadCodeTree()
     } catch (err) {
       set({ treeLoading: false })
       get().toast('err', `重新扫描失败：${err}`)
+    }
+  },
+
+  async loadCodeTree() {
+    const id = get().activeProjectId
+    if (!id) return
+    set({ codeTreeLoading: true })
+    try {
+      const codeTree = await apiFor<DocNode>(id)(
+        'GET',
+        `/api/projects/${id}/tree?exts=${encodeURIComponent(CODE_EXTS.join(','))}`
+      )
+      // 加载期间项目可能已切换，过期结果直接丢弃
+      if (get().activeProjectId === id) set({ codeTree, codeTreeLoading: false })
+    } catch {
+      if (get().activeProjectId === id) set({ codeTree: null, codeTreeLoading: false })
     }
   },
 
@@ -1237,6 +1307,7 @@ export const useStore = create<State>((set, get) => ({
       await apiFor(projectId)('POST', `/api/projects/${projectId}/rescan`, { exts: extsList() })
       const tree = await apiFor<DocNode>(projectId)('GET', `/api/projects/${projectId}/tree?${extsQuery().slice(1)}`)
       set({ tree, treeLoading: false })
+      void get().loadCodeTree()
     } catch {
       set({ treeLoading: false })
     }
