@@ -214,7 +214,6 @@ export default function AnnotationPanel() {
   const [tab, setTab] = useState<'toc' | 'ann'>(storedPanel ?? 'toc')
   const annPanelWidth = useStore((st) => st.annPanelWidth)
   const setAnnPanelWidth = useStore((st) => st.setAnnPanelWidth)
-  const toggleAnnPanel = useStore((st) => st.toggleAnnPanel)
 
   /** 左缘拖拽调宽（往左拖变宽）；HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件 */
   const startResize = (e: ReactMouseEvent): void => {
@@ -348,9 +347,6 @@ export default function AnnotationPanel() {
             {open.length} 待处理 · {done.length} 已完成
           </span>
         )}
-        <button className="ap-collapse" onClick={toggleAnnPanel} title="折叠面板（标题栏 ▤ 可重新打开）">
-          »
-        </button>
       </div>
 
       {tab === 'toc' && (

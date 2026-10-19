@@ -10,6 +10,10 @@ import { rawBaseFor, origProjectId } from '../store'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
 
+/** 模块级滚动记忆（tabId → scrollTop）：切视图（文档/代码/架构/历史）会卸载 Reader，
+ *  store 的 tab.scrollTop 只在切标签/项目时保存，覆盖不到卸载场景；这里持续记录、重挂载恢复 */
+const scrollMem = new Map<string, number>()
+
 /** 在 .prose 内查找关键词首个出现处，滚动并短暂高亮 */
 function locateKeyword(keyword: string): boolean {
   const prose = document.querySelector('.prose')
@@ -126,6 +130,43 @@ export default function Reader() {
       dead = true
     }
   }, [isHtml, rawUrl])
+
+  // 滚动位置记忆：持续记录（rAF 节流），重挂载后恢复；
+  // 切回应用窗口时若滚动被异常重置到顶部，也按记忆恢复（scrollTop===0 且记忆>0 才动手，
+  // 用户自己滚到顶时记忆已被滚动监听同步成 0，不会误拉回去）
+  useEffect(() => {
+    if (!activeTabId) return
+    const tabId = activeTabId
+    const body = proseWrapRef.current
+    if (!body) return
+    let raf = 0
+    const onScroll = (): void => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => scrollMem.set(tabId, body.scrollTop))
+    }
+    body.addEventListener('scroll', onScroll, { passive: true })
+    const remembered = scrollMem.get(tabId) ?? 0
+    const restore = (): void => {
+      if (remembered > 0 && body.scrollTop === 0) body.scrollTop = remembered
+    }
+    // 等正文渲染出来再恢复（图片等晚加载资源造成的后续位移不追）
+    const t1 = setTimeout(restore, 120)
+    const t2 = setTimeout(restore, 600)
+    window.addEventListener('markdown-rendered', restore, { once: true })
+    const onFocus = (): void => {
+      const mem = scrollMem.get(tabId) ?? 0
+      if (mem > 0 && body.scrollTop === 0) body.scrollTop = mem
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      body.removeEventListener('scroll', onScroll)
+      window.removeEventListener('markdown-rendered', restore)
+      window.removeEventListener('focus', onFocus)
+      cancelAnimationFrame(raf)
+      clearTimeout(t1)
+      clearTimeout(t2)
+    }
+  }, [activeTabId, activeDoc])
 
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     // 双击保留正常选词行为；拖选文字后再显示批注气泡。

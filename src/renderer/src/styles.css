@@ -96,7 +96,7 @@ input, textarea { user-select: text; }
 }
 .tb-btns button:hover { background: var(--Fills-F1); color: var(--Labels-Primary); }
 .tb-btns .tb-close:hover { background: var(--danger); color: var(--Always-White); }
-.tb-btns .tb-set { font-size: 13px; border-right: 1px solid var(--sidebar-line); }
+.tb-btns .tb-set { font-size: 13px; }
 
 /* ---- 布局 ---- */
 .app { height: 100vh; display: flex; flex-direction: column; }
@@ -418,7 +418,7 @@ input, textarea { user-select: text; }
   height: auto;
   min-height: 360px;
   margin: 28px auto 80px;
-  padding: 44px 56px !important; /* 覆盖 Vditor 按固定预览宽度计算的行内 padding */
+  padding: 48px 88px !important; /* 覆盖 Vditor 按固定预览宽度计算的行内 padding；A4 式左右留白，兼作块悬浮工具栏的容身空间 */
   box-sizing: border-box;
   background: var(--paper);
   color: var(--ink);
@@ -448,6 +448,8 @@ input, textarea { user-select: text; }
 
 /* 源码里的软换行包进隐藏占位 span（MarkdownView 渲染补丁），视觉上直接连写 */
 .prose span[data-an-softbreak] { display: none; }
+/* 引用块（> 摘要式分行）内的行内软换行：占位 span 里的 "\n" 渲染为真实换行 */
+.prose span[data-an-softbreak-br] { white-space: pre-wrap; }
 
 /* 块悬浮工具栏（上移/下移/删除）：从块内左上角移到行左侧空白区（参考 Awesome-Resume 行级操作）。
    --prose-left 由 MarkdownView.refresh 写入（正文卡片相对编辑器左侧的偏移）；
@@ -455,7 +457,7 @@ input, textarea { user-select: text; }
    默认对齐段落首行（26px 兜底偏移）；MarkdownView.centerBlockToolbar 找到目标块后
    加 .an-vcenter 并改写 inline top，工具栏改为与整个块垂直居中。 */
 .markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type:not(:has(.vditor-input)) {
-  left: calc(var(--prose-left, 0px) + 50px) !important;
+  left: calc(var(--prose-left, 0px) + 78px) !important;
   transform: translate(-100%, 26px);
   opacity: 1;
 }
@@ -466,7 +468,7 @@ input, textarea { user-select: text; }
    :not(:has(.vditor-input)) 排除规则漏掉，弹层停在默认位置（块左缘）盖住标题文字（v0.5.4 修复）。
    该输入框外层 tooltipped 的 aria-label 以 "ID" 开头，据此单独识别标题弹层并同样左移。 */
 .markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type:has(> .vditor-tooltipped[aria-label^="ID"] > .vditor-input) {
-  left: calc(var(--prose-left, 0px) + 50px) !important;
+  left: calc(var(--prose-left, 0px) + 78px) !important;
   transform: translate(-100%, 26px);
   opacity: 1;
 }
@@ -990,14 +992,14 @@ input, textarea { user-select: text; }
   background: var(--bg);
 }
 .ep-toolbar {
-  height: 40px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px;
+  height: 46px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px;
   background: var(--Bg-Primary70); border-bottom: 1px solid var(--line);
   backdrop-filter: var(--backdrop-header);
   -webkit-backdrop-filter: var(--backdrop-header);
 }
 .ep-btn {
-  width: 32px; height: 28px; border: none; border-radius: var(--radius-full); background: transparent;
-  color: var(--ink2); font-size: 13px;
+  width: 40px; height: 34px; border: none; border-radius: var(--radius-full); background: transparent;
+  color: var(--ink2); font-size: 16px;
 }
 .ep-btn:hover { background: var(--accent-soft); color: var(--accent); }
 .ep-btn:disabled { opacity: 0.4; cursor: default; }
@@ -1216,35 +1218,14 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
 .sb-resizer:hover { background: var(--accent-soft); }
 .sb-head-row { display: flex; align-items: center; gap: 2px; }
 .sb-head-row .sb-proj-toggle { flex: 1; min-width: 0; }
-.sb-collapse {
-  flex: none; border: none; background: transparent; color: var(--sidebar-ink2);
-  border-radius: var(--radius-full); width: 22px; height: 22px; font-size: 13px; line-height: 1;
-}
-.sb-collapse:hover { background: var(--sb-hover); color: var(--sb-hover-ink); }
-/* 折叠后的窄条 */
-.sidebar.collapsed {
-  width: 34px; flex: none; display: flex; flex-direction: column; align-items: center;
-  background: var(--sidebar-bg); border-right: 1px solid var(--sidebar-line);
-  padding-top: 8px;
-}
-.sb-expand {
-  border: none; background: transparent; color: var(--sidebar-ink2);
-  width: 24px; height: 24px; border-radius: var(--radius-full); font-size: 14px; line-height: 1;
-}
-.sb-expand:hover { background: var(--sb-hover); color: var(--sb-hover-ink); }
 
-/* 右侧目录/批注面板：相对定位承载左缘拖拽把手 + 折叠按钮 */
+/* 右侧目录/批注面板：相对定位承载左缘拖拽把手 */
 .ann-panel { position: relative; }
 .ap-resizer {
   position: absolute; top: 0; left: -3px; width: 6px; height: 100%; z-index: 30;
   cursor: col-resize;
 }
 .ap-resizer:hover { background: var(--accent-soft); }
-.ap-collapse {
-  flex: none; border: none; background: transparent; color: var(--ink3);
-  border-radius: var(--radius-full); width: 22px; height: 22px; font-size: 13px; line-height: 1;
-}
-.ap-collapse:hover { background: var(--accent-soft); color: var(--accent); }
 
 /* ---- 视图切换分段控件（标题栏，品牌胶囊风格） ---- */
 :root {
@@ -1257,8 +1238,9 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
 
 .tb-views {
   display: flex; align-items: center; gap: 2px; align-self: center;
-  margin-right: 12px; padding: 2px;
+  margin-left: 10px; padding: 2px;
   background: var(--Fills-F1); border-radius: var(--radius-full);
+  -webkit-app-region: no-drag; /* 位于 .tb-drag 拖拽区内，按钮需恢复可点击 */
 }
 .tb-view {
   border: none; background: transparent; color: var(--sidebar-ink2);
@@ -1437,8 +1419,15 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
 .cv-file.active { background: var(--accent-soft); color: var(--arch-accent); font-weight: 600; }
 .cv-arrow { display: inline-block; margin-right: 4px; transition: transform 0.12s; }
 .cv-arrow.open { transform: rotate(90deg); }
-.cv-code { flex: 1; min-width: 0; overflow: auto; background: var(--arch-paper); }
-.cv-scroll { min-width: min-content; }
+.cv-code { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.cv-head { gap: 4px; }
+.cv-meta { margin-left: auto; color: var(--ink3); font-size: 12px; flex: none; }
+.cv-refresh { margin-left: 8px; flex: none; }
+.cv-body { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px 64px; }
+.cv-card {
+  min-width: min-content; background: var(--paper);
+  border-radius: var(--radius-panel); box-shadow: var(--shadow);
+}
 .cv-truncated {
   padding: 6px 14px; font-size: 12px; color: var(--Colors-Orange);
   background: var(--Others-LightOrangeBg);
@@ -1446,13 +1435,13 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
 }
 .cv-pre { display: flex; align-items: flex-start; }
 .cv-gutter, .cv-content {
-  margin: 0; padding: 12px 0; font-family: var(--font-mono);
+  margin: 0; padding: 20px 0; font-family: var(--font-mono);
   font-size: 12.5px; line-height: 1.6; user-select: text;
 }
 .cv-gutter {
-  flex: none; padding-left: 14px; padding-right: 10px; text-align: right;
+  flex: none; padding-left: 18px; padding-right: 10px; text-align: right;
   color: var(--ink3); border-right: 1px solid var(--line);
-  position: sticky; left: 0; background: var(--arch-paper);
+  position: sticky; left: 0; background: var(--paper);
 }
 .cv-content { flex: 1; padding-left: 14px; padding-right: 20px; color: var(--ink); white-space: pre; }
 

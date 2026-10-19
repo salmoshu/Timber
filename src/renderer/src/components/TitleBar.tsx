@@ -12,12 +12,17 @@ const VIEWS: { key: AppView; label: string }[] = [
 export default function TitleBar() {
   const b = window.timber
   const openSettings = useStore((s) => s.openSettings)
+  const closeSettings = useStore((s) => s.closeSettings)
+  const settingsOpen = useStore((s) => s.settingsOpen)
   const annPanelOpen = useStore((s) => s.annPanelOpen)
   const activeDoc = useStore((s) => s.activeDoc)
   const toggleAnnPanel = useStore((s) => s.toggleAnnPanel)
+  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useStore((s) => s.toggleSidebar)
   const view = useStore((s) => s.view)
   const setView = useStore((s) => s.setView)
   const [version, setVersion] = useState('')
+  const [maximized, setMaximized] = useState(false)
 
   // 标题区版本号（Electron 环境从主进程取；纯 Web 预览不显示）
   useEffect(() => {
@@ -32,26 +37,49 @@ export default function TitleBar() {
     }
   }, [b])
 
+  // 最大化状态：初始化查询一次，随后跟随主进程推送（图标在 ▢/❐ 间切换）
+  useEffect(() => {
+    if (!b) return
+    let mounted = true
+    b.winIsMaximized()
+      .then((m) => {
+        if (mounted) setMaximized(m)
+      })
+      .catch(() => {})
+    const off = b.onWindowMaximized(setMaximized)
+    return () => {
+      mounted = false
+      off()
+    }
+  }, [b])
+
   return (
     <header className="titlebar">
       <div className="tb-drag">
         <Logo size={18} />
         <span className="tb-name">Timber</span>
         {version && <span className="tb-version">{`v${version}`}</span>}
+        {/* 主视图切换（文档/代码/架构/历史）：左侧挨着版本号；位于拖拽区内需 no-drag */}
+        <nav className="tb-views">
+          {VIEWS.map((v) => (
+            <button
+              key={v.key}
+              className={`tb-view ${view === v.key ? 'active' : ''}`}
+              onClick={() => setView(v.key)}
+            >
+              {v.label}
+            </button>
+          ))}
+        </nav>
       </div>
-      {/* 主视图切换（文档/代码/架构/历史），拖拽区外才可点击 */}
-      <nav className="tb-views">
-        {VIEWS.map((v) => (
-          <button
-            key={v.key}
-            className={`tb-view ${view === v.key ? 'active' : ''}`}
-            onClick={() => setView(v.key)}
-          >
-            {v.label}
-          </button>
-        ))}
-      </nav>
       <div className="tb-btns">
+        <button
+          className={`tb-set ${sidebarCollapsed ? '' : 'on'}`}
+          onClick={toggleSidebar}
+          title={sidebarCollapsed ? '展开左侧边栏' : '折叠左侧边栏'}
+        >
+          ☰
+        </button>
         <button
           className={`tb-set ${annPanelOpen && activeDoc ? 'on' : ''}`}
           onClick={toggleAnnPanel}
@@ -59,13 +87,19 @@ export default function TitleBar() {
         >
           ▤
         </button>
-        <button className="tb-set" onClick={openSettings} title="设置">
+        <button
+          className={`tb-set ${settingsOpen ? 'on' : ''}`}
+          onClick={() => (settingsOpen ? closeSettings() : openSettings())}
+          title={settingsOpen ? '返回主界面' : '设置'}
+        >
           ⚙
         </button>
         {b && (
           <>
             <button onClick={() => b.winMinimize()} title="最小化">—</button>
-            <button onClick={() => b.winToggleMaximize()} title="最大化/还原">▢</button>
+            <button onClick={() => b.winToggleMaximize()} title={maximized ? '还原' : '最大化'}>
+              {maximized ? '❐' : '▢'}
+            </button>
             <button className="tb-close" onClick={() => b.winClose()} title="关闭">✕</button>
           </>
         )}

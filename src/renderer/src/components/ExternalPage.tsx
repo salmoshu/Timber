@@ -26,6 +26,18 @@ export default function ExternalPage({ url: initialUrl, onClose }: Props) {
     setCanBack(false)
   }, [initialUrl])
 
+  // Esc 关闭浮层（capture 阶段，先于页面内 handler；作为 ✕ 按钮之外的保底关闭途径）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
   // 主文档 HTTP 状态（>=400 → 美化错误页）
   useEffect(() => {
     if (!bridge) return

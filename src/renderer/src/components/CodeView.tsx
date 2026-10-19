@@ -79,6 +79,7 @@ export default function CodeView() {
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refreshTick, setRefreshTick] = useState(0)
   const codeRef = useRef<HTMLDivElement | null>(null)
 
   // 源码文件树（独立于文档树：扩展名集合不同）
@@ -129,7 +130,7 @@ export default function CodeView() {
     return () => {
       disposed = true
     }
-  }, [activeProjectId, codeFile])
+  }, [activeProjectId, codeFile, refreshTick])
 
   const shownTree = useMemo(() => {
     if (!tree) return null
@@ -176,28 +177,50 @@ export default function CodeView() {
           )}
         </div>
       </div>
-      <div className="cv-code" ref={codeRef}>
+      <div className="cv-code">
         {!codeFile && <div className="hv-empty">从左侧选择文件，或在历史详情中点击变更文件</div>}
-        {codeFile && loading && <div className="hv-loading">加载中…</div>}
-        {codeFile && !loading && error && <div className="hv-empty">文件加载失败：{error}</div>}
-        {codeFile && !loading && !error && content !== null && (
-          <div className="cv-scroll">
-            {truncated && <div className="cv-truncated">文件过大，仅显示前 512 KB</div>}
-            {/* 行号列 + 高亮代码块同行并排（同字号行高天然对齐） */}
-            <div className="cv-pre">
-              <pre className="cv-gutter">{lines}</pre>
-              {highlighted !== null ? (
-                <pre
-                  className="cv-content hljs"
-                  // hljs 输出的 HTML（span 包裹的转义内容）
-                  dangerouslySetInnerHTML={{ __html: highlighted }}
-                />
-              ) : (
-                <pre className="cv-content">{content}</pre>
-              )}
-            </div>
+        {codeFile && (
+          <div className="rt-breadcrumb cv-head" title={codeFile}>
+            {codeFile.split('/').map((c, i, arr) => (
+              <span key={i} className="crumb">
+                {c}
+                {i < arr.length - 1 && <span className="crumb-sep">›</span>}
+              </span>
+            ))}
+            <span className="cv-meta">
+              {content !== null && !loading ? `${content.split('\n').length} 行 · ` : ''}只读
+            </span>
+            <button
+              className="rt-btn cv-refresh"
+              onClick={() => setRefreshTick((t) => t + 1)}
+              title="刷新：重新从磁盘读取文件"
+            >
+              ⟳
+            </button>
           </div>
         )}
+        <div className="cv-body" ref={codeRef}>
+          {codeFile && loading && <div className="hv-loading">加载中…</div>}
+          {codeFile && !loading && error && <div className="hv-empty">文件加载失败：{error}</div>}
+          {codeFile && !loading && !error && content !== null && (
+            <div className="cv-card">
+              {truncated && <div className="cv-truncated">文件过大，仅显示前 512 KB</div>}
+              {/* 行号列 + 高亮代码块同行并排（同字号行高天然对齐） */}
+              <div className="cv-pre">
+                <pre className="cv-gutter">{lines}</pre>
+                {highlighted !== null ? (
+                  <pre
+                    className="cv-content hljs"
+                    // hljs 输出的 HTML（span 包裹的转义内容）
+                    dangerouslySetInnerHTML={{ __html: highlighted }}
+                  />
+                ) : (
+                  <pre className="cv-content">{content}</pre>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

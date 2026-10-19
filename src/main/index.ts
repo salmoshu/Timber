@@ -141,6 +141,9 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+  // 最大化状态推送：标题栏「最大化/还原」图标跟随切换
+  mainWindow.on('maximize', () => mainWindow?.webContents.send('win:maximized-changed', true))
+  mainWindow.on('unmaximize', () => mainWindow?.webContents.send('win:maximized-changed', false))
 }
 
 // ---- IPC ----
@@ -177,6 +180,7 @@ ipcMain.on('win:toggle-maximize', () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize()
   else mainWindow.maximize()
 })
+ipcMain.handle('win:is-maximized', () => mainWindow?.isMaximized() ?? false)
 ipcMain.on('win:close', () => mainWindow?.close())
 
 ipcMain.handle('app:version', () => app.getVersion())

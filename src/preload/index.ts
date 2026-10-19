@@ -7,6 +7,12 @@ const bridge: TimberBridge = {
   revealPath: (p: string) => ipcRenderer.invoke('shell:reveal', p),
   winMinimize: () => ipcRenderer.send('win:minimize'),
   winToggleMaximize: () => ipcRenderer.send('win:toggle-maximize'),
+  winIsMaximized: () => ipcRenderer.invoke('win:is-maximized'),
+  onWindowMaximized: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, maximized: boolean) => cb(maximized)
+    ipcRenderer.on('win:maximized-changed', listener)
+    return () => ipcRenderer.removeListener('win:maximized-changed', listener)
+  },
   winClose: () => ipcRenderer.send('win:close'),
   platform: process.platform,
   appVersion: () => ipcRenderer.invoke('app:version'),

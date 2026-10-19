@@ -186,7 +186,6 @@ export default function Sidebar() {
     setFilter,
     toast,
     sidebarCollapsed,
-    toggleSidebar,
     sidebarWidth,
     setSidebarWidth
   } = useStore()
@@ -523,14 +522,8 @@ export default function Sidebar() {
   // 未连接的远程连接：重启后不自动重连，占位显示 + ⟳ 手动重连（zcode 式）
   const disconnectedRemotes = remotes.filter((r) => !r.connected)
 
-  // 折叠态：仅渲染窄条与展开按钮
-  if (sidebarCollapsed) {
-    return (
-      <aside className="sidebar collapsed">
-        <button className="sb-expand" onClick={toggleSidebar} title="展开侧边栏">»</button>
-      </aside>
-    )
-  }
+  // 折叠态：不渲染侧栏（折叠/展开统一由标题栏 ☰ 按钮控制）
+  if (sidebarCollapsed) return null
 
   return (
     <aside className="sidebar" style={{ width: sidebarWidth }}>
@@ -553,7 +546,6 @@ export default function Sidebar() {
             </span>
           )}
         </button>
-        <button className="sb-collapse" onClick={toggleSidebar} title="折叠侧边栏">«</button>
         </div>
         {!projCollapsed && (
           <div className="sb-proj-list">

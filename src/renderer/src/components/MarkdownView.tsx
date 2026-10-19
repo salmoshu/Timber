@@ -159,9 +159,14 @@ function renderInlineMath(prose: HTMLElement): void {
  * 相邻的 "\n" 包进隐藏的占位 span（视觉上直接连写），西文之间保留折叠空格；
  * 序列化方向再还原为 "\n"，保证源码的换行结构在保存/撤销/复制时不丢失。
  * code/textarea 等预格式内容里的换行不动。
+ * 例外：引用块（>）内的行内软换行是「摘要式分行」语义（每行一条），由
+ * refresh() 里的 upgradeQuoteBreaks 按 DOM 祖先关系升级为可见换行占位
+ * span（data-an-softbreak-br）——字符串补丁在编辑重渲染时拿到的是块片段，
+ * 可能不含 <blockquote> 标签，深度跟踪不可靠。序列化时两种占位都还原为 "\n"。
  */
 const SOFTBREAK_SPAN = '<span data-an-softbreak>\n</span>'
-const SOFTBREAK_SPAN_RE = /<span data-an-softbreak(?:="")?>([^<]*)<\/span>/g
+const SOFTBREAK_BR_SPAN = '<span data-an-softbreak-br>\n</span>'
+const SOFTBREAK_SPAN_RE = /<span data-an-softbreak(?:-br)?(?:="")?>([^<]*)<\/span>/g
 
 /** 序列化/Spin 前：占位 span 还原为 "\n" */
 function unwrapSoftBreaks(html: string): string {
@@ -190,6 +195,57 @@ function joinSoftBreaks(part: string): string {
     const next = nextMatch ? nextMatch[0] : ''
     const cjkSide = (c: string): boolean => !!c && CJK_CHAR.test(c)
     return cjkSide(prev) || cjkSide(next) ? SOFTBREAK_SPAN : '\n'
+  })
+}
+
+/**
+ * 引用块内的软换行升级为真实换行（refresh() 调用，DOM 祖先关系判定）：
+ * 1) 字符串补丁包好的隐藏占位 span → 换成 data-an-softbreak-br（CSS pre-wrap 显示换行）；
+ * 2) 两侧都是西文的裸 "\n" 文本节点 → 拆分并在行间插入 br 占位 span。
+ * 两侧有一侧为空白的换行（段首/段尾、标签间结构换行）不动；序列化统一还原为 "\n"。
+ */
+function upgradeQuoteBreaks(prose: HTMLElement): void {
+  prose.querySelectorAll('blockquote').forEach((bq) => {
+    bq.querySelectorAll('span[data-an-softbreak]').forEach((span) => {
+      span.removeAttribute('data-an-softbreak')
+      span.setAttribute('data-an-softbreak-br', '')
+    })
+    const walker = document.createTreeWalker(bq, NodeFilter.SHOW_TEXT)
+    const targets: Text[] = []
+    let node = walker.nextNode()
+    while (node) {
+      const t = node as Text
+      if (
+        t.data.includes('\n') &&
+        !t.parentElement?.closest(
+          'span[data-an-softbreak], span[data-an-softbreak-br], pre, textarea, script'
+        )
+      ) {
+        targets.push(t)
+      }
+      node = walker.nextNode()
+    }
+    for (const t of targets) {
+      const parts = t.data.split('\n')
+      if (parts.length < 2) continue
+      const frag = document.createDocumentFragment()
+      parts.forEach((seg, i) => {
+        if (i > 0) {
+          const before = parts.slice(0, i).join('\n').replace(/\s+$/, '').slice(-1)
+          const after = /\S/.exec(parts.slice(i).join('\n'))?.[0] ?? ''
+          if (before && after) {
+            const br = document.createElement('span')
+            br.setAttribute('data-an-softbreak-br', '')
+            br.textContent = '\n'
+            frag.appendChild(br)
+          } else {
+            frag.appendChild(document.createTextNode('\n'))
+          }
+        }
+        if (seg) frag.appendChild(document.createTextNode(seg))
+      })
+      t.replaceWith(frag)
+    }
   })
 }
 
@@ -385,7 +441,14 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       // 块悬浮工具栏（上移/下移/删除）左移到正文左侧空白区所需的位置变量
       const wysiwyg = container.querySelector<HTMLElement>('.vditor-wysiwyg')
       wysiwyg?.style.setProperty('--prose-left', `${prose.offsetLeft}px`)
+      // 快捷键提示改为悬浮提醒：输入框常驻 placeholder（如「ID<⌥Enter>」）去掉 <…> 后缀，
+      // 完整提示仍保留在外层 aria-label 的悬浮气泡里（observer 不监听 attributes，不会循环）
+      container.querySelectorAll<HTMLInputElement>('.vditor-input[placeholder*="<"]').forEach((input) => {
+        input.placeholder = input.placeholder.replace(/<[^>]*>$/, '')
+      })
       rewriteImages()
+      // 引用块（> 摘要式分行）内的行内软换行升级为真实换行；幂等，重复执行无副作用
+      upgradeQuoteBreaks(prose)
       prose.querySelectorAll<HTMLElement>('.vditor-wysiwyg__preview code:not([data-highlighted])').forEach((code) => {
         const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9)
         if (language && hljs.getLanguage(language)) hljs.highlightElement(code)
@@ -404,10 +467,20 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       window.dispatchEvent(new Event('markdown-rendered'))
     }
     refreshRef.current = refresh
-    const observer = new MutationObserver(() => {
+    // rAF 在窗口被系统判定为隐藏/完全遮挡时（Windows 遮挡冻结、最小化）不再触发，
+    // 用 setTimeout 兜底，保证渲染补丁在任何窗口状态下最终都会执行；
+    // 可见时 rAF 先到（约一帧），兜底计时器被清除，不会重复执行
+    let refreshFallback = 0
+    const scheduleRefresh = (): void => {
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(refresh)
-    })
+      clearTimeout(refreshFallback)
+      frame = requestAnimationFrame(() => {
+        clearTimeout(refreshFallback)
+        refresh()
+      })
+      refreshFallback = window.setTimeout(refresh, 160)
+    }
+    const observer = new MutationObserver(scheduleRefresh)
     // 侧栏/批注面板开合、窗口缩放都会改版式；--prose-left 需同步刷新
     const resizeObserver = new ResizeObserver(() => refresh())
     resizeObserver.observe(container)
@@ -596,6 +669,7 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       popObserver?.disconnect()
       resizeObserver.disconnect()
       cancelAnimationFrame(frame)
+      clearTimeout(refreshFallback)
       container.removeEventListener('input', onInput)
       container.removeEventListener('compositionend', syncDraft)
       container.removeEventListener('focusout', syncDraft)

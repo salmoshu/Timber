@@ -301,6 +301,10 @@ export interface TimberBridge {
   revealPath(p: string): Promise<void>
   winMinimize(): void
   winToggleMaximize(): void
+  /** 查询窗口是否处于最大化（标题栏图标初始化） */
+  winIsMaximized(): Promise<boolean>
+  /** 最大化状态变化推送（标题栏图标跟随） */
+  onWindowMaximized(cb: (maximized: boolean) => void): () => void
   winClose(): void
   platform: string
   appVersion(): Promise<string>
