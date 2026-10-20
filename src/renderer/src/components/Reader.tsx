@@ -7,6 +7,8 @@ import TabsBar from './TabsBar'
 import FindBar from './FindBar'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { rawBaseFor, origProjectId } from '../store'
+import { IconExportPdf, IconSave } from './icons'
+import { exportActiveDocPdf } from '../utils/exportPdf'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
 
@@ -288,10 +290,15 @@ export default function Reader() {
         )}
         {dirty && !saving && (
           <button className="icon-save" onClick={() => void saveDoc()} title="保存 (Ctrl+S)">
-            ⌸
+            <IconSave />
           </button>
         )}
         {saving && <span className="icon-saving" title="保存中…">…</span>}
+        {isMd && window.timber && (
+          <button className="rt-btn" onClick={() => void exportActiveDocPdf()} title="导出 PDF">
+            <IconExportPdf />
+          </button>
+        )}
       </TabsBar>
 
       <div className="rt-breadcrumb" title={activeDoc.path}>

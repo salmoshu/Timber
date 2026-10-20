@@ -79,6 +79,9 @@ function CommitRow({ commit }: { commit: CommitInfo }) {
         <div className="hv-line1">
           <span className="hv-kind" style={{ background: color }}>{commit.kind}</span>
           <span className="hv-subject" title={commit.subject}>{commit.subject}</span>
+          {commit.entireCheckpoint && (
+            <span className="hv-entire" title="含 AI 会话记录（Entire checkpoint）">✨</span>
+          )}
         </div>
         <div className="hv-line2">
           <span className="hv-stat ins">+{commit.insertions}</span>

@@ -24,6 +24,8 @@ type CommitInfo struct {
 	Files      int      `json:"files"`
 	Insertions int      `json:"insertions"`
 	Deletions  int      `json:"deletions"`
+	// Entire-Checkpoint trailer（存在即该提交有关联的 AI 会话 checkpoint）
+	EntireCheckpoint string `json:"entireCheckpoint,omitempty"`
 }
 
 // CommitFile 单提交内的一个变更文件。
@@ -36,7 +38,8 @@ type CommitFile struct {
 }
 
 // log 记录分隔：\x1e 分记录、\x1f 分字段（提交信息几乎不含控制字符）。
-const logFormat = "%x1e%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s"
+// 末字段为 Entire-Checkpoint trailer 值（无则空串）。
+const logFormat = "%x1e%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%(trailers:key=Entire-Checkpoint,valueonly)"
 
 // isGitRepo 项目目录是否在 git 工作树内。
 func isGitRepo(projectPath string) bool {
@@ -93,7 +96,7 @@ func parseGitLog(out string) []CommitInfo {
 		}
 		lines := strings.Split(rec, "\n")
 		fields := strings.Split(lines[0], "\x1f")
-		if len(fields) < 7 {
+		if len(fields) < 8 {
 			continue
 		}
 		c := CommitInfo{
@@ -104,6 +107,8 @@ func parseGitLog(out string) []CommitInfo {
 			Subject: fields[6],
 			Parents: []string{},
 		}
+		// 同名 trailer 多个时取首个（值内换行会溢出到后续行，但不影响 numstat 解析）
+		c.EntireCheckpoint = strings.TrimSpace(fields[7])
 		if p := strings.TrimSpace(fields[2]); p != "" {
 			c.Parents = strings.Fields(p)
 		}
@@ -222,15 +227,15 @@ func (s *server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "无效的提交 sha")
 		return
 	}
-	// 元信息 + body（-s 不带 diff；body 放最后，内部可能含换行）
+	// 元信息 + trailer + body（-s 不带 diff；body 放最后，内部可能含换行）
 	meta, err := gitRun(p.Path, 30*time.Second, "show", "-s",
-		"--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%b", sha)
+		"--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%(trailers:key=Entire-Checkpoint,valueonly)%x1f%b", sha)
 	if err != nil {
 		writeError(w, 404, "提交不存在")
 		return
 	}
-	fields := strings.SplitN(meta, "\x1f", 8)
-	if len(fields) < 8 {
+	fields := strings.SplitN(meta, "\x1f", 9)
+	if len(fields) < 9 {
 		writeError(w, 500, "提交解析失败")
 		return
 	}
@@ -242,7 +247,8 @@ func (s *server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		c.Parents = strings.Fields(ps)
 	}
 	c.Time, _ = strconv.ParseInt(fields[5], 10, 64)
-	body := strings.Trim(fields[7], "\n")
+	c.EntireCheckpoint = strings.TrimSpace(fields[7])
+	body := strings.Trim(fields[8], "\n")
 
 	files := showFiles(p.Path, sha)
 	paths := make([]string, 0, len(files))

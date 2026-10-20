@@ -4,6 +4,30 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
 import type { DocNode } from '@shared/types'
 import { origProjectId, rawBaseFor, useStore } from '../store'
+import Chevron from './Chevron'
+import Logo from './Logo'
+
+/** 扩展名 → 文件类型图标（与侧栏文档树同款，保证两棵树视觉一致；勿从 Sidebar 引入以免循环依赖） */
+function extIcon(ext?: string): string {
+  switch (ext) {
+    case '.md':
+    case '.markdown':
+    case '.mdown':
+    case '.mkd':
+      return 'M↓'
+    case '.html':
+    case '.htm':
+      return '<>'
+    default:
+      return '≡'
+  }
+}
+
+function extClass(ext?: string): string {
+  if (ext === '.md' || ext === '.markdown' || ext === '.mdown' || ext === '.mkd') return 'ext-md'
+  if (ext === '.html' || ext === '.htm') return 'ext-html'
+  return 'ext-txt'
+}
 
 /** 扩展名 → highlight.js 语言名（common 包内；未知扩展按纯文本） */
 const LANG_BY_EXT: Record<string, string> = {
@@ -37,27 +61,30 @@ function TreeNode({ node, depth }: { node: DocNode; depth: number }) {
   const codeFile = useStore((s) => s.codeFile)
   // 目录默认折叠（0.5.2 起），点击目录名展开
   const [open, setOpen] = useState(false)
+  // v0.5.7 起与文档树共用 tree-dir / tree-doc 结构（Chevron 箭头 + 类型图标列），样式完全一致
   if (node.type === 'doc') {
     return (
-      <div
-        className={`cv-file ${codeFile === node.path ? 'active' : ''}`}
+      <button
+        className={`tree-doc ${codeFile === node.path ? 'active' : ''}`}
         style={{ paddingLeft: 10 + depth * 14 }}
         onClick={() => useStore.setState({ codeFile: node.path })}
+        title={node.path}
       >
-        {node.name}
-      </div>
+        <span className={`doc-icon ${extClass(node.ext)}`}>{extIcon(node.ext)}</span>
+        <span className="doc-name">{node.name}</span>
+      </button>
     )
   }
   return (
     <div>
-      <div
-        className="cv-dir"
+      <button
+        className="tree-dir"
         style={{ paddingLeft: 10 + depth * 14 }}
         onClick={() => setOpen(!open)}
       >
-        <span className={`cv-arrow ${open ? 'open' : ''}`}>▸</span>
-        {node.name}
-      </div>
+        <Chevron open={open} />
+        <span className="dir-name">{node.name}</span>
+      </button>
       {open && (node.children ?? []).map((c) => <TreeNode key={c.path} node={c} depth={depth + 1} />)}
     </div>
   )
@@ -133,12 +160,24 @@ export default function CodeView() {
     return s
   }, [content])
 
-  if (!activeProjectId) return <div className="hv-empty">请先在左侧选择项目</div>
+  // 空态与文档视图一致：居中应用图标 + 提示（v0.5.7）
+  if (!activeProjectId)
+    return (
+      <div className="reader-empty">
+        <Logo size={72} />
+        <div className="re-hint">请先在左侧选择项目</div>
+      </div>
+    )
 
   return (
     <div className="code-view">
       <div className="cv-code">
-        {!codeFile && <div className="hv-empty">从左侧文件树选择文件，或在历史详情中点击变更文件</div>}
+        {!codeFile && (
+          <div className="reader-empty">
+            <Logo size={72} />
+            <div className="re-hint">从左侧文件树选择文件，或在历史详情中点击变更文件</div>
+          </div>
+        )}
         {codeFile && (
           <div className="rt-breadcrumb cv-head" title={codeFile}>
             {codeFile.split('/').map((c, i, arr) => (

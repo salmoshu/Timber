@@ -1429,6 +1429,9 @@ async function loadTabInto(
       'GET',
       `/api/projects/${projectId}/doc?path=${encodeURIComponent(tab.path)}`
     )
+    // UTF-8 BOM（\uFEFF）是编码标记而非内容：留着会让首行 `# 标题` 的 # 不在行首，
+    // ATX 标题不解析、井号原样显示（v0.5.7 修复）。加载即剥离，下次保存后文件也不再带 BOM。
+    doc.content = doc.content.replace(/^\uFEFF/, '')
     cacheTabDoc(tab.id, doc, set, get)
     const fresh = get().tabs.find((t) => t.id === tab.id)
     if (!fresh) return

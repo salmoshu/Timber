@@ -2,7 +2,7 @@
 // Electron 模式下经 preload 桥拿 base/token；纯 Web 预览（dev:web）回退到
 // 手动启动的 sidecar（127.0.0.1:37123 / dev-token）。
 // 远程项目经 apiWith() 走远端 timberd（见 utils/remote.ts 的 apiRoute）。
-import type { ApiInfo, ArchInsights, ArchInsightsResult, ArchRefs, ArchResult, ArchSpec, CommitDetail, CommitInfo } from '@shared/types'
+import type { ApiInfo, ArchInsights, ArchInsightsResult, ArchRefs, ArchResult, ArchSpec, CommitDetail, CommitInfo, EntireCheckpointResult, EntireCouplingResult, EntireSearchResult, EntireSyncResult, EntireTranscriptResult } from '@shared/types'
 
 let cached: ApiInfo | null = null
 
@@ -121,4 +121,57 @@ export async function archInsights(
   if (data.ok === true) return data as unknown as ArchInsights
   const err = 'error' in data ? data.error : undefined
   return { ok: false, error: typeof err === 'string' ? err : 'unknown' }
+}
+
+// ---- Entire AI 会话记录（只读 git 对象；全部支持远程项目经 timberd） ----
+
+/** checkpoint 聚合详情（会话元数据 + 首条 prompt）；not-synced 表示 ref 未同步 */
+export async function entireCheckpoint(
+  id: string,
+  checkpointId: string,
+  call: ApiCall = api
+): Promise<EntireCheckpointResult> {
+  return call<EntireCheckpointResult>(
+    'GET',
+    `/api/projects/${id}/entire/checkpoint?id=${encodeURIComponent(checkpointId)}`
+  )
+}
+
+/** 单会话 transcript.jsonl（已解析行；>200KB 截断带 truncated 标记） */
+export async function entireTranscript(
+  id: string,
+  checkpointId: string,
+  session = 0,
+  call: ApiCall = api
+): Promise<EntireTranscriptResult> {
+  return call<EntireTranscriptResult>(
+    'GET',
+    `/api/projects/${id}/entire/transcript?id=${encodeURIComponent(checkpointId)}&session=${session}`
+  )
+}
+
+/** 逻辑耦合：同 checkpoint 文件共现统计 */
+export async function entireCoupling(
+  id: string,
+  limit = 200,
+  call: ApiCall = api
+): Promise<EntireCouplingResult> {
+  return call<EntireCouplingResult>('GET', `/api/projects/${id}/entire/coupling?limit=${limit}`)
+}
+
+/** 从远端拉取 checkpoint refs */
+export async function entireSync(id: string, call: ApiCall = api): Promise<EntireSyncResult> {
+  return call<EntireSyncResult>('POST', `/api/projects/${id}/entire/sync`)
+}
+
+/** 跨 checkpoint 全文搜索 */
+export async function entireSearch(
+  id: string,
+  q: string,
+  call: ApiCall = api
+): Promise<EntireSearchResult> {
+  return call<EntireSearchResult>(
+    'GET',
+    `/api/projects/${id}/entire/search?q=${encodeURIComponent(q)}`
+  )
 }

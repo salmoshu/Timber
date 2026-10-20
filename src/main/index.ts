@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
-import { cpSync, existsSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { startSidecar, stopSidecar, setSidecarReadyListener } from './sidecar.js'
 import { renderArchHtml, compareArchDelta } from './archify.js'
 import { UpdateService, extractReleaseNotesSection } from './updater.js'
@@ -184,6 +185,46 @@ ipcMain.handle('win:is-maximized', () => mainWindow?.isMaximized() ?? false)
 ipcMain.on('win:close', () => mainWindow?.close())
 
 ipcMain.handle('app:version', () => app.getVersion())
+
+// 导出 PDF（v0.5.7）：渲染器把文档渲染成独立 HTML 字符串（浅色打印样式、图片已重写为
+// sidecar /raw 绝对 URL），这里写临时文件 → 隐藏窗口加载 → 等资源就绪 → printToPDF → 保存对话框。
+// 不能用主窗口 printToPDF：那会把整个应用 UI 打进去。
+ipcMain.handle('export:pdf', async (_e, payload: { html: string; defaultName: string }) => {
+  const tmpHtml = join(tmpdir(), `timber-export-${process.pid}-${Date.now()}.html`)
+  let win: BrowserWindow | null = null
+  try {
+    writeFileSync(tmpHtml, payload.html, 'utf-8')
+    win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    await win.loadFile(tmpHtml)
+    // 等字体与图片（sidecar /raw、外链图）加载完再打印，避免 PDF 里图片缺位
+    await win.webContents.executeJavaScript(
+      `(async () => {
+        if (document.fonts?.ready) await document.fonts.ready
+        await Promise.all([...document.images].map((i) =>
+          i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = () => r(0) })))
+      })()`
+    )
+    if (!mainWindow) return { ok: false, error: '主窗口已关闭' }
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: '导出 PDF',
+      defaultPath: payload.defaultName,
+      filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
+    })
+    if (r.canceled || !r.filePath) return { ok: false, canceled: true }
+    const pdf = await win.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      margins: { marginType: 'custom', top: 0.55, bottom: 0.55, left: 0.6, right: 0.6 }
+    })
+    writeFileSync(r.filePath, pdf)
+    return { ok: true, path: r.filePath }
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) }
+  } finally {
+    win?.destroy()
+    try { unlinkSync(tmpHtml) } catch { /* 临时文件清理失败可忽略 */ }
+  }
+})
 
 // 版本更新：偏好由渲染端持久化并在初始化时传入，状态经 'update-status-changed' 推送
 ipcMain.handle('update-check', () => updateService.checkForUpdates())

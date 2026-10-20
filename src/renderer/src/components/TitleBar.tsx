@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore, type AppView } from '../store'
 import Logo from './Logo'
+import { IconMaximize, IconPanelLeft, IconPanelRight, IconRestore } from './icons'
 
 const VIEWS: { key: AppView; label: string }[] = [
   { key: 'docs', label: '文档' },
@@ -37,7 +38,7 @@ export default function TitleBar() {
     }
   }, [b])
 
-  // 最大化状态：初始化查询一次，随后跟随主进程推送（图标在 ▢/❐ 间切换）
+  // 最大化状态：初始化查询一次，随后跟随主进程推送（图标在单矩形/重叠矩形间切换）
   useEffect(() => {
     if (!b) return
     let mounted = true
@@ -78,14 +79,14 @@ export default function TitleBar() {
           onClick={toggleSidebar}
           title={sidebarCollapsed ? '展开左侧边栏' : '折叠左侧边栏'}
         >
-          ☰
+          <IconPanelLeft />
         </button>
         <button
           className={`tb-set ${annPanelOpen && activeDoc ? 'on' : ''}`}
           onClick={toggleAnnPanel}
           title={`右侧边栏（目录 / 标注）${activeDoc ? '' : '：打开文档后可用'}`}
         >
-          ▤
+          <IconPanelRight />
         </button>
         <button
           className={`tb-set ${settingsOpen ? 'on' : ''}`}
@@ -98,7 +99,7 @@ export default function TitleBar() {
           <>
             <button onClick={() => b.winMinimize()} title="最小化">—</button>
             <button onClick={() => b.winToggleMaximize()} title={maximized ? '还原' : '最大化'}>
-              {maximized ? '❐' : '▢'}
+              {maximized ? <IconRestore /> : <IconMaximize />}
             </button>
             <button className="tb-close" onClick={() => b.winClose()} title="关闭">✕</button>
           </>

@@ -1,8 +1,9 @@
-// 提交详情：header（sha/作者/时间/kind）、body、架构影响卡片、文件列表
+// 提交详情：header（sha/作者/时间/kind）、body、架构影响卡片、AI 会话卡片、文件列表
 import { useEffect, useState } from 'react'
 import type { CommitFile } from '@shared/types'
 import { useStore } from '../store'
 import { kindColor, relativeTime } from './HistoryView'
+import EntireCard from './EntireCard'
 
 /** 文件变更状态徽章配色（功能色语义） */
 const STATUS_COLORS: Record<string, string> = {
@@ -47,6 +48,7 @@ function FileRow({ file }: { file: CommitFile }) {
 }
 
 export default function CommitDetail() {
+  const activeProjectId = useStore((s) => s.activeProjectId)
   const detail = useStore((s) => s.commitDetail)
   const loading = useStore((s) => s.commitDetailLoading)
   const selectedSha = useStore((s) => s.selectedSha)
@@ -101,6 +103,9 @@ export default function CommitDetail() {
             </button>
           )}
         </div>
+      )}
+      {c.entireCheckpoint && activeProjectId && (
+        <EntireCard projectId={activeProjectId} checkpointId={c.entireCheckpoint} />
       )}
       <div className="cd-files">
         <div className="cd-files-title">变更文件（{detail.files.length}）</div>

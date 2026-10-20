@@ -1,8 +1,8 @@
 // 架构洞察：概览 / 循环依赖 / 热点组件 / 最强耦合 / IPC 通道 / 组件明细。
 // 仅走 sidecar HTTP（dev:web 可用）；缓存在组件内，refreshSeq 变化即重拉。
 import { useEffect, useMemo, useState } from 'react'
-import type { ArchInsights as ArchInsightsData } from '@shared/types'
-import { archInsights } from '../api'
+import type { ArchInsights as ArchInsightsData, EntireCouplingPair } from '@shared/types'
+import { archInsights, entireCoupling } from '../api'
 import { apiCallFor, useStore } from '../store'
 import { archErrorText } from './ArchitectureView'
 
@@ -18,6 +18,8 @@ export default function ArchInsightsView({ refName, refreshSeq }: Props) {
   const [data, setData] = useState<ArchInsightsData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 会话耦合（Entire checkpoint 共现）；null = 无数据或加载失败，整节不渲染
+  const [sessionPairs, setSessionPairs] = useState<EntireCouplingPair[] | null>(null)
 
   useEffect(() => {
     const id = activeProjectId
@@ -25,6 +27,12 @@ export default function ArchInsightsView({ refName, refreshSeq }: Props) {
     let stale = false
     setLoading(true)
     setError(null)
+    setSessionPairs(null)
+    entireCoupling(id, 200, apiCallFor(id))
+      .then((r) => {
+        if (!stale && r.ok) setSessionPairs(r.pairs)
+      })
+      .catch(() => {})
     archInsights(id, refName, apiCallFor(id))
       .then((r) => {
         if (stale) return
@@ -53,6 +61,37 @@ export default function ArchInsightsView({ refName, refreshSeq }: Props) {
     const m = new Map((data?.components ?? []).map((c) => [c.id, c.label]))
     return (cid: string): string => m.get(cid) ?? cid
   }, [data])
+
+  // 会话耦合过滤：共现 ≥2 次，且两文件所属组件间没有静态 import 边（隐性依赖）
+  const hiddenCoupling = useMemo(() => {
+    if (!sessionPairs || !data) return []
+    const dirs = data.components.map((c) => ({ id: c.id, dir: c.dir }))
+    const compOf = (file: string): string | null => {
+      let best: string | null = null
+      let bestLen = -1
+      for (const c of dirs) {
+        const d = c.dir.replace(/\\/g, '/')
+        if (d && (file === d || file.startsWith(d + '/')) && d.length > bestLen) {
+          best = c.id
+          bestLen = d.length
+        }
+      }
+      return best
+    }
+    const importEdges = new Set(
+      data.edges.filter((e) => e.kind !== 'ipc').map((e) => `${e.from}|${e.to}`)
+    )
+    return sessionPairs
+      .filter((pr) => {
+        if (pr.count < 2) return false
+        const ca = compOf(pr.a)
+        const cb = compOf(pr.b)
+        // 同组件或无法归属：视为无静态 import 关系，保留
+        if (!ca || !cb || ca === cb) return true
+        return !importEdges.has(`${ca}|${cb}`) && !importEdges.has(`${cb}|${ca}`)
+      })
+      .slice(0, 20)
+  }, [sessionPairs, data])
 
   if (loading) return <div className="hv-loading">架构洞察加载中…</div>
   if (error) return <div className="hv-empty">{error}</div>
@@ -142,6 +181,20 @@ export default function ArchInsightsView({ refName, refreshSeq }: Props) {
           ))
         )}
       </section>
+
+      {/* 会话耦合（隐性依赖）：无 Entire 数据时整节不渲染 */}
+      {hiddenCoupling.length > 0 && (
+        <section className="ai-section">
+          <h3 className="ai-title">会话耦合（隐性依赖）</h3>
+          <div className="ai-note">同一 AI 会话中一起修改的文件对（来自 Entire 记录），已排除静态 import 关系</div>
+          {hiddenCoupling.map((pr) => (
+            <div key={`${pr.a}|${pr.b}`} className="ai-couple">
+              <span className="ai-couple-files">{pr.a} ↔ {pr.b}</span>
+              <span className="ai-couple-n">{pr.count} 次同改</span>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* IPC 通道清单：无 IPC 边则整区不显示 */}
       {ipcEdges.length > 0 && (

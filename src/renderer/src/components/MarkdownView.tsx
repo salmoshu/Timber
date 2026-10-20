@@ -249,7 +249,7 @@ function upgradeQuoteBreaks(prose: HTMLElement): void {
   })
 }
 
-function wrapSoftBreaks(html: string): string {
+export function wrapSoftBreaks(html: string): string {
   if (!html.includes('\n')) return html
   const parts = html.split(/(<[^>]*>)/)
   let preDepth = 0

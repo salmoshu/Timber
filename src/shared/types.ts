@@ -184,6 +184,8 @@ export interface CommitInfo {
   files: number
   insertions: number
   deletions: number
+  /** Entire-Checkpoint trailer：存在即该提交有关联的 AI 会话 checkpoint */
+  entireCheckpoint?: string
 }
 
 /** 提交中的文件变更 */
@@ -202,6 +204,90 @@ export interface CommitDetail {
   body: string
   files: CommitFile[]
 }
+
+// ---- Entire AI 会话记录（sidecar /api/projects/:id/entire/*，只读 git 对象，不依赖 entire 二进制） ----
+
+/** token 用量（checkpoint 级或会话级） */
+export interface EntireTokenUsage {
+  inputTokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
+  outputTokens: number
+  apiCallCount: number
+}
+
+/** checkpoint 内的单个会话摘要 */
+export interface EntireSessionInfo {
+  index: number
+  agent: string
+  model: string
+  sessionId: string
+  /** RFC3339 */
+  createdAt: string
+  /** 首条用户 prompt 纯文本 */
+  prompt: string
+  filesTouched: string[]
+  tokenUsage?: EntireTokenUsage
+  turnCount: number
+}
+
+/** entire/checkpoint 成功响应 */
+export interface EntireCheckpointDetail {
+  ok: true
+  checkpointId: string
+  branch: string
+  /** Entire CLI 版本（schema 线索，字段缺失宽容处理） */
+  cliVersion: string
+  filesTouched: string[]
+  tokenUsage?: EntireTokenUsage
+  sessions: EntireSessionInfo[]
+}
+
+/** not-synced = commit 有 trailer 但 checkpoint refs 未同步到本地 */
+export type EntireCheckpointResult = EntireCheckpointDetail | { ok: false; error: string }
+
+/** transcript.jsonl 的一行（宽容结构：type/content/ts 等字段缺省容忍） */
+export interface EntireTranscriptLine {
+  type?: string
+  ts?: string
+  agent?: string
+  content?: { text?: string; type?: string; [k: string]: unknown }[]
+  [k: string]: unknown
+}
+
+export type EntireTranscriptResult =
+  | { ok: true; lines: EntireTranscriptLine[]; truncated: boolean }
+  | { ok: false; error: string }
+
+/** 会话耦合文件对 */
+export interface EntireCouplingPair {
+  a: string
+  b: string
+  count: number
+}
+
+export type EntireCouplingResult =
+  | { ok: true; pairs: EntireCouplingPair[]; checkpointsUsed: number }
+  | { ok: false; error: string }
+
+/** entire/sync 响应；no-remote / fetch-failed 为可预期失败 */
+export type EntireSyncResult =
+  | { ok: true; synced: number }
+  | { ok: false; error: string; detail?: string }
+
+/** 会话搜索命中（按 checkpoint 聚合） */
+export interface EntireSearchHit {
+  checkpointId: string
+  /** 命中的文件类别：prompt / transcript / metadata */
+  files: string[]
+  count: number
+  /** 首条 prompt 首行摘要（≤120 字符） */
+  prompt: string
+}
+
+export type EntireSearchResult =
+  | { ok: true; results: EntireSearchHit[] }
+  | { ok: false; error: string }
 
 /** 架构快照可选 ref 清单 */
 export interface ArchRefs {
@@ -325,6 +411,8 @@ export interface TimberBridge {
   onExtPageStatus(cb: (e: { url: string; code: number }) => void): () => void
   /** 用系统浏览器打开（浮层右上角 ↗） */
   openInSystemBrowser(url: string): Promise<void>
+  /** 导出 PDF：渲染器产出独立文档 HTML，主进程隐藏窗口 printToPDF 并弹保存对话框 */
+  exportPdf(payload: { html: string; defaultName: string }): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   /** 标签快捷键（主进程拦截 Ctrl+W / Ctrl+Tab 后转发） */
   onTabShortcut(cb: (kind: 'close' | 'next') => void): () => void
   /** sidecar 自动重启后新 base/token（更新渲染层缓存） */

@@ -213,18 +213,21 @@ export default function Sidebar() {
   const [tab, setTab] = useState<TreeTab>('docs')
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [storeRev, setStoreRev] = useState(0) // 别名/屏蔽变更后强制重渲染
-  const [connecting, setConnecting] = useState<Set<string>>(new Set()) // 重连中的远程 id
+  // 重连中条目的 key：连接级占位为远程 id，项目级占位为「远程id:项目id」——
+  // 同一远程下的多个项目互不串扰（v0.5.7 修复点一个项目、全部转圈的问题）
+  const [connecting, setConnecting] = useState<Set<string>>(new Set())
   const [dropTarget, setDropTarget] = useState<string | null>(null) // 拖拽放置目标（'' = 项目根）
   const bump = () => setStoreRev((v) => v + 1)
 
   const onReconnect = async (remoteId: string, projectId?: string) => {
-    setConnecting((s) => new Set(s).add(remoteId))
+    const key = projectId ? `${remoteId}:${projectId}` : remoteId
+    setConnecting((s) => new Set(s).add(key))
     try {
       await reconnectRemote(remoteId, projectId)
     } finally {
       setConnecting((s) => {
         const next = new Set(s)
-        next.delete(remoteId)
+        next.delete(key)
         return next
       })
     }
@@ -610,9 +613,9 @@ export default function Sidebar() {
                   >
                     <span className="proj-name">🌐 {displayName(proj)}</span>
                     <button
-                      className={`proj-reconnect ${connecting.has(r.id) ? 'spin' : ''}`}
+                      className={`proj-reconnect ${connecting.has(proj.id) ? 'spin' : ''}`}
                       title={r.connected ? '接入该项目' : '重新连接'}
-                      disabled={connecting.has(r.id)}
+                      disabled={connecting.has(proj.id)}
                       onClick={(e) => {
                         e.stopPropagation()
                         void onReconnect(r.id, sp.id)

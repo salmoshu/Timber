@@ -38,6 +38,7 @@ const bridge: TimberBridge = {
     return () => ipcRenderer.removeListener('ext-page-status', listener)
   },
   openInSystemBrowser: (url) => ipcRenderer.invoke('shell:open-external', url),
+  exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
   onTabShortcut: (cb) => {
     const listener = (_e: Electron.IpcRendererEvent, kind: 'close' | 'next') => cb(kind)
     ipcRenderer.on('tab-shortcut', listener)

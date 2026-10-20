@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
-import type { SearchResponse } from '@shared/types'
-import { apiFor } from '../store'
+import type { EntireSearchHit, SearchResponse } from '@shared/types'
+import { apiCallFor, apiFor } from '../store'
 import { DOC_FORMAT_GROUPS } from '@shared/types'
 import { useStore } from '../store'
 import { isBlocked } from '../utils/local-store'
+import { entireSearch } from '../api'
+import EntireCard from './EntireCard'
 
 /** 关键词高亮：大小写不敏感切分文本 */
 function highlight(text: string, kw: string): (string | { hit: string })[] {
@@ -30,6 +32,9 @@ export default function SearchPanel({ projectId }: { projectId: string }) {
   const [q, setQ] = useState('')
   const [result, setResult] = useState<SearchResponse | null>(null)
   const [loading, setLoading] = useState(false)
+  // 包含 AI 会话（Entire checkpoint 搜索，默认关）
+  const [withEntire, setWithEntire] = useState(false)
+  const [entireHits, setEntireHits] = useState<EntireSearchHit[] | null>(null)
 
   const doSearch = async (e?: FormEvent): Promise<void> => {
     e?.preventDefault()
@@ -46,6 +51,17 @@ export default function SearchPanel({ projectId }: { projectId: string }) {
       // 屏蔽的文档不参与结果
       r.files = r.files.filter((f) => !isBlocked(projectId, f.path))
       setResult(r)
+      if (withEntire) {
+        // 会话搜索失败不影响文件结果
+        try {
+          const er = await entireSearch(projectId, kw, apiCallFor(projectId))
+          setEntireHits(er.ok ? er.results : [])
+        } catch {
+          setEntireHits([])
+        }
+      } else {
+        setEntireHits(null)
+      }
     } catch (err) {
       toast('err', `搜索失败：${err}`)
     } finally {
@@ -77,6 +93,14 @@ export default function SearchPanel({ projectId }: { projectId: string }) {
           {loading ? '…' : '⌕'}
         </button>
       </form>
+      <label className="sp-entire-toggle">
+        <input
+          type="checkbox"
+          checked={withEntire}
+          onChange={(e) => setWithEntire(e.target.checked)}
+        />
+        包含 AI 会话
+      </label>
 
       <div className="sp-results">
         {result && result.files.length === 0 && (
@@ -118,7 +142,35 @@ export default function SearchPanel({ projectId }: { projectId: string }) {
             </div>
           </div>
         ))}
+        {withEntire && entireHits && (
+          <div className="sp-entire">
+            <div className="sp-entire-title">AI 会话（{entireHits.length}）</div>
+            {entireHits.length === 0 && <div className="sb-empty">AI 会话无命中（或该项目无 Entire 记录）</div>}
+            {entireHits.map((h) => (
+              <EntireSearchRow key={h.checkpointId} hit={h} projectId={projectId} />
+            ))}
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+/** AI 会话命中行：点击内联展开会话卡片（复用提交详情的 EntireCard） */
+function EntireSearchRow({ hit, projectId }: { hit: EntireSearchHit; projectId: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="sp-entire-hit">
+      <button className="sp-entire-row" onClick={() => setOpen(!open)}>
+        <span className="ec-spark">✨</span>
+        <span className="sp-entire-id">{hit.checkpointId.slice(0, 8)}</span>
+        <span className="sp-entire-kinds">{hit.files.join(' / ')}</span>
+        <span className="ec-chevron">{open ? '▴' : '▾'}</span>
+      </button>
+      {hit.prompt && <div className="sp-entire-prompt" title={hit.prompt}>{hit.prompt}</div>}
+      {open && (
+        <EntireCard projectId={projectId} checkpointId={hit.checkpointId} defaultOpen />
+      )}
     </div>
   )
 }
