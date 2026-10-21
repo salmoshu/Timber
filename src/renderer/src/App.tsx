@@ -15,7 +15,7 @@ import AddProjectDialog from './components/AddProjectDialog'
 import Logo from './components/Logo'
 
 export default function App() {
-  const { init, ready, fatalError, annPanelOpen, activeDoc, extPageUrl, closeExtPage, settingsOpen, view } = useStore()
+  const { init, ready, fatalError, annPanelOpen, extPageUrl, closeExtPage, settingsOpen, view } = useStore()
 
   useEffect(() => {
     void init()
@@ -83,6 +83,7 @@ export default function App() {
             <main className="reader-wrap">
               <CodeView />
             </main>
+            {annPanelOpen && <AnnotationPanel />}
           </>
         ) : (
           // docs：现有文档阅读组合，原样保留
@@ -91,7 +92,7 @@ export default function App() {
             <main className="reader-wrap">
               <Reader />
             </main>
-            {annPanelOpen && activeDoc && <AnnotationPanel />}
+            {annPanelOpen && <AnnotationPanel />}
           </>
         )}
       </div>

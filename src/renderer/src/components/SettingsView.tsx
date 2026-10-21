@@ -133,7 +133,6 @@ export default function SettingsView() {
             {s.label}
           </button>
         ))}
-        <div className="st-version">v{appVersion || '…'}</div>
       </div>
 
       <div className="st-body-wrap">

@@ -16,7 +16,6 @@ export default function TitleBar() {
   const closeSettings = useStore((s) => s.closeSettings)
   const settingsOpen = useStore((s) => s.settingsOpen)
   const annPanelOpen = useStore((s) => s.annPanelOpen)
-  const activeDoc = useStore((s) => s.activeDoc)
   const toggleAnnPanel = useStore((s) => s.toggleAnnPanel)
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useStore((s) => s.toggleSidebar)
@@ -82,9 +81,9 @@ export default function TitleBar() {
           <IconPanelLeft />
         </button>
         <button
-          className={`tb-set ${annPanelOpen && activeDoc ? 'on' : ''}`}
+          className={`tb-set ${annPanelOpen ? 'on' : ''}`}
           onClick={toggleAnnPanel}
-          title={`右侧边栏（目录 / 标注）${activeDoc ? '' : '：打开文档后可用'}`}
+          title="右侧边栏（目录 / 标注）"
         >
           <IconPanelRight />
         </button>

@@ -5,6 +5,7 @@ import hljs from 'highlight.js/lib/common'
 import type { DocNode } from '@shared/types'
 import { origProjectId, rawBaseFor, useStore } from '../store'
 import Chevron from './Chevron'
+import FindBar from './FindBar'
 import Logo from './Logo'
 
 /** 扩展名 → 文件类型图标（与侧栏文档树同款，保证两棵树视觉一致；勿从 Sidebar 引入以免循环依赖） */
@@ -99,6 +100,23 @@ export default function CodeView() {
   const [error, setError] = useState<string | null>(null)
   const [refreshTick, setRefreshTick] = useState(0)
   const codeRef = useRef<HTMLDivElement | null>(null)
+  const [findOpen, setFindOpen] = useState(false)
+
+  // Ctrl+F 查找代码正文（v0.5.8；只读视图无源码模式例外，无文件时不响应）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        if (!useStore.getState().codeFile) return
+        e.preventDefault()
+        setFindOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // 切换文件时关掉查找条（高亮 range 已失效，残留会误导）
+  useEffect(() => { setFindOpen(false) }, [codeFile])
 
   // codeFile 变化：经 /raw 拉取原文（远程项目走远端 base），滚到顶
   useEffect(() => {
@@ -175,7 +193,6 @@ export default function CodeView() {
         {!codeFile && (
           <div className="reader-empty">
             <Logo size={72} />
-            <div className="re-hint">从左侧文件树选择文件，或在历史详情中点击变更文件</div>
           </div>
         )}
         {codeFile && (
@@ -198,10 +215,12 @@ export default function CodeView() {
             </button>
           </div>
         )}
+        {codeFile && findOpen && <FindBar onClose={() => setFindOpen(false)} />}
+        {codeFile && (
         <div className="cv-body" ref={codeRef}>
-          {codeFile && loading && <div className="hv-loading">加载中…</div>}
-          {codeFile && !loading && error && <div className="hv-empty">文件加载失败：{error}</div>}
-          {codeFile && !loading && !error && content !== null && (
+          {loading && <div className="hv-loading">加载中…</div>}
+          {!loading && error && <div className="hv-empty">文件加载失败：{error}</div>}
+          {!loading && !error && content !== null && (
             <div className="cv-card">
               {truncated && <div className="cv-truncated">文件过大，仅显示前 512 KB</div>}
               {/* 行号列 + 高亮代码块同行并排（同字号行高天然对齐） */}
@@ -220,6 +239,7 @@ export default function CodeView() {
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   )

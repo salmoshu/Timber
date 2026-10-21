@@ -13,10 +13,10 @@ export default function FindBar({ onClose }: Props) {
   const [current, setCurrent] = useState(-1)
   const rangesRef = useRef<Range[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
-  const docPath = useStore((state) => state.activeDoc?.path)
+  const docPath = useStore((state) => state.activeDoc?.path ?? state.codeFile)
 
   const search = useCallback((q: string): void => {
-    const root = document.querySelector<HTMLElement>('.reader-body .prose, .reader-body .txt-view')
+    const root = document.querySelector<HTMLElement>('.reader-body .prose, .reader-body .txt-view, .cv-body .cv-content')
     const ranges = root && q ? findTextRanges(root, q) : []
     rangesRef.current = ranges
     setCount(ranges.length)
