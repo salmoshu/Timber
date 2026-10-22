@@ -1,6 +1,6 @@
 {
   "name": "timber",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "Timber —— 项目理解工具：Git 历史 × 架构图 × 代码阅读 × 文档渲染，看清每一次提交如何塑造你的项目",
   "author": "Winchell.Hu <winchell.hu@outlook.com>",
   "license": "MIT",

@@ -211,16 +211,15 @@ func countDocsExts(root string, exts map[string]bool) int {
 	return n
 }
 
-// scanTreeExts 按指定扩展名集构建文档树（临时替换全局 docExts，避免复制 scanTree 逻辑）。
+// scanTreeExts 按指定扩展名集构建文档树。
+// v0.5.9 前经全局 docExts 暂存传参——/tree 并发请求（文档树 + 源码树同时加载）会互相
+// 覆盖扩展名集，导致源码树偶尔只剩文档格式；改为显式传参，无共享状态。
 func scanTreeExts(root string, exts map[string]bool) (*DocNode, error) {
-	saved := docExts
-	docExts = exts
-	defer func() { docExts = saved }()
-	return scanTree(root)
+	return scanTree(root, exts)
 }
 
 // scanTree 构建文档树（目录在前、名字排序；上限 5000 篇防失控）。
-func scanTree(root string) (*DocNode, error) {
+func scanTree(root string, exts map[string]bool) (*DocNode, error) {
 	const maxDocs = 5000
 	count := 0
 	var walk func(dir, rel string) *DocNode
@@ -254,7 +253,7 @@ func scanTree(root string) (*DocNode, error) {
 				continue
 			}
 			ext := strings.ToLower(filepath.Ext(name))
-			if !docExts[ext] || count >= maxDocs {
+			if !exts[ext] || count >= maxDocs {
 				continue
 			}
 			info, _ := e.Info()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
+import { IconChevronDown, IconChevronUp } from './icons'
 
 interface Props {
   onClose(): void
@@ -13,7 +14,7 @@ export default function FindBar({ onClose }: Props) {
   const [current, setCurrent] = useState(-1)
   const rangesRef = useRef<Range[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
-  const docPath = useStore((state) => state.activeDoc?.path ?? state.codeFile)
+  const docPath = useStore((state) => state.activeDoc?.path)
 
   const search = useCallback((q: string): void => {
     const root = document.querySelector<HTMLElement>('.reader-body .prose, .reader-body .txt-view, .cv-body .cv-content')
@@ -75,8 +76,8 @@ export default function FindBar({ onClose }: Props) {
         spellCheck={false}
       />
       <span className="fb-count">{count > 0 ? `${current + 1}/${count}` : query ? '无结果' : ''}</span>
-      <button className="fb-btn" onClick={() => nav(-1)} title="上一个 (Shift+Enter)">↑</button>
-      <button className="fb-btn" onClick={() => nav(1)} title="下一个 (Enter)">↓</button>
+      <button className="fb-btn" onClick={() => nav(-1)} title="上一个 (Shift+Enter)"><IconChevronUp /></button>
+      <button className="fb-btn" onClick={() => nav(1)} title="下一个 (Enter)"><IconChevronDown /></button>
       <button className="fb-btn" onClick={onClose} title="关闭 (Esc)">✕</button>
     </div>
   )

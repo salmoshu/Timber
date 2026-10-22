@@ -4,8 +4,7 @@ import Logo from './Logo'
 import { IconMaximize, IconPanelLeft, IconPanelRight, IconRestore } from './icons'
 
 const VIEWS: { key: AppView; label: string }[] = [
-  { key: 'docs', label: '文档' },
-  { key: 'code', label: '代码' },
+  { key: 'resources', label: '资源' },
   { key: 'architecture', label: '架构' },
   { key: 'history', label: '历史' }
 ]

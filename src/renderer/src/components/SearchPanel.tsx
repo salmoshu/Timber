@@ -72,9 +72,9 @@ export default function SearchPanel({ projectId }: { projectId: string }) {
   const jump = (path: string): void => {
     setPendingLocate({ path, keyword: q.trim() })
     void openDoc(path)
-    // 在代码/架构等视图下搜索时，跳回文档视图以呈现结果
+    // 在架构/历史等视图下搜索时，跳到资源视图以呈现结果
     const s = useStore.getState()
-    if (s.view !== 'docs') s.setView('docs')
+    if (s.view !== 'resources') s.setView('resources')
   }
 
   const totalMatches = result?.files.reduce((n, f) => n + f.count, 0) ?? 0

@@ -5,6 +5,7 @@ import Vditor from 'vditor'
 import hljs from 'highlight.js/lib/common'
 import { origProjectId, rawBaseFor, useStore } from '../store'
 import { resolveDocLink, wrapSoftBreaks } from '../components/MarkdownView'
+import { sanitizeRenderedHtml, upgradeInlineHtml } from './sanitizeHtml'
 
 /** PDF 打印样式：prose.css 的浅色实体化版本（PDF 永远是纸张，浅色唯一合理）。
  *  标题沿用 0.5.6 的 em 相对梯度；pre/table 撤销横向滚动（打印无滚动条，改换行防截断） */
@@ -106,6 +107,9 @@ export async function exportActiveDocPdf(): Promise<void> {
     body = wrapSoftBreaks(body)
     const tpl = document.createElement('template')
     tpl.innerHTML = body
+    // 与阅读视图一致的安全收口：剥 script/on*，行内 <img> 升级为真实图片（src 在下方统一重写）
+    sanitizeRenderedHtml(tpl.content)
+    upgradeInlineHtml(tpl.content)
     // 代码块高亮（与应用内同款 hljs；md2html 关闭自带高亮避免加载主题脚本）
     tpl.content.querySelectorAll<HTMLElement>('pre code').forEach((code) => {
       const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9)

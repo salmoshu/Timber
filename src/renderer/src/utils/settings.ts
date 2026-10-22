@@ -20,6 +20,8 @@ export interface AppSettings {
   docFormats: string[]
   /** 自动保存延迟（ms） */
   autoSaveDelayMs: number
+  /** 资源视图文件树只显示文档（关闭则显示全部源码文件） */
+  resourceFilterDocs: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -31,7 +33,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   annPanelDefaultOpen: true,
   autoSave: false,
   autoSaveDelayMs: 2000,
-  docFormats: ['md', 'html', 'txt']
+  docFormats: ['md', 'html', 'txt'],
+  resourceFilterDocs: true
 }
 
 const SETTINGS_KEY = 'timber-settings'

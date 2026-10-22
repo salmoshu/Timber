@@ -59,11 +59,11 @@ function ChangeRow({
 /** 侧栏 Git 页签：状态 / 暂存 / 丢弃 / 提交 / 拉推（模仿 VSCode 源代码管理） */
 export default function GitPanel({ projectId }: { projectId: string }) {
   const { openDoc, toast } = useStore()
-  // 代码/架构视图下打开文档需先跳回文档视图（v0.5.6：Git 页签随侧栏进入代码视图）
+  // 架构/历史视图下打开文件需先跳到资源视图
   const openDocFromGit = (path: string): void => {
     void openDoc(path)
     const s = useStore.getState()
-    if (s.view !== 'docs') s.setView('docs')
+    if (s.view !== 'resources') s.setView('resources')
   }
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [loading, setLoading] = useState(false)

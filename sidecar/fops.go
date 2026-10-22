@@ -85,7 +85,14 @@ func (s *server) handleFsOp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err = os.MkdirAll(filepath.Dir(toAbs), 0o755); err == nil {
-			err = os.WriteFile(toAbs, []byte(req.Content), 0o644)
+			// O_EXCL：同名文件已存在时报错而不是静默覆盖
+			var f *os.File
+			if f, err = os.OpenFile(toAbs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
+				_, err = f.WriteString(req.Content)
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+			}
 		}
 	default:
 		writeError(w, 400, "不支持的 op："+req.Op)

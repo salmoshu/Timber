@@ -35,6 +35,13 @@ export const CODE_EXTS = [
   '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.toml', '.xml', '.csv', '.log'
 ]
 
+/** 资源视图中走 Reader（可编辑/阅读渲染）的扩展名；其余源码文件走 CodeReader（只读） */
+const READER_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
+
+export function isReaderPath(path: string): boolean {
+  return READER_EXTS.has((path.split('.').pop() ?? '').toLowerCase())
+}
+
 export type ViewMode = 'read' | 'source'
 
 /** 文件树操作类型（sidecar /api/projects/:id/fs） */
@@ -140,8 +147,8 @@ function startActiveDocWatcher(): void {
   }, 5000)
 }
 
-/** 应用主视图：提交历史 / 架构图 / 代码 / 文档 */
-export type AppView = 'history' | 'architecture' | 'code' | 'docs'
+/** 应用主视图：提交历史 / 架构图 / 资源（文档与代码合并，v0.5.9） */
+export type AppView = 'history' | 'architecture' | 'resources'
 
 /** 提交「架构影响」懒算结果（提交与其首个 parent 的 spec delta 摘要） */
 export interface CommitImpact {
@@ -264,6 +271,8 @@ interface State {
   tree: DocNode | null
   treeLoading: boolean
   filter: string
+  /** 文件树中选中的目录（「＋」新建的目标；null/'' = 项目根，文档树与源码树共享） */
+  selectedDir: string | null
   tabs: DocTab[]
   activeTabId: string | null
   activeDoc: DocContent | null
@@ -306,9 +315,7 @@ interface State {
   archHtmlCache: Map<string, string>
   /** 提交架构影响懒算缓存：sha → 摘要（text 为空 = 不显示徽章） */
   commitImpactCache: Map<string, CommitImpact>
-  /** CodeView 当前打开的文件路径（相对项目根） */
-  codeFile: string | null
-  /** 代码视图的源码文件树（扩展名集合独立于文档树，v0.5.6 起由 store 托管供侧栏复用） */
+  /** 资源视图的源码文件树（扩展名集合独立于文档树，v0.5.6 起由 store 托管供侧栏复用） */
   codeTree: DocNode | null
   codeTreeLoading: boolean
   /** 历史详情「查看架构对比」发起的 delta 请求（architecture 视图消费） */
@@ -325,8 +332,8 @@ interface State {
   ensureArchSpec(ref: string): Promise<ArchResult>
   /** 懒算提交架构影响（与其首个 parent 的 delta 摘要），结果写入 commitImpactCache */
   ensureCommitImpact(c: CommitInfo): Promise<void>
-  /** 在 CodeView 中打开文件并切到 code 视图 */
-  openInCode(path: string): void
+  /** 在资源视图中打开文件（按类型路由 Reader/CodeReader） */
+  openFile(path: string): void
   /** 切到 architecture 视图的 delta 对比模式 */
   openArchDelta(base: string, head: string): void
 
@@ -378,6 +385,7 @@ interface State {
   patchActiveTab(patch: Partial<DocTab>): void
 
   setFilter(f: string): void
+  setSelectedDir(p: string | null): void
   setMode(m: ViewMode): void
   setDraft(d: string): void
   saveDoc(): Promise<void>
@@ -470,6 +478,7 @@ export const useStore = create<State>((set, get) => ({
   tree: null,
   treeLoading: false,
   filter: '',
+  selectedDir: null,
   tabs: [],
   activeTabId: null,
   activeDoc: null,
@@ -489,7 +498,7 @@ export const useStore = create<State>((set, get) => ({
   pendingLocate: null,
   ...loadLayout(),
 
-  view: 'docs',
+  view: 'resources',
   commits: [],
   commitsTotal: 0,
   commitsLoading: false,
@@ -500,7 +509,6 @@ export const useStore = create<State>((set, get) => ({
   archSpecCache: new Map(),
   archHtmlCache: new Map(),
   commitImpactCache: new Map(),
-  codeFile: null,
   codeTree: null,
   codeTreeLoading: false,
   archDeltaRequest: null,
@@ -621,8 +629,9 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  openInCode(path) {
-    set({ codeFile: path.replace(/\\/g, '/'), view: 'code' })
+  openFile(path) {
+    set({ view: 'resources' })
+    void get().openTab(path.replace(/\\/g, '/'), { pinned: false })
   },
 
   openArchDelta(base, head) {
@@ -944,6 +953,7 @@ export const useStore = create<State>((set, get) => ({
       activeDoc: null,
       annotations: [],
       composeQuote: null,
+      selectedDir: null,
       // 历史/架构/代码域随项目切换清空（缓存按项目隔离，重进时重新加载）
       commits: [],
       commitsTotal: 0,
@@ -953,7 +963,6 @@ export const useStore = create<State>((set, get) => ({
       archSpecCache: new Map(),
       archHtmlCache: new Map(),
       commitImpactCache: new Map(),
-      codeFile: null,
       codeTree: null,
       archDeltaRequest: null
     })
@@ -1153,6 +1162,10 @@ export const useStore = create<State>((set, get) => ({
 
   setFilter(f) {
     set({ filter: f })
+  },
+
+  setSelectedDir(p) {
+    set({ selectedDir: p })
   },
 
   setMode(m) {

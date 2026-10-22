@@ -2,11 +2,10 @@ import { useEffect } from 'react'
 import { useStore } from './store'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
-import Reader from './components/Reader'
+import ResourceView from './components/ResourceView'
 import AnnotationPanel from './components/AnnotationPanel'
 import HistoryView from './components/HistoryView'
 import ArchitectureView from './components/ArchitectureView'
-import CodeView from './components/CodeView'
 import Toasts from './components/Toasts'
 import UpdateCard from './components/UpdateCard'
 import SettingsView from './components/SettingsView'
@@ -76,21 +75,12 @@ export default function App() {
           <main className="reader-wrap">
             <ArchitectureView />
           </main>
-        ) : view === 'code' ? (
-          // 代码视图：侧栏（项目/文件树/搜索/Git，v0.5.6 起与文档视图一致）+ 只读代码阅读器
-          <>
-            <Sidebar />
-            <main className="reader-wrap">
-              <CodeView />
-            </main>
-            {annPanelOpen && <AnnotationPanel />}
-          </>
         ) : (
-          // docs：现有文档阅读组合，原样保留
+          // resources：文档与代码合并（v0.5.9），主体按活动标签文件类型分发 Reader/CodeReader
           <>
             <Sidebar />
             <main className="reader-wrap">
-              <Reader />
+              <ResourceView />
             </main>
             {annPanelOpen && <AnnotationPanel />}
           </>

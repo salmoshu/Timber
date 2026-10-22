@@ -72,6 +72,9 @@ interface TreeCtx {
   onDropInto(target: string): void
   onDragOverDir(target: string): void
   onDragLeaveDir(): void
+  /** 「＋」新建的目标目录（点击目录行选中，null = 项目根） */
+  selectedDir: string | null
+  onSelectDir(target: string): void
 }
 
 function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: TreeCtx }) {
@@ -122,7 +125,7 @@ function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: Tre
   return (
     <div>
       <button
-        className={`tree-dir ${blocked ? 'blocked' : ''} ${dragOver ? 'drag-over' : ''}`}
+        className={`tree-dir ${blocked ? 'blocked' : ''} ${dragOver ? 'drag-over' : ''} ${ctx.selectedDir === node.path ? 'sel' : ''}`}
         style={{ paddingLeft: 10 + depth * 14 }}
         draggable={!blocked}
         onDragStart={(e) => {
@@ -148,6 +151,7 @@ function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: Tre
         onClick={() => {
           if (blocked) return
           treeOpenState.set(node.path, !open)
+          ctx.onSelectDir(node.path)
           force((v) => v + 1)
         }}
         onContextMenu={(e) => ctx.onMenu(e, node, exactBlocked)}
@@ -189,7 +193,10 @@ export default function Sidebar() {
     sidebarCollapsed,
     sidebarWidth,
     setSidebarWidth,
-    view
+    settings,
+    setSetting,
+    selectedDir,
+    setSelectedDir
   } = useStore()
 
   /** 右缘拖拽调宽（HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件） */
@@ -217,6 +224,9 @@ export default function Sidebar() {
   // 同一远程下的多个项目互不串扰（v0.5.7 修复点一个项目、全部转圈的问题）
   const [connecting, setConnecting] = useState<Set<string>>(new Set())
   const [dropTarget, setDropTarget] = useState<string | null>(null) // 拖拽放置目标（'' = 项目根）
+  // 新建文件/文件夹命名输入卡（window.prompt 在 Electron 不可用，v0.5.9 起改内联卡片）
+  const [namePrompt, setNamePrompt] = useState<{ kind: 'file' | 'dir'; dir: string } | null>(null)
+  const [nameValue, setNameValue] = useState('')
   const bump = () => setStoreRev((v) => v + 1)
 
   const onReconnect = async (remoteId: string, projectId?: string) => {
@@ -400,34 +410,33 @@ export default function Sidebar() {
     toast('err', '未能创建副本（同名文件过多）')
   }
 
-  /** 新建 Markdown 文档（dir 为空表示项目根） */
-  const onNewDoc = async (dir: DocNode | null) => {
-    const next = window.prompt('新文档名称', '未命名文档.md')
-    if (next === null) return
-    const name = next.trim()
-    if (!validName(name)) {
-      toast('err', '名称不能为空，且不能包含 \\ / : * ? " < > | 或以 . 开头')
-      return
-    }
-    const to = joinPath(dir?.path ?? '', name)
-    const title = name.replace(/\.(md|markdown|txt)$/i, '')
-    if (await useStore.getState().fsOp('create', { to, content: `# ${title}\n\n` })) {
-      toast('ok', `已创建「${name}」`)
-      void useStore.getState().openDoc(to)
-    }
+  /** 打开新建命名输入卡（dir 为 '' 表示项目根） */
+  const openNamePrompt = (kind: 'file' | 'dir', dir: string): void => {
+    setNameValue('')
+    setNamePrompt({ kind, dir })
   }
 
-  /** 新建文件夹（dir 为空表示项目根） */
-  const onNewDir = async (dir: DocNode | null) => {
-    const next = window.prompt('新文件夹名称', '新建文件夹')
-    if (next === null) return
-    const name = next.trim()
+  /** 提交新建：文件无扩展名自动补 .md；重名/越界由 sidecar 报错（fsOp 失败已 toast，卡片保留便于改名重试） */
+  const submitNamePrompt = async (): Promise<void> => {
+    if (!namePrompt) return
+    let name = nameValue.trim()
     if (!validName(name)) {
       toast('err', '名称不能为空，且不能包含 \\ / : * ? " < > | 或以 . 开头')
       return
     }
-    if (await useStore.getState().fsOp('mkdir', { to: joinPath(dir?.path ?? '', name) })) {
+    if (namePrompt.dir !== '') treeOpenState.set(namePrompt.dir, true)
+    if (namePrompt.kind === 'file') {
+      if (!name.includes('.')) name = `${name}.md`
+      const to = joinPath(namePrompt.dir, name)
+      const title = name.replace(/\.(md|markdown|txt)$/i, '')
+      if (await useStore.getState().fsOp('create', { to, content: `# ${title}\n\n` })) {
+        toast('ok', `已创建「${name}」`)
+        setNamePrompt(null)
+        void useStore.getState().openDoc(to)
+      }
+    } else if (await useStore.getState().fsOp('mkdir', { to: joinPath(namePrompt.dir, name) })) {
       toast('ok', `已创建文件夹「${name}」`)
+      setNamePrompt(null)
     }
   }
 
@@ -475,8 +484,8 @@ export default function Sidebar() {
       items.push({ key: 'rename', label: '重命名…', onClick: () => void onRenameNode(node) })
       items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
     } else {
-      items.push({ key: 'newdoc', label: '新建文档…', onClick: () => void onNewDoc(node) })
-      items.push({ key: 'newdir', label: '新建文件夹…', onClick: () => void onNewDir(node) })
+      items.push({ key: 'newdoc', label: '新建文件…', onClick: () => openNamePrompt('file', node.path) })
+      items.push({ key: 'newdir', label: '新建文件夹…', onClick: () => openNamePrompt('dir', node.path) })
       items.push({ key: 'rename', label: '重命名…', separatorBefore: true, onClick: () => void onRenameNode(node) })
       items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
     }
@@ -654,18 +663,65 @@ export default function Sidebar() {
               {displayName(active)}
             </div>
             <div className="sb-proj-ops">
-              <button onClick={() => void onNewDoc(null)} title="新建文档（项目根）">＋</button>
+              <button
+                onClick={(e) =>
+                  setMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    items: [
+                      { key: 'newfile', label: '新建文件…', onClick: () => openNamePrompt('file', selectedDir ?? '') },
+                      { key: 'newdir', label: '新建文件夹…', onClick: () => openNamePrompt('dir', selectedDir ?? '') }
+                    ]
+                  })
+                }
+                title={selectedDir ? `新建文件 / 文件夹（${selectedDir} 下）` : '新建文件 / 文件夹（项目根；点击目录行可选目标）'}
+              >
+                ＋
+              </button>
               <button onClick={() => void rescan()} title="重新扫描文档">⟳</button>
               <button onClick={() => void onRemove(active)} title="从列表移除">✕</button>
             </div>
           </div>
+
+          {namePrompt && (
+            <div className="sb-newfile-card">
+              <div className="sb-newfile-title">
+                {namePrompt.kind === 'file' ? '新建文件' : '新建文件夹'}
+                {namePrompt.dir ? `（${namePrompt.dir} 下）` : '（项目根）'}
+              </div>
+              <input
+                autoFocus
+                value={nameValue}
+                onChange={(e) => setNameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void submitNamePrompt()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setNamePrompt(null)
+                  }
+                }}
+                placeholder={namePrompt.kind === 'file' ? '文件名（无扩展名自动补 .md）' : '文件夹名'}
+                spellCheck={false}
+              />
+              <div className="sb-newfile-ops">
+                <button className="btn-primary sm" onClick={() => void submitNamePrompt()}>
+                  创建
+                </button>
+                <button className="btn-ghost sm" onClick={() => setNamePrompt(null)}>
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="sb-tabs">
             <button
               className={tab === 'docs' ? 'active' : ''}
               onClick={() => setTab('docs')}
             >
-              {view === 'code' ? '文件' : '文档'}
+              文件
             </button>
             <button
               className={tab === 'search' ? 'active' : ''}
@@ -679,11 +735,22 @@ export default function Sidebar() {
             </button>
           </div>
 
+          {tab === 'docs' && (
+            <div className="sb-docfilter-row">
+              <span>过滤文档</span>
+              <button
+                className={`switch ${settings.resourceFilterDocs ? 'on' : ''}`}
+                onClick={() => setSetting('resourceFilterDocs', !settings.resourceFilterDocs)}
+                title="开：只显示文档；关：显示全部源码文件"
+              >
+                <span className="switch-dot" />
+              </button>
+            </div>
+          )}
+
           {tab === 'docs' ? (
-            // 代码视图：首个页签换成源码文件树（搜索/Git 页签不变，项目管理区域共用）
-            view === 'code' ? (
-              <CodeTree />
-            ) : (
+            // 「过滤文档」开（默认）：文档树（仅设置勾选的文档格式）；关：全部源码文件树（v0.5.9）
+            settings.resourceFilterDocs ? (
             <>
               <div className="sb-filter">
                 <input
@@ -709,12 +776,16 @@ export default function Sidebar() {
                         dropTarget,
                         onDropInto: (t) => void onDropInto(t),
                         onDragOverDir: (t) => setDropTarget((cur) => (cur === t ? cur : t)),
-                        onDragLeaveDir: () => setDropTarget(null)
+                        onDragLeaveDir: () => setDropTarget(null),
+                        selectedDir,
+                        onSelectDir: (t) => setSelectedDir(t)
                       }}
                     />
                   ))}
               </div>
             </>
+            ) : (
+              <CodeTree />
             )
           ) : tab === 'search' ? (
             <div className="sb-tree git-tree">

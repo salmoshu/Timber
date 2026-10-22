@@ -20,12 +20,12 @@ function fullTime(unixSec: number): string {
 }
 
 function FileRow({ file }: { file: CommitFile }) {
-  const openInCode = useStore((s) => s.openInCode)
+  const openFile = useStore((s) => s.openFile)
   const total = file.insertions + file.deletions
   // ± 行数条：绿色/红色比例（全 0 时显示空条）
   const insPct = total > 0 ? (file.insertions / total) * 100 : 0
   return (
-    <div className="cd-file" onClick={() => openInCode(file.path)} title="在代码视图中打开">
+    <div className="cd-file" onClick={() => openFile(file.path)} title="在资源视图中打开">
       <span
         className="cd-status"
         style={{ background: STATUS_COLORS[file.status] ?? 'var(--Labels-Tertiary)' }}

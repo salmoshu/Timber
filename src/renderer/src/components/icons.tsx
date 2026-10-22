@@ -65,3 +65,21 @@ export function IconExportPdf({ size = 14 }: { size?: number }) {
     </svg>
   )
 }
+
+/** 查找：上一个（chevron 上），与 IconChevronDown 成对 */
+export function IconChevronUp({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden>
+      <path d="M3.5 10.5 8 6l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/** 查找：下一个（chevron 下） */
+export function IconChevronDown({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden>
+      <path d="M3.5 5.5 8 10l4.5-4.5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}

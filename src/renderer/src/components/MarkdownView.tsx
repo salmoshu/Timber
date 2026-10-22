@@ -9,6 +9,7 @@ import luteUrl from 'vditor/dist/js/lute/lute.min.js?url'
 import type { Annotation } from '@shared/types'
 import { useStore, rawBaseFor, origProjectId } from '../store'
 import { systemPrefersDark } from '../utils/settings'
+import { sanitizeRenderedHtml, upgradeInlineHtml } from '../utils/sanitizeHtml'
 import { collectText, findAnnotationRange, setTextHighlight } from '../utils/textRanges'
 
 interface Props {
@@ -466,6 +467,10 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       container.querySelectorAll<HTMLInputElement>('.vditor-input[placeholder*="<"]').forEach((input) => {
         input.placeholder = input.placeholder.replace(/<[^>]*>$/, '')
       })
+      // 内嵌 HTML 安全收口：剥 script/on*（sanitize:false 的代价），并把行内 <img> 升级为真实图片；
+      // 须在 rewriteImages 之前，新 img 的相对 src 才会被重写为 sidecar /raw
+      sanitizeRenderedHtml(prose)
+      upgradeInlineHtml(prose)
       rewriteImages()
       // 引用块（> 摘要式分行）内的行内软换行升级为真实换行；幂等，重复执行无副作用
       upgradeQuoteBreaks(prose)
