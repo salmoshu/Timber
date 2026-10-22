@@ -25,12 +25,16 @@ export function sanitizeRenderedHtml(root: ParentNode): void {
 }
 
 /** 段落内行内 HTML（Vditor WYSIWYG 渲染为 <code data-type="html-inline"> 的转义源码文本）：
- *  仅把「纯 <img> 标签」升级为真实图片（先消毒再替换，src 随后由 rewriteImages 重写），
- *  其余行内 HTML 维持源码展示不动 */
+ *  「纯 <img> 标签」升级为真实图片（先消毒再替换，src 随后由 rewriteImages 重写），
+ *  「纯 <br>」升级为真实换行（v0.6.0）；其余行内 HTML 维持源码展示不动 */
 export function upgradeInlineHtml(root: ParentNode): void {
   root.querySelectorAll('code[data-type="html-inline"]').forEach((code) => {
     // textContent 可能带 Vditor 光标占位的零宽字符（​ 等），先剥掉再匹配
     const text = (code.textContent ?? '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim()
+    if (/^<br\s*\/?>$/i.test(text)) {
+      code.replaceWith(document.createElement('br'))
+      return
+    }
     if (!/^<img\s[^>]*\/?>$/is.test(text)) return
     const tpl = document.createElement('template')
     tpl.innerHTML = text

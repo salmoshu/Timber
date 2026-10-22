@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Project, RemoteConfig } from '@shared/types'
 import type { Annotation, AnnotationKind, ArchDeltaReceipt, ArchResult, ArchSpec, CommitDetail, CommitInfo, DocContent, DocNode } from '@shared/types'
-import { api, apiWith, apiInfo, archSpec, gitLog, gitShow, type ApiCall } from './api'
+import { api, apiWith, apiInfo, archSpec, gitLog, gitShow, type ApiCall, type ApiOpts } from './api'
 import {
   establishRemote,
   loadRemotes,
@@ -348,7 +348,8 @@ interface State {
   closeAddProject(): void
   connectRemote(params: ConnectParams, onLog?: (l: LogLine) => void): Promise<string>
   /** 重连远程连接；带 projectId 时只接入该项目（分项目管理，v0.5.6） */
-  reconnectRemote(remoteId: string, projectId?: string): Promise<void>
+  /** 重连远程（可分项目接入）；返回是否成功（v0.6.0 起供侧栏成功后自动选中项目） */
+  reconnectRemote(remoteId: string, projectId?: string): Promise<boolean>
   /** 断开连接：远程条目保留在列表中（未连接占位，可 ⟳ 重连），其项目从列表消失 */
   disconnectRemote(remoteId: string): void
   /** 从列表移除：远程条目彻底移除，不再呈现（不影响远端文件） */
@@ -415,7 +416,7 @@ export function origProjectId(projectId: string): string {
 /** 按项目路由 API：远程项目走远端 timberd（并还原路径中的原始项目 id），本地项目走默认 */
 export function apiFor<T = unknown>(
   projectId: string | null | undefined
-): (method: string, path: string, body?: unknown) => Promise<T> {
+): (method: string, path: string, body?: unknown, opts?: ApiOpts) => Promise<T> {
   const remotes = useStore.getState().remotes
   const remote =
     projectId && projectId.includes(':')
@@ -424,10 +425,11 @@ export function apiFor<T = unknown>(
   if (remote) {
     const base = remoteBase(remote)
     const token = remote.token
-    return (method: string, path: string, body?: unknown) =>
-      apiWith<T>(base, token, method, path.split(remote.id + ':').join(''), body)
+    return (method: string, path: string, body?: unknown, opts?: ApiOpts) =>
+      apiWith<T>(base, token, method, path.split(remote.id + ':').join(''), body, opts)
   }
-  return (method: string, path: string, body?: unknown) => api<T>(method, path, body)
+  return (method: string, path: string, body?: unknown, opts?: ApiOpts) =>
+    api<T>(method, path, body, opts)
 }
 
 /** 项目（含远程）对应的 /raw 文件服务 base（HTML iframe 用） */
@@ -443,8 +445,8 @@ export async function rawBaseFor(projectId: string | null | undefined): Promise<
 
 /** 按项目路由的通用调用器（api.ts 的 gitLog/gitShow/archRefs/archSpec 注入用；远程项目走远端 timberd） */
 export function apiCallFor(projectId: string): ApiCall {
-  return <T = unknown,>(method: string, path: string, body?: unknown): Promise<T> =>
-    apiFor<T>(projectId)(method, path, body)
+  return <T = unknown,>(method: string, path: string, body?: unknown, opts?: ApiOpts): Promise<T> =>
+    apiFor<T>(projectId)(method, path, body, opts)
 }
 
 /** 两个远程配置是否指向同一目标（防重复连接导致项目翻倍） */
@@ -693,7 +695,7 @@ export const useStore = create<State>((set, get) => ({
 
   async reconnectRemote(remoteId, projectId) {
     const remote = get().remotes.find((r) => r.id === remoteId)
-    if (!remote) return
+    if (!remote) return false
     // 分项目接入（v0.5.6）：连接还活着时，把占位项目加进可见清单即可，
     // 无需重建 SSH/WSL 通道；可见项目从快照清单重建（被过滤的项目不在当前列表里）
     if (remote.connected && remote.connId && projectId && remote.connectedProjectIds !== undefined) {
@@ -712,7 +714,7 @@ export const useStore = create<State>((set, get) => ({
           ...mine
         ])
       })
-      return
+      return true
     }
     try {
       const { remote: ok } = await reestablishRemote(remote)
@@ -736,6 +738,7 @@ export const useStore = create<State>((set, get) => ({
         ])
       })
       get().toast('ok', `${synced.remote.name} 已重新连接`)
+      return true
     } catch (err) {
       const remotes = get().remotes.map((r) =>
         r.id === remoteId ? { ...r, connected: false, lastError: String(err) } : r
@@ -743,6 +746,7 @@ export const useStore = create<State>((set, get) => ({
       saveRemotes(remotes)
       set({ remotes, projects: mergeProjects(get().localProjects, remotes, get().projects) })
       get().toast('err', `重连失败：${err}`)
+      return false
     }
   },
 

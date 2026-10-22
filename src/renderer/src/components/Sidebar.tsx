@@ -6,6 +6,7 @@ import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
 import { CodeTree } from './CodeView'
+import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
 import {
   blockPath,
   hiddenProjectIds,
@@ -233,7 +234,10 @@ export default function Sidebar() {
     const key = projectId ? `${remoteId}:${projectId}` : remoteId
     setConnecting((s) => new Set(s).add(key))
     try {
-      await reconnectRemote(remoteId, projectId)
+      const ok = await reconnectRemote(remoteId, projectId)
+      // 从项目占位发起的重连：成功后直接选中该项目（v0.6.0，此前需再点一次才切换）；
+      // 失败由 reconnectRemote 内部 toast 报错，不切换
+      if (ok && projectId) await selectProject(`${remoteId}:${projectId}`)
     } finally {
       setConnecting((s) => {
         const next = new Set(s)
@@ -662,24 +666,42 @@ export default function Sidebar() {
             <div className="sb-proj-name" title={active.path}>
               {displayName(active)}
             </div>
-            <div className="sb-proj-ops">
+            <div className="sb-proj-head-right">
               <button
-                onClick={(e) =>
-                  setMenu({
-                    x: e.clientX,
-                    y: e.clientY,
-                    items: [
-                      { key: 'newfile', label: '新建文件…', onClick: () => openNamePrompt('file', selectedDir ?? '') },
-                      { key: 'newdir', label: '新建文件夹…', onClick: () => openNamePrompt('dir', selectedDir ?? '') }
-                    ]
+                className={`pf-chip ${filterDocsForProject(settings, active) ? 'on' : ''}`}
+                title={
+                  filterDocsForProject(settings, active)
+                    ? '文件树：仅文档（点击显示全部文件）'
+                    : '文件树：全部文件（点击仅显示文档）'
+                }
+                onClick={() =>
+                  setSetting('resourceFilterDocsByProject', {
+                    ...settings.resourceFilterDocsByProject,
+                    [filterKeyForProject(active)]: !filterDocsForProject(settings, active)
                   })
                 }
-                title={selectedDir ? `新建文件 / 文件夹（${selectedDir} 下）` : '新建文件 / 文件夹（项目根；点击目录行可选目标）'}
               >
-                ＋
+                {filterDocsForProject(settings, active) ? '文档' : '全部'}
               </button>
-              <button onClick={() => void rescan()} title="重新扫描文档">⟳</button>
-              <button onClick={() => void onRemove(active)} title="从列表移除">✕</button>
+              <div className="sb-proj-ops">
+                <button
+                  onClick={(e) =>
+                    setMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      items: [
+                        { key: 'newfile', label: '新建文件…', onClick: () => openNamePrompt('file', selectedDir ?? '') },
+                        { key: 'newdir', label: '新建文件夹…', onClick: () => openNamePrompt('dir', selectedDir ?? '') }
+                      ]
+                    })
+                  }
+                  title={selectedDir ? `新建文件 / 文件夹（${selectedDir} 下）` : '新建文件 / 文件夹（项目根；点击目录行可选目标）'}
+                >
+                  ＋
+                </button>
+                <button onClick={() => void rescan()} title="重新扫描文档">⟳</button>
+                <button onClick={() => void onRemove(active)} title="从列表移除">✕</button>
+              </div>
             </div>
           </div>
 
@@ -735,22 +757,9 @@ export default function Sidebar() {
             </button>
           </div>
 
-          {tab === 'docs' && (
-            <div className="sb-docfilter-row">
-              <span>过滤文档</span>
-              <button
-                className={`switch ${settings.resourceFilterDocs ? 'on' : ''}`}
-                onClick={() => setSetting('resourceFilterDocs', !settings.resourceFilterDocs)}
-                title="开：只显示文档；关：显示全部源码文件"
-              >
-                <span className="switch-dot" />
-              </button>
-            </div>
-          )}
-
           {tab === 'docs' ? (
-            // 「过滤文档」开（默认）：文档树（仅设置勾选的文档格式）；关：全部源码文件树（v0.5.9）
-            settings.resourceFilterDocs ? (
+            // 项目级过滤：文档（默认记录为 true 时）或全部源码文件树（无记录/关）
+            filterDocsForProject(settings, active) ? (
             <>
               <div className="sb-filter">
                 <input

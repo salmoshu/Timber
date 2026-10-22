@@ -51,6 +51,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{id}/arch/refs", s.auth(s.handleArchRefs))
 	mux.HandleFunc("GET /api/projects/{id}/arch/spec", s.auth(s.handleArchSpec))
 	mux.HandleFunc("GET /api/projects/{id}/arch/insights", s.auth(s.handleArchInsights))
+	mux.HandleFunc("POST /api/projects/{id}/ai/arch", s.auth(s.handleAiArch))
 	mux.HandleFunc("GET /api/wsl/distros", s.auth(s.handleWslDistros))
 	mux.HandleFunc("GET /api/wsl/home", s.auth(s.handleWslHome))
 	mux.HandleFunc("GET /api/fs/list", s.auth(s.handleFsList))

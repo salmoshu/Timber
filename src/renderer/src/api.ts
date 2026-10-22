@@ -20,12 +20,17 @@ export async function apiInfo(): Promise<ApiInfo> {
   return cached
 }
 
+export interface ApiOpts {
+  signal?: AbortSignal
+}
+
 export async function apiWith<T = unknown>(
   base: string,
   token: string,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  opts?: ApiOpts
 ): Promise<T> {
   let r: Response
   try {
@@ -35,7 +40,8 @@ export async function apiWith<T = unknown>(
         'Content-Type': 'application/json',
         'X-Timber-Token': token
       },
-      body: body === undefined ? undefined : JSON.stringify(body)
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: opts?.signal
     })
   } catch (e) {
     if (e instanceof TypeError) {
@@ -53,10 +59,11 @@ export async function apiWith<T = unknown>(
 export async function api<T = unknown>(
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  opts?: ApiOpts
 ): Promise<T> {
   const { base, token } = await apiInfo()
-  return apiWith<T>(base, token, method, path, body)
+  return apiWith<T>(base, token, method, path, body, opts)
 }
 
 // sidecar 自动重启后地址可能变化，热更新缓存
@@ -64,8 +71,13 @@ window.timber?.onApiInfoChanged?.((info) => {
   cached = info
 })
 
-/** API 调用器签名（本地 api / 远程 apiFor 均可注入） */
-export type ApiCall = <T = unknown>(method: string, path: string, body?: unknown) => Promise<T>
+/** API 调用器签名（本地 api / 远程 apiFor 均可注入）；opts.signal 用于可取消的长请求（AI 生成） */
+export type ApiCall = <T = unknown>(
+  method: string,
+  path: string,
+  body?: unknown,
+  opts?: ApiOpts
+) => Promise<T>
 
 /** git log 分页列表 */
 export async function gitLog(
@@ -174,4 +186,26 @@ export async function entireSearch(
     'GET',
     `/api/projects/${id}/entire/search?q=${encodeURIComponent(q)}`
   )
+}
+
+// ---- AI 架构图（sidecar 探测 agent CLI 生成 archify spec；远程项目走远端 timberd） ----
+
+/** AI 架构生成结果；ok:false 时 error 分层：no-cli / exec / timeout / parse */
+export interface AiArchResult {
+  ok: boolean
+  spec?: ArchSpec
+  cli?: string
+  error?: string
+  message?: string
+  output?: string
+}
+
+/** AI 生成架构 spec：长请求（agent 读项目再成图），必须可经 signal 取消 */
+export async function archAiGenerate(
+  id: string,
+  prompt: string,
+  signal: AbortSignal,
+  call: ApiCall = api
+): Promise<AiArchResult> {
+  return call<AiArchResult>('POST', `/api/projects/${id}/ai/arch`, { prompt }, { signal })
 }

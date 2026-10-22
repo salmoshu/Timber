@@ -20,8 +20,8 @@ export interface AppSettings {
   docFormats: string[]
   /** 自动保存延迟（ms） */
   autoSaveDelayMs: number
-  /** 资源视图文件树只显示文档（关闭则显示全部源码文件） */
-  resourceFilterDocs: boolean
+  /** 资源视图文件树按项目记忆：true=仅文档，无记录=全部源码文件（项目级化） */
+  resourceFilterDocsByProject: Record<string, boolean>
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -34,7 +34,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSave: false,
   autoSaveDelayMs: 2000,
   docFormats: ['md', 'html', 'txt'],
-  resourceFilterDocs: true
+  resourceFilterDocsByProject: {}
 }
 
 const SETTINGS_KEY = 'timber-settings'
@@ -56,6 +56,29 @@ function normalizeFormats(raw: unknown): string[] {
   return keys.length > 0 ? keys : DEFAULT_SETTINGS.docFormats
 }
 
+/** 清洗项目级过滤表：只保留 boolean 值（旧版全局 resourceFilterDocs 字段自然丢弃） */
+function normalizeFilterMap(raw: unknown): Record<string, boolean> {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Record<string, boolean> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'boolean' && k) out[k] = v
+  }
+  return out
+}
+
+/** 项目级过滤 key：远程项目带连接前缀；用路径而非随机 id，删了重加不丢状态 */
+export function filterKeyForProject(p: { path: string; remoteId?: string }): string {
+  return p.remoteId ? `${p.remoteId}:${p.path}` : p.path
+}
+
+/** 该项目的文件树是否仅显示文档（无记录 = false = 全部文件） */
+export function filterDocsForProject(
+  s: AppSettings,
+  p: { path: string; remoteId?: string }
+): boolean {
+  return s.resourceFilterDocsByProject[filterKeyForProject(p)] === true
+}
+
 export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
@@ -70,7 +93,8 @@ export function loadSettings(): AppSettings {
         theme: saved.theme === 'dark' || saved.theme === 'system' ? saved.theme : 'light',
         contentWidth: normalizeWidth(saved.contentWidth),
         defaultMode: saved.defaultMode === 'source' || saved.defaultMode === 'edit' ? 'source' : 'read',
-        docFormats: normalizeFormats(saved.docFormats)
+        docFormats: normalizeFormats(saved.docFormats),
+        resourceFilterDocsByProject: normalizeFilterMap(saved.resourceFilterDocsByProject)
       }
     }
   } catch {

@@ -8,8 +8,9 @@ import { apiCallFor, useStore } from '../store'
 import { archTheme, setArchTheme } from '../utils/local-store'
 import ArchMatrix from './ArchMatrix'
 import ArchInsightsView from './ArchInsights'
+import ArchAiPanel, { type AiHistoryItem } from './ArchAiPanel'
 
-type Mode = 'snapshot' | 'delta' | 'matrix' | 'insights'
+type Mode = 'snapshot' | 'delta' | 'matrix' | 'insights' | 'ai'
 
 /** 架构图皮肤（archify HTML 的 data-theme）；矩阵/洞察为 React 渲染，随应用主题，不受此影响 */
 type ArchTheme = 'light' | 'dark'
@@ -73,6 +74,10 @@ export default function ArchitectureView() {
   const [error, setError] = useState<string | null>(null)
   // 矩阵/洞察的刷新代际：点击 ⟳ 自增，子组件据此重拉
   const [refreshSeq, setRefreshSeq] = useState(0)
+  // AI 绘制结果（会话内；切项目清空，面板经 key 重挂载历史随之清空）
+  const [aiHtml, setAiHtml] = useState<string | null>(null)
+  const [aiPrompt, setAiPrompt] = useState<string | null>(null)
+  const [aiHistory, setAiHistory] = useState<AiHistoryItem[]>([])
 
   // 架构图主题：未设置过则跟随系统；用户一切换即持久化并解除跟随
   const [followSystem, setFollowSystem] = useState(() => archTheme() === null)
@@ -95,6 +100,17 @@ export default function ArchitectureView() {
 
   // iframe srcDoc 前统一套用主题并注入滚动条样式（缓存命中分支同走此路径，切换主题即时生效）
   const themedHtml = useMemo(() => (html ? injectArchChrome(applyArchTheme(html, theme)) : null), [html, theme])
+  const aiThemedHtml = useMemo(
+    () => (aiHtml ? injectArchChrome(applyArchTheme(aiHtml, theme)) : null),
+    [aiHtml, theme]
+  )
+
+  // 切项目清空 AI 画布
+  useEffect(() => {
+    setAiHtml(null)
+    setAiPrompt(null)
+    setAiHistory([])
+  }, [activeProjectId])
 
   // 可选 ref 清单（HEAD + branches + tags）
   useEffect(() => {
@@ -130,7 +146,7 @@ export default function ArchitectureView() {
       const id = activeProjectId
       if (!id) return
       // 矩阵/洞察由各自子组件加载（React 渲染，无需 Electron）
-      if (mode === 'matrix' || mode === 'insights') return
+      if (mode === 'matrix' || mode === 'insights' || mode === 'ai') return
       const b = window.timber
       if (!b) {
         setError('架构渲染需要 Electron 环境')
@@ -202,6 +218,7 @@ export default function ArchitectureView() {
   const refresh = (): void => {
     const id = activeProjectId
     if (!id) return
+    if (mode === 'ai') return
     if (mode === 'matrix') {
       const next = new Map(useStore.getState().archSpecCache)
       next.delete(snapRef)
@@ -238,8 +255,11 @@ export default function ArchitectureView() {
           <button className={mode === 'insights' ? 'active' : ''} onClick={() => setMode('insights')}>
             洞察
           </button>
+          <button className={mode === 'ai' ? 'active' : ''} onClick={() => setMode('ai')}>
+            AI
+          </button>
         </div>
-        {mode === 'delta' ? (
+        {mode !== 'ai' && (mode === 'delta' ? (
           <>
             <label className="av-field">
               基准
@@ -275,7 +295,7 @@ export default function ArchitectureView() {
               ))}
             </select>
           </label>
-        )}
+        ))}
         <button
           className="av-theme"
           onClick={toggleTheme}
@@ -283,13 +303,38 @@ export default function ArchitectureView() {
         >
           {theme === 'dark' ? '☀' : '🌙'}
         </button>
-        <button className="av-refresh" onClick={refresh} title="重新渲染（丢弃缓存）">⟳</button>
+        {mode !== 'ai' && (
+          <button className="av-refresh" onClick={refresh} title="重新渲染（丢弃缓存）">⟳</button>
+        )}
       </div>
       <div className="av-body">
         {mode === 'matrix' ? (
           <ArchMatrix refName={snapRef} refreshSeq={refreshSeq} />
         ) : mode === 'insights' ? (
           <ArchInsightsView refName={snapRef} refreshSeq={refreshSeq} />
+        ) : mode === 'ai' ? (
+          <div className="av-ai-wrap">
+            <div className="av-ai-main">
+              {aiThemedHtml ? (
+                <>
+                  <iframe className="av-frame" sandbox="allow-scripts" srcDoc={aiThemedHtml} title="AI 架构图" />
+                  <div className="av-ai-badge" title={aiPrompt ?? undefined}>AI 绘制</div>
+                </>
+              ) : (
+                <div className="hv-empty">在右侧描述要绘制的架构，AI 阅读项目代码后生成架构图</div>
+              )}
+            </div>
+            <ArchAiPanel
+              key={activeProjectId}
+              projectId={activeProjectId}
+              history={aiHistory}
+              onPush={(item) => setAiHistory((h) => [item, ...h].slice(0, 20))}
+              onRendered={(h, p) => {
+                setAiHtml(h)
+                setAiPrompt(p)
+              }}
+            />
+          </div>
         ) : (
           <>
             {loading && <div className="hv-loading">架构图渲染中…</div>}
