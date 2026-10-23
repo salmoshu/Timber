@@ -3,7 +3,8 @@ import type { ApiInfo, TimberBridge, UpdateStatusEvent } from '@shared/types'
 
 const bridge: TimberBridge = {
   getApiInfo: () => ipcRenderer.invoke('api:info'),
-  selectFolder: () => ipcRenderer.invoke('dialog:select-folder'),
+  browseLocal: (path) => ipcRenderer.invoke('files:browse', path),
+  pathExists: (path) => ipcRenderer.invoke('files:exists', path),
   revealPath: (p: string) => ipcRenderer.invoke('shell:reveal', p),
   winMinimize: () => ipcRenderer.send('win:minimize'),
   winToggleMaximize: () => ipcRenderer.send('win:toggle-maximize'),

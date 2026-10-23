@@ -6,8 +6,6 @@ export interface AppSettings {
   theme: 'light' | 'dark' | 'system'
   /** 阅读区正文字号（px） */
   fontSize: number
-  /** 阅读区内容宽度（百分比 70–100，100 为全宽；阅读与编辑模式共用） */
-  contentWidth: number
   /** 正文使用衬线字体 */
   serifFont: boolean
   /** 打开文档的默认模式 */
@@ -27,7 +25,6 @@ export interface AppSettings {
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'light',
   fontSize: 16,
-  contentWidth: 90,
   serifFont: true,
   defaultMode: 'read',
   annPanelDefaultOpen: true,
@@ -38,16 +35,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
 }
 
 const SETTINGS_KEY = 'timber-settings'
-
-/** v0.2.0 及之前 contentWidth 为像素值（760/820/960/9999），迁移到百分比档位 */
-function normalizeWidth(w: unknown): number {
-  if (w === 70 || w === 80 || w === 90 || w === 100) return w
-  if (w === 9999) return 100
-  if (w === 760) return 70
-  if (w === 820) return 80
-  if (w === 960) return 90
-  return DEFAULT_SETTINGS.contentWidth
-}
 
 /** 清洗格式组勾选：剔除已下架的组（如 v0.4.5 移除的 json/yaml），清空则回默认 */
 function normalizeFormats(raw: unknown): string[] {
@@ -91,7 +78,6 @@ export function loadSettings(): AppSettings {
         ...DEFAULT_SETTINGS,
         ...saved,
         theme: saved.theme === 'dark' || saved.theme === 'system' ? saved.theme : 'light',
-        contentWidth: normalizeWidth(saved.contentWidth),
         defaultMode: saved.defaultMode === 'source' || saved.defaultMode === 'edit' ? 'source' : 'read',
         docFormats: normalizeFormats(saved.docFormats),
         resourceFilterDocsByProject: normalizeFilterMap(saved.resourceFilterDocsByProject)
@@ -127,10 +113,7 @@ export function applyAppearance(s: AppSettings): void {
   const root = document.documentElement
   root.dataset.theme = resolveTheme(s.theme)
   root.style.setProperty('--reader-font-size', `${s.fontSize}px`)
-  root.style.setProperty(
-    '--reader-width',
-    s.contentWidth >= 100 ? 'none' : `${s.contentWidth}%`
-  )
+  root.style.setProperty('--reader-width', '100%')
   root.style.setProperty(
     '--reader-font-family',
     s.serifFont

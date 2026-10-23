@@ -1,18 +1,10 @@
-// AI 架构绘制面板（架构视图右侧栏，0.6.0）：描述输入 + 生成/取消 + 会话内历史。
+// 固定架构助手：基于当前画布迭代或问答，成功校验后覆盖当前 spec。
 // 链路：sidecar 探测 agent CLI（kimi 优先、codex 兜底）产出 archify spec
 // → 前端基本校验 → window.timber.archRender 走既有渲染链路 → 主画布 iframe。
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ArchSpec } from '@shared/types'
 import { archAiGenerate, type AiArchResult } from '../api'
 import { apiCallFor } from '../store'
-
-export interface AiHistoryItem {
-  id: number
-  prompt: string
-  html?: string
-  cli?: string
-  error?: string
-  ts: number
-}
 
 /** sidecar 错误码 → 面板状态文案 */
 function aiErrorText(r: AiArchResult): string {
@@ -22,7 +14,7 @@ function aiErrorText(r: AiArchResult): string {
     case 'timeout':
       return r.message ?? '生成超时（180 秒），可简化描述后重试'
     case 'parse':
-      return `未能从 AI 输出解析出架构 JSON${r.output ? `：${r.output.slice(0, 120)}` : ''}`
+      return r.message ?? `未能解析 AI 输出${r.output ? `：${r.output.slice(0, 120)}` : ''}`
     case 'exec':
       return r.message ?? 'AI CLI 执行失败'
     default:
@@ -50,20 +42,27 @@ function cliName(cli?: string): string {
   return cli === 'codex' ? 'Codex' : 'Kimi'
 }
 
+export interface ArchAiContext {
+  spec?: ArchSpec
+  mode: string
+  ref: string
+  baseSpec?: ArchSpec
+  baseRef?: string
+  sourceError?: string
+}
+
 export default function ArchAiPanel(props: {
   projectId: string
-  /** 历史列表由父组件持有：切换模式（快照/AI）面板卸载后仍保留（会话内） */
-  history: AiHistoryItem[]
-  onPush: (item: AiHistoryItem) => void
-  onRendered: (html: string, prompt: string) => void
+  getContext: () => Promise<ArchAiContext>
+  onRendered: (html: string, spec: ArchSpec, prompt: string) => void
 }) {
   const [prompt, setPrompt] = useState('')
+  const [action, setAction] = useState<'edit' | 'ask'>('edit')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const [answer, setAnswer] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
-
-  const push = props.onPush
-  const history = props.history
+  useEffect(() => () => { abortRef.current?.abort() }, [])
 
   const generate = async (): Promise<void> => {
     const p = prompt.trim()
@@ -71,104 +70,58 @@ export default function ArchAiPanel(props: {
     const ac = new AbortController()
     abortRef.current = ac
     setBusy(true)
-    setStatus('生成中：AI 正在阅读项目代码（通常需要 1~3 分钟）…')
-    const id = Date.now()
+    setStatus(action === 'ask' ? '正在阅读当前架构并分析问题…' : '正在基于当前架构调整，通常需要 1～3 分钟…')
     try {
-      const r = await archAiGenerate(props.projectId, p, ac.signal, apiCallFor(props.projectId))
+      const context = await props.getContext()
       if (ac.signal.aborted) return
-      if (!r.ok || !r.spec) {
-        const msg = aiErrorText(r)
-        setStatus(msg)
-        push({ id, prompt: p, error: msg, cli: r.cli, ts: id })
+      const r = await archAiGenerate(props.projectId, p, ac.signal, apiCallFor(props.projectId), { action, context })
+      if (ac.signal.aborted) return
+      if (!r.ok) { setStatus(aiErrorText(r)); return }
+      if (action === 'ask') {
+        if (!r.answer) { setStatus('AI 未返回解释，请重试'); return }
+        setAnswer(r.answer)
+        setStatus(`已回答 · ${cliName(r.cli)}`)
         return
       }
+      if (!r.spec) { setStatus('AI 未返回有效架构，当前画布已保留'); return }
       const b = window.timber
-      if (!b) {
-        setStatus('架构渲染需要 Electron 环境')
-        return
-      }
-      let rr = await b.archRender(JSON.stringify(r.spec), `ai:${props.projectId}:${id}`)
+      if (!b) { setStatus('架构渲染需要 Electron 环境'); return }
+      // 验证成功之后才覆盖当前架构；渲染中允许取消，失败保留上次成果。
+      let spec = r.spec
+      let rr = await b.archRender(JSON.stringify(spec), `current:${props.projectId}`)
       if (ac.signal.aborted) return
-      // 自动布线下连线文字极易与组件重叠：校验失败时剥掉 connections[].label 降级重试一次
-      if (!rr.ok && /validation failed/i.test(rr.error ?? '') && hasConnLabels(r.spec)) {
-        rr = await b.archRender(JSON.stringify(stripConnLabels(r.spec)), `ai:${props.projectId}:${id}:s`)
+      if (!rr.ok && /validation failed/i.test(rr.error ?? '') && hasConnLabels(spec)) {
+        spec = stripConnLabels(spec) as ArchSpec
+        rr = await b.archRender(JSON.stringify(spec), `current:${props.projectId}`)
         if (ac.signal.aborted) return
       }
-      if (!rr.ok || !rr.html) {
-        const msg = `AI 产出的 spec 未通过渲染校验：${rr.error ?? 'unknown'}`
-        setStatus(msg)
-        push({ id, prompt: p, error: msg, cli: r.cli, ts: id })
-        return
-      }
-      props.onRendered(rr.html, p)
-      setStatus(`已生成（${cliName(r.cli)}），可调整描述再次生成`)
-      push({ id, prompt: p, html: rr.html, cli: r.cli, ts: id })
+      if (!rr.ok || !rr.html) { setStatus(`架构未通过渲染校验：${rr.error ?? 'unknown'}。当前画布已保留`); return }
+      props.onRendered(rr.html, spec, p)
+      setStatus(`当前架构已更新 · ${cliName(r.cli)}`)
     } catch (e) {
-      if (ac.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) {
-        setStatus('已取消')
-      } else {
-        const msg = e instanceof Error ? e.message : String(e)
-        setStatus(msg)
-        push({ id, prompt: p, error: msg, ts: id })
-      }
+      if (!ac.signal.aborted) setStatus(e instanceof Error ? e.message : String(e))
     } finally {
-      if (abortRef.current === ac) {
-        abortRef.current = null
-        setBusy(false)
-      }
+      if (abortRef.current === ac) { abortRef.current = null; setBusy(false) }
     }
   }
-
-  const cancel = (): void => {
-    abortRef.current?.abort()
-  }
-
   return (
-    <div className="av-ai-panel">
-      <div className="av-ai-title">AI 绘制</div>
-      <textarea
-        className="av-ai-input"
-        placeholder="描述要绘制的架构，如：画出项目的主要模块与数据流向"
-        value={prompt}
-        rows={4}
-        disabled={busy}
-        onChange={(e) => setPrompt(e.target.value)}
-      />
-      <div className="av-ai-actions">
-        {busy ? (
-          <button className="av-ai-btn" onClick={cancel}>
-            取消
-          </button>
-        ) : (
-          <button
-            className="av-ai-btn primary"
-            disabled={!prompt.trim()}
-            onClick={() => void generate()}
-          >
-            生成
-          </button>
-        )}
+    <aside className="av-ai-panel" aria-label="架构 AI 助手">
+      <div className="av-ai-title">AI 助手</div>
+      <p className="av-ai-intro">围绕左侧当前内容，调整架构、优化表达或解释依赖关系。</p>
+      <div className="seg av-ai-mode">
+        <button disabled={busy} className={action === 'edit' ? 'active' : ''} onClick={() => setAction('edit')}>调整架构</button>
+        <button disabled={busy} className={action === 'ask' ? 'active' : ''} onClick={() => setAction('ask')}>问答解释</button>
       </div>
-      {status && <div className="av-ai-status">{status}</div>}
-      {history.length > 0 && (
-        <div className="av-ai-history">
-          {history.map((h) => (
-            <button
-              key={h.id}
-              className={`av-ai-item${h.error ? ' err' : ''}`}
-              disabled={!h.html}
-              title={h.error ?? h.prompt}
-              onClick={() => h.html && props.onRendered(h.html, h.prompt)}
-            >
-              <span className="av-ai-item-prompt">{h.prompt}</span>
-              <span className="av-ai-item-meta">
-                {h.error ? '失败' : cliName(h.cli)} ·{' '}
-                {new Date(h.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            </button>
-          ))}
+      {answer && <div className="av-ai-answer" aria-label="AI 回答">{answer}</div>}
+      <div className="av-ai-composer">
+        <textarea className="av-ai-input" placeholder={action === 'ask' ? '例如：这些模块之间如何传递数据？' : '例如：突出数据流，将存储层分开展示'} value={prompt} rows={5} disabled={busy} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void generate() } }} />
+        <div className="av-ai-actions">
+          <span>Ctrl + Enter</span>
+          {busy ? <button className="av-ai-btn" onClick={() => { abortRef.current?.abort(); setBusy(false); setStatus('已取消，当前架构已保留') }}>取消</button> : <button className="av-ai-btn primary" disabled={!prompt.trim()} onClick={() => void generate()}>{action === 'ask' ? '提问' : '更新架构'}</button>}
         </div>
-      )}
-    </div>
+      </div>
+      {status && <div className="av-ai-status" role="status">{status}</div>}
+      <p className="av-ai-footnote">成功更新后覆盖当前架构，重新打开项目仍可继续迭代。</p>
+    </aside>
   )
 }

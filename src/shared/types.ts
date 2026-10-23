@@ -387,7 +387,8 @@ export type ArchInsightsResult = ArchInsights | { ok: false; error: string }
 // preload 暴露给渲染进程的桥
 export interface TimberBridge {
   getApiInfo(): Promise<ApiInfo>
-  selectFolder(): Promise<string | null>
+  browseLocal(path?: string): Promise<{ path: string; parent: string; home: string; roots: string[]; folders: { name: string; path: string }[] }>
+  pathExists(path: string): Promise<boolean>
   revealPath(p: string): Promise<void>
   winMinimize(): void
   winToggleMaximize(): void
@@ -411,8 +412,8 @@ export interface TimberBridge {
   onExtPageStatus(cb: (e: { url: string; code: number }) => void): () => void
   /** 用系统浏览器打开（浮层右上角 ↗） */
   openInSystemBrowser(url: string): Promise<void>
-  /** 导出 PDF：渲染器产出独立文档 HTML，主进程隐藏窗口 printToPDF 并弹保存对话框 */
-  exportPdf(payload: { html: string; defaultName: string }): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  /** 导出 PDF：渲染器产出独立文档 HTML，主进程隐藏窗口 printToPDF，保存到自定义选择器选定的位置 */
+  exportPdf(payload: { html: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   /** 标签快捷键（主进程拦截 Ctrl+W / Ctrl+Tab 后转发） */
   onTabShortcut(cb: (kind: 'close' | 'next') => void): () => void
   /** sidecar 自动重启后新 base/token（更新渲染层缓存） */

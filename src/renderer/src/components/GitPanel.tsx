@@ -1,3 +1,4 @@
+import { askConfirm } from '../utils/dialogs'
 import { useCallback, useEffect, useState } from 'react'
 import type { GitChange, GitStatus } from '@shared/types'
 import { apiFor } from '../store'
@@ -125,8 +126,8 @@ export default function GitPanel({ projectId }: { projectId: string }) {
     run('暂存', () => apiFor(projectId)('POST', `/api/projects/${projectId}/git/add`, { paths: [c.path] }))
   const unstage = (c: GitChange) =>
     run('取消暂存', () => apiFor(projectId)('POST', `/api/projects/${projectId}/git/reset`, { paths: [c.path] }))
-  const discard = (c: GitChange) => {
-    if (!window.confirm(`丢弃「${c.path}」的改动？（未提交内容将无法恢复）`)) return
+  const discard = async (c: GitChange) => {
+    if (!await askConfirm(`丢弃「${c.path}」的改动？（未提交内容将无法恢复）`)) return
     void run('丢弃', () => apiFor(projectId)('POST', `/api/projects/${projectId}/git/discard`, { paths: [c.path] }))
   }
   const commit = async () => {

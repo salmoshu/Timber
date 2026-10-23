@@ -1,3 +1,4 @@
+import { askPath, askConfirm } from './dialogs'
 /** 导出 PDF（v0.5.7）：渲染器用 Vditor 内置 Lute 把当前文档渲染为独立 HTML
  * （复用 prose 排版的打印版样式，浅色纸张），交给主进程隐藏窗口 printToPDF。
  * 不走主窗口 webContents.printToPDF——那会连同应用外壳一起打进去。 */
@@ -133,7 +134,11 @@ export async function exportActiveDocPdf(): Promise<void> {
     const html =
       `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${name}</title>` +
       `<style>${PRINT_CSS}</style></head><body><div class="vditor-reset prose">${tpl.innerHTML}</div></body></html>`
-    const r = await bridge.exportPdf({ html, defaultName: `${name}.pdf` })
+    const path = await askPath('save', `${name}.pdf`)
+    if (!path) return
+    const overwrite = await bridge.pathExists(path)
+    if (overwrite && !await askConfirm(`「${path}」已存在。是否用导出的 PDF 覆盖？`, { title: '覆盖已有文件', confirmLabel: '覆盖' })) return
+    const r = await bridge.exportPdf({ html, path, overwrite })
     if (r.ok) state.toast('ok', `已导出 PDF：${r.path}`)
     else if (!r.canceled) state.toast('err', `导出 PDF 失败：${r.error ?? '未知错误'}`)
   } catch (err) {

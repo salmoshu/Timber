@@ -8,9 +8,11 @@ import { apiCallFor, useStore } from '../store'
 import { archTheme, setArchTheme } from '../utils/local-store'
 import ArchMatrix from './ArchMatrix'
 import ArchInsightsView from './ArchInsights'
-import ArchAiPanel, { type AiHistoryItem } from './ArchAiPanel'
+import ArchAiPanel, { type ArchAiContext } from './ArchAiPanel'
+import { readCurrentArchitecture, saveCurrentArchitecture } from '../utils/architecture'
+import { filterKeyForProject } from '../utils/settings'
 
-type Mode = 'snapshot' | 'delta' | 'matrix' | 'insights' | 'ai'
+type Mode = 'snapshot' | 'delta' | 'matrix' | 'insights'
 
 /** 架构图皮肤（archify HTML 的 data-theme）；矩阵/洞察为 React 渲染，随应用主题，不受此影响 */
 type ArchTheme = 'light' | 'dark'
@@ -74,10 +76,11 @@ export default function ArchitectureView() {
   const [error, setError] = useState<string | null>(null)
   // 矩阵/洞察的刷新代际：点击 ⟳ 自增，子组件据此重拉
   const [refreshSeq, setRefreshSeq] = useState(0)
-  // AI 绘制结果（会话内；切项目清空，面板经 key 重挂载历史随之清空）
+  const project = useStore((s) => s.projects.find((p) => p.id === s.activeProjectId))
+  const projectKey = project ? filterKeyForProject(project) : activeProjectId ?? ''
+  const [current, setCurrent] = useState(() => readCurrentArchitecture(projectKey))
   const [aiHtml, setAiHtml] = useState<string | null>(null)
-  const [aiPrompt, setAiPrompt] = useState<string | null>(null)
-  const [aiHistory, setAiHistory] = useState<AiHistoryItem[]>([])
+  const displayingCurrent = mode === 'snapshot' && snapRef === 'HEAD' && current !== null
 
   // 架构图主题：未设置过则跟随系统；用户一切换即持久化并解除跟随
   const [followSystem, setFollowSystem] = useState(() => archTheme() === null)
@@ -105,12 +108,31 @@ export default function ArchitectureView() {
     [aiHtml, theme]
   )
 
-  // 切项目清空 AI 画布
   useEffect(() => {
-    setAiHtml(null)
-    setAiPrompt(null)
-    setAiHistory([])
-  }, [activeProjectId])
+    if (!current || !window.timber) return
+    let stale = false
+    window.timber.archRender(JSON.stringify(current.spec), `current:${activeProjectId}`).then((result) => {
+      if (stale) return
+      if (result.ok && result.html) setAiHtml(result.html)
+      else setError(`当前架构加载失败：${result.error ?? 'unknown'}`)
+    }).catch((err) => { if (!stale) setError(String(err)) })
+    return () => { stale = true }
+  }, [current, activeProjectId])
+
+  const getAiContext = async (): Promise<ArchAiContext> => {
+    const ref = mode === 'delta' ? headRef : snapRef
+    if (displayingCurrent && current) return { spec: current.spec, ref: 'HEAD', mode: 'current' }
+    const result = await ensureArchSpec(ref)
+    if (!result.ok) return { ref, mode, sourceError: archErrorText(result.error) }
+    const context: ArchAiContext = { spec: result.spec, ref, mode }
+    if (mode === 'delta') {
+      const base = await ensureArchSpec(baseRef)
+      if (!base.ok) throw new Error(archErrorText(base.error))
+      context.baseSpec = base.spec
+      context.baseRef = baseRef
+    }
+    return context
+  }
 
   // 可选 ref 清单（HEAD + branches + tags）
   useEffect(() => {
@@ -146,7 +168,7 @@ export default function ArchitectureView() {
       const id = activeProjectId
       if (!id) return
       // 矩阵/洞察由各自子组件加载（React 渲染，无需 Electron）
-      if (mode === 'matrix' || mode === 'insights' || mode === 'ai') return
+      if (mode === 'matrix' || mode === 'insights' || displayingCurrent) return
       const b = window.timber
       if (!b) {
         setError('架构渲染需要 Electron 环境')
@@ -206,19 +228,24 @@ export default function ArchitectureView() {
         if (!stale()) setLoading(false)
       }
     },
-    [activeProjectId, mode, snapRef, baseRef, headRef, ensureArchSpec]
+    [activeProjectId, mode, snapRef, baseRef, headRef, ensureArchSpec, displayingCurrent]
   )
 
   // 参数变化时自动加载（缓存命中即时呈现）
   useEffect(() => {
     void load(false)
+    return () => { ++loadSeq.current }
   }, [load])
 
   // 刷新：快照/对比丢弃 HTML 缓存重渲；矩阵丢弃 spec 缓存；洞察通知子组件重拉
   const refresh = (): void => {
     const id = activeProjectId
     if (!id) return
-    if (mode === 'ai') return
+    if (displayingCurrent && current) {
+      setAiHtml(null)
+      setCurrent({ ...current })
+      return
+    }
     if (mode === 'matrix') {
       const next = new Map(useStore.getState().archSpecCache)
       next.delete(snapRef)
@@ -243,8 +270,8 @@ export default function ArchitectureView() {
     <div className="arch-view">
       <div className="av-toolbar">
         <div className="av-mode seg">
-          <button className={mode === 'snapshot' ? 'active' : ''} onClick={() => setMode('snapshot')}>
-            快照
+          <button className={mode === 'snapshot' ? 'active' : ''} onClick={() => { setMode('snapshot'); setSnapRef('HEAD') }}>
+            当前架构
           </button>
           <button className={mode === 'delta' ? 'active' : ''} onClick={() => setMode('delta')}>
             对比
@@ -255,11 +282,8 @@ export default function ArchitectureView() {
           <button className={mode === 'insights' ? 'active' : ''} onClick={() => setMode('insights')}>
             洞察
           </button>
-          <button className={mode === 'ai' ? 'active' : ''} onClick={() => setMode('ai')}>
-            AI
-          </button>
         </div>
-        {mode !== 'ai' && (mode === 'delta' ? (
+        {mode === 'delta' ? (
           <>
             <label className="av-field">
               基准
@@ -288,14 +312,14 @@ export default function ArchitectureView() {
           </>
         ) : (
           <label className="av-field">
-            {mode === 'snapshot' ? '快照 ref' : 'ref'}
+            {mode === 'snapshot' ? '版本' : 'ref'}
             <select value={snapRef} onChange={(e) => setSnapRef(e.target.value)}>
               {refOptions.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
             </select>
           </label>
-        ))}
+        )}
         <button
           className="av-theme"
           onClick={toggleTheme}
@@ -303,47 +327,30 @@ export default function ArchitectureView() {
         >
           {theme === 'dark' ? '☀' : '🌙'}
         </button>
-        {mode !== 'ai' && (
-          <button className="av-refresh" onClick={refresh} title="重新渲染（丢弃缓存）">⟳</button>
-        )}
+        {displayingCurrent && <span className="av-current-label" title={current?.prompt}>AI 已更新</span>}
+        <button className="av-refresh" onClick={refresh} title="重新渲染">⟳</button>
       </div>
-      <div className="av-body">
-        {mode === 'matrix' ? (
-          <ArchMatrix refName={snapRef} refreshSeq={refreshSeq} />
-        ) : mode === 'insights' ? (
-          <ArchInsightsView refName={snapRef} refreshSeq={refreshSeq} />
-        ) : mode === 'ai' ? (
-          <div className="av-ai-wrap">
-            <div className="av-ai-main">
-              {aiThemedHtml ? (
-                <>
-                  <iframe className="av-frame" sandbox="allow-scripts" srcDoc={aiThemedHtml} title="AI 架构图" />
-                  <div className="av-ai-badge" title={aiPrompt ?? undefined}>AI 绘制</div>
-                </>
-              ) : (
-                <div className="hv-empty">在右侧描述要绘制的架构，AI 阅读项目代码后生成架构图</div>
-              )}
-            </div>
-            <ArchAiPanel
-              key={activeProjectId}
-              projectId={activeProjectId}
-              history={aiHistory}
-              onPush={(item) => setAiHistory((h) => [item, ...h].slice(0, 20))}
-              onRendered={(h, p) => {
-                setAiHtml(h)
-                setAiPrompt(p)
-              }}
-            />
-          </div>
+      <div className="av-ai-wrap">
+      <div className="av-body av-ai-main">
+        {mode === 'matrix' ? <ArchMatrix refName={snapRef} refreshSeq={refreshSeq} /> : mode === 'insights' ? <ArchInsightsView refName={snapRef} refreshSeq={refreshSeq} /> : displayingCurrent ? (
+          aiThemedHtml ? <iframe className="av-frame" sandbox="allow-scripts" srcDoc={aiThemedHtml} title="当前架构图" /> : <div className="hv-loading">{error ?? '当前架构加载中…'}</div>
         ) : (
           <>
             {loading && <div className="hv-loading">架构图渲染中…</div>}
             {!loading && error && <div className="hv-empty">{error}</div>}
-            {!loading && !error && themedHtml && (
-              <iframe className="av-frame" sandbox="allow-scripts" srcDoc={themedHtml} title="架构图" />
-            )}
+            {!loading && !error && themedHtml && <iframe className="av-frame" sandbox="allow-scripts" srcDoc={themedHtml} title="架构图" />}
           </>
         )}
+      </div>
+      <ArchAiPanel projectId={activeProjectId} getContext={getAiContext} onRendered={(html, spec, prompt) => {
+        const next = { spec, prompt, updatedAt: new Date().toISOString() }
+        saveCurrentArchitecture(projectKey, next)
+        setCurrent(next)
+        setAiHtml(html)
+        setError(null)
+        setMode('snapshot')
+        setSnapRef('HEAD')
+      }} />
       </div>
     </div>
   )

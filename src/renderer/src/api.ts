@@ -194,6 +194,7 @@ export async function entireSearch(
 export interface AiArchResult {
   ok: boolean
   spec?: ArchSpec
+  answer?: string
   cli?: string
   error?: string
   message?: string
@@ -205,7 +206,8 @@ export async function archAiGenerate(
   id: string,
   prompt: string,
   signal: AbortSignal,
-  call: ApiCall = api
+  call: ApiCall = api,
+  options?: { action: 'edit' | 'ask'; context: import('./components/ArchAiPanel').ArchAiContext }
 ): Promise<AiArchResult> {
-  return call<AiArchResult>('POST', `/api/projects/${id}/ai/arch`, { prompt }, { signal })
+  return call<AiArchResult>('POST', `/api/projects/${id}/ai/arch`, { prompt, ...options, ref: options?.context.ref }, { signal })
 }

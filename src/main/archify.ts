@@ -4,7 +4,7 @@
 import { app } from 'electron'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -41,8 +41,17 @@ function writeAtomic(path: string, content: string): void {
 
 /** 渲染 architecture spec 为自包含 HTML；缓存键含 spec 内容（spec 变化即失效重渲） */
 export async function renderArchHtml(specJson: string, cacheKey: string): Promise<ArchResult> {
+  // 迭代架构仅持久化当前 spec；渲染工作目录在完成后清理，不积累旧画布。
+  if (cacheKey.startsWith('current:')) {
+    const dir = mkdtempSync(join(cacheDir(), 'current-'))
+    try { return await renderArchHtmlIn(specJson, cacheKey, dir) }
+    finally { rmSync(dir, { recursive: true, force: true }) }
+  }
+  return renderArchHtmlIn(specJson, cacheKey, cacheDir())
+}
+
+async function renderArchHtmlIn(specJson: string, cacheKey: string, dir: string): Promise<ArchResult> {
   try {
-    const dir = cacheDir()
     const hash = keyHash(cacheKey, specJson)
     const outPath = join(dir, `${hash}.html`)
     if (existsSync(outPath)) {

@@ -1,3 +1,4 @@
+import { askConfirm, askInput } from '../utils/dialogs'
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useStore } from '../store'
 import type { DocNode, Project, RemoteConfig } from '@shared/types'
@@ -173,7 +174,7 @@ function countDocs(node: DocNode): number {
   return (node.children ?? []).reduce((acc, c) => acc + countDocs(c), 0)
 }
 
-export default function Sidebar() {
+export default function Sidebar({ section = 'projects' }: { section?: 'projects' | 'files' }) {
   const {
     projects,
     activeProjectId,
@@ -193,6 +194,7 @@ export default function Sidebar() {
     toast,
     sidebarCollapsed,
     sidebarWidth,
+    annPanelWidth,
     setSidebarWidth,
     settings,
     setSetting,
@@ -204,8 +206,8 @@ export default function Sidebar() {
   const startResize = (e: ReactMouseEvent): void => {
     e.preventDefault()
     const startX = e.clientX
-    const startW = useStore.getState().sidebarWidth
-    const onMove = (ev: MouseEvent): void => setSidebarWidth(startW + ev.clientX - startX)
+    const startW = e.currentTarget.parentElement!.getBoundingClientRect().width
+    const onMove = (ev: MouseEvent): void => section === 'files' ? useStore.getState().setAnnPanelWidth(startW - ev.clientX + startX) : setSidebarWidth(startW + ev.clientX - startX)
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
@@ -225,7 +227,7 @@ export default function Sidebar() {
   // 同一远程下的多个项目互不串扰（v0.5.7 修复点一个项目、全部转圈的问题）
   const [connecting, setConnecting] = useState<Set<string>>(new Set())
   const [dropTarget, setDropTarget] = useState<string | null>(null) // 拖拽放置目标（'' = 项目根）
-  // 新建文件/文件夹命名输入卡（window.prompt 在 Electron 不可用，v0.5.9 起改内联卡片）
+  // 新建文件/文件夹使用内联命名卡片。
   const [namePrompt, setNamePrompt] = useState<{ kind: 'file' | 'dir'; dir: string } | null>(null)
   const [nameValue, setNameValue] = useState('')
   const bump = () => setStoreRev((v) => v + 1)
@@ -255,21 +257,21 @@ export default function Sidebar() {
   const displayName = (p: Project) => projectAlias(p.id) ?? p.name
 
   const onRemove = async (p: Project) => {
-    if (window.confirm(`确定从列表移除「${displayName(p)}」？（不会删除磁盘文件）`)) {
+    if (await askConfirm(`确定从列表移除「${displayName(p)}」？（不会删除磁盘文件）`, { title: '移除项目', confirmLabel: '移除' })) {
       await removeProject(p.id)
     }
   }
 
-  const onRemoveRemote = (remoteId: string) => {
+  const onRemoveRemote = async (remoteId: string) => {
     const r = remotes.find((x) => x.id === remoteId)
     if (!r) return
-    if (window.confirm(`确定从列表移除远程连接「${r.name}」？其项目将不再呈现（不影响远端文件）。`)) {
+    if (await askConfirm(`确定从列表移除远程连接「${r.name}」？其项目将不再呈现（不影响远端文件）。`)) {
       removeRemote(remoteId)
     }
   }
 
-  const onRename = (p: Project) => {
-    const next = window.prompt('项目显示名称（留空恢复默认）', displayName(p))
+  const onRename = async (p: Project) => {
+    const next = await askInput('项目显示名称（留空恢复默认）', displayName(p))
     if (next === null) return
     setProjectAlias(p.id, next.trim() === '' ? null : next.trim())
     bump()
@@ -383,7 +385,7 @@ export default function Sidebar() {
 
   /** 重命名文件/目录（仅改最后一段名字，保持所在目录不变） */
   const onRenameNode = async (node: DocNode) => {
-    const next = window.prompt(`重命名「${node.name}」`, node.name)
+    const next = await askInput(`重命名「${node.name}」`, node.name)
     if (next === null) return
     const name = next.trim()
     if (name === node.name) return
@@ -446,7 +448,7 @@ export default function Sidebar() {
 
   const onDeleteNode = async (node: DocNode) => {
     const tip = node.type === 'dir' ? '目录内的全部内容将一并删除。' : ''
-    if (!window.confirm(`确定删除「${node.name}」？${tip}此操作不可撤销。`)) return
+    if (!await askConfirm(`确定删除「${node.name}」？${tip}此操作不可撤销。`)) return
     if (await useStore.getState().fsOp('delete', { from: node.path })) {
       toast('ok', `已删除「${node.name}」`)
     }
@@ -549,12 +551,12 @@ export default function Sidebar() {
     .filter((e) => !e.remote.connected || e.snaps.length > 0)
 
   // 折叠态：不渲染侧栏（折叠/展开统一由标题栏 ☰ 按钮控制）
-  if (sidebarCollapsed) return null
+  if (section === 'projects' && sidebarCollapsed) return null
 
   return (
-    <aside className="sidebar" style={{ width: sidebarWidth }}>
+    <aside className={`sidebar ${section === 'files' ? 'resource-sidebar' : 'project-sidebar'}`} style={{ width: section === 'files' ? annPanelWidth : sidebarWidth }} aria-label={section === 'files' ? '项目文件' : '项目列表'}>
       <div className="sb-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
-      <div className="sb-projects">
+      {section === 'projects' && <div className="sb-projects">
         <div className="sb-head-row">
         <button className="sb-proj-toggle" onClick={() => setProjCollapsed(!projCollapsed)}>
           <Chevron open={!projCollapsed} />
@@ -645,9 +647,10 @@ export default function Sidebar() {
             </button>
           </div>
         )}
-      </div>
+      </div>}
 
-      {active && (
+      {section === 'files' && !active && <div className="sb-empty">选择项目后浏览文件</div>}
+      {section === 'files' && active && (
         <>
           <div
             className={`sb-proj-head ${dropTarget === '' ? 'drag-over' : ''}`}

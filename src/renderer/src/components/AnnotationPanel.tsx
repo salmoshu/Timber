@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { askConfirm } from '../utils/dialogs'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { ANNOTATION_KIND_LABELS, type Annotation, type AnnotationKind, type DocContent } from '@shared/types'
 import { scrollToEl } from '../utils/scroll'
@@ -20,6 +21,7 @@ function kindOf(a: Annotation): AnnotationKind {
 export interface TocEntry {
   level: number
   text: string
+  index?: number
   /** 编辑（原文）模式：标题在源码中的行号（0 起） */
   line?: number
 }
@@ -28,7 +30,8 @@ export interface TocEntry {
 export function buildToc(): TocEntry[] {
   const prose = document.querySelector('.prose')
   if (!prose) return []
-  return [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el) => ({
+  return [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el, index) => ({
+    index,
     level: Number(el.tagName.slice(1)),
     text: (el.textContent ?? '').trim()
   }))
@@ -52,9 +55,8 @@ export function buildTocFromSource(src: string): TocEntry[] {
 export function scrollToHeading(entry: TocEntry): Element | null {
   const prose = document.querySelector('.prose')
   if (!prose) return null
-  const el = [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')].find(
-    (h) => Number(h.tagName.slice(1)) === entry.level && (h.textContent ?? '').trim() === entry.text
-  )
+  const headings = [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')]
+  const el = entry.index !== undefined ? headings[entry.index] : headings.find((h) => Number(h.tagName.slice(1)) === entry.level && (h.textContent ?? '').trim() === entry.text)
   if (!el) return null
   scrollToEl(el)
   return el
@@ -111,10 +113,10 @@ function locateInSource(quote: string): boolean {
   return true
 }
 
-function TocView({ activeDoc, mode }: { activeDoc: DocContent | null; mode: string }) {
+function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent | null; mode: string; compact?: boolean }) {
   const draft = useStore((s) => s.draft)
   const [toc, setToc] = useState<TocEntry[]>([])
-  const [activeText, setActiveText] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
 
   // 阅读模式：文档/模式变化后重建；正文直接编辑或异步初始化后实时更新目录。
   // （编辑模式由下方源码提取 effect 负责，这里若不跳过，60ms 后会把源码目录清空）
@@ -144,21 +146,16 @@ function TocView({ activeDoc, mode }: { activeDoc: DocContent | null; mode: stri
         // 自增高编辑器：滚动量在 .reader-body 上，换算回源码行号
         const { top: textTop, lineHeight } = sourceTextOrigin(textarea)
         const cur = Math.floor((body.scrollTop + body.clientHeight / 2 - textTop) / lineHeight)
-        let current = ''
-        for (const h of toc) {
-          if (h.line !== undefined && h.line <= cur) current = h.text
-        }
-        setActiveText(current)
+        let current = 0
+        toc.forEach((h, index) => { if (h.line !== undefined && h.line <= cur) current = index })
+        setActiveIndex(current)
         return
       }
       const headings = document.querySelectorAll('.prose h1,.prose h2,.prose h3,.prose h4,.prose h5,.prose h6')
       const line = body.getBoundingClientRect().top + 80
-      let current = ''
-      for (const h of headings) {
-        if (h.getBoundingClientRect().top <= line) current = (h.textContent ?? '').trim()
-        else break
-      }
-      setActiveText(current)
+      let current = 0
+      headings.forEach((h, index) => { if (h.getBoundingClientRect().top <= line) current = index })
+      setActiveIndex(current)
     }
     body.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -166,31 +163,38 @@ function TocView({ activeDoc, mode }: { activeDoc: DocContent | null; mode: stri
   }, [toc, mode])
 
   if (toc.length === 0) {
-    return <div className="ap-empty">当前文档没有可用的标题目录。</div>
+    return compact ? null : <div className="ap-empty">当前文档没有可用的标题目录。</div>
   }
 
   return (
-    <div className="toc-list">
+    <nav className={compact ? "toc-list toc-compact" : "toc-list"} aria-label="文档目录">
       {toc.map((h, i) => (
         <button
           key={i}
-          className={`toc-item lv${h.level} ${activeText === h.text ? 'active' : ''}`}
+          className={`toc-item lv${h.level} ${activeIndex === i ? 'active' : ''}`}
           style={{ paddingLeft: 8 + (h.level - 1) * 12 }}
-          title={h.text}
+          aria-label={h.text}
+          aria-current={activeIndex === i ? 'location' : undefined}
           onClick={() => {
             if (mode === 'source') scrollToSourceHeading(h)
             else scrollToHeading(h)
-            setActiveText(h.text)
+            setActiveIndex(i)
           }}
         >
-          {h.text || '(无标题)'}
+          <span className="toc-mark" aria-hidden="true" /><span className="toc-label">{h.text || '(无标题)'}</span>
         </button>
       ))}
-    </div>
+    </nav>
   )
 }
 
-export default function AnnotationPanel() {
+export function DocumentOutline() {
+  const activeDoc = useStore((s) => s.activeDoc)
+  const mode = useStore((s) => s.mode)
+  return <div className="document-outline"><TocView activeDoc={activeDoc} mode={mode} compact /></div>
+}
+
+export default function AnnotationPanel({ onClose }: { onClose?: () => void }) {
   const {
     annotations,
     composeQuote,
@@ -209,46 +213,11 @@ export default function AnnotationPanel() {
   const [kind, setKind] = useState<AnnotationKind>('annotation')
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [locating, setLocating] = useState<string | null>(null)
-  // 面板页签随文档标签记忆（默认目录）；划词批注时自动切回标注
-  const storedPanel = useStore((st) => st.tabs.find((t) => t.id === st.activeTabId)?.panel)
-  const [tab, setTab] = useState<'toc' | 'ann'>(storedPanel ?? 'toc')
-  const annPanelWidth = useStore((st) => st.annPanelWidth)
-  const setAnnPanelWidth = useStore((st) => st.setAnnPanelWidth)
-
-  /** 左缘拖拽调宽（往左拖变宽）；HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件 */
-  const startResize = (e: ReactMouseEvent): void => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startW = useStore.getState().annPanelWidth
-    const onMove = (ev: MouseEvent): void => setAnnPanelWidth(startW - (ev.clientX - startX))
-    const onUp = (): void => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      document.body.classList.remove('col-resizing')
-    }
-    document.body.classList.add('col-resizing')
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
-
   // 标签类型可直接从右侧侧边栏选择历史标签（当前文档用过的）
   const knownTags = useMemo(
     () => [...new Set(annotations.filter((a) => kindOf(a) === 'tag').map((a) => a.text.trim()).filter(Boolean))],
     [annotations]
   )
-
-  useEffect(() => {
-    if (storedPanel) setTab(storedPanel)
-  }, [storedPanel])
-
-  const switchTab = (next: 'toc' | 'ann'): void => {
-    setTab(next)
-    useStore.getState().patchActiveTab({ panel: next })
-  }
-
-  useEffect(() => {
-    if (composeQuote) switchTab('ann')
-  }, [composeQuote])
 
   /** 批量复制：当前文档全部标注（格式化，可直接交给 agent） */
   const copyAllAnnotations = async (): Promise<void> => {
@@ -331,31 +300,12 @@ export default function AnnotationPanel() {
   const done = annotations.filter((a) => a.status === 'done')
 
   return (
-    <aside className="ann-panel" style={{ width: annPanelWidth }}>
-      <div className="ap-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
+    <aside className="ann-panel document-annotations" aria-label="正文批注">
       <div className="ap-head">
-        <div className="ap-tabs">
-          <button className={tab === 'toc' ? 'active' : ''} onClick={() => switchTab('toc')}>
-            目录
-          </button>
-          <button className={tab === 'ann' ? 'active' : ''} onClick={() => switchTab('ann')}>
-            标注 {annotations.length > 0 ? `(${annotations.length})` : ''}
-          </button>
-        </div>
-        {tab === 'ann' && (
-          <span className="ap-count">
-            {open.length} 待处理 · {done.length} 已完成
-          </span>
-        )}
+        <strong>批注 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
+        <span className="ap-count">{open.length} 待处理 · {done.length} 已完成</span>
+        <button className="btn-ghost sm" onClick={onClose} title="收起正文批注">×</button>
       </div>
-
-      {tab === 'toc' && (
-        <div className="ap-body">
-          <TocView activeDoc={activeDoc} mode={mode} />
-        </div>
-      )}
-
-      {tab === 'ann' && (
         <div className="ap-body">
           {annotations.length > 0 && (
             <div className="ap-batch-ops">
@@ -496,8 +446,8 @@ export default function AnnotationPanel() {
                 </button>
                 <button
                   className="danger"
-                  onClick={() => {
-                    if (window.confirm('删除这条标注？')) void deleteAnnotation(a)
+                  onClick={async () => {
+                    if (await askConfirm('删除这条标注？')) void deleteAnnotation(a)
                   }}
                   title="删除"
                 >
@@ -509,7 +459,6 @@ export default function AnnotationPanel() {
         ))}
           </div>
         </div>
-      )}
     </aside>
   )
 }

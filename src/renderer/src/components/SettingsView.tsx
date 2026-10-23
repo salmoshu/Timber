@@ -6,12 +6,18 @@ import { loadUpdaterPrefs, saveUpdaterPrefs } from '../utils/updater-prefs'
 
 type Section = 'appearance' | 'reading' | 'editor' | 'version'
 
-const SECTIONS: Array<{ key: Section; icon: string; label: string }> = [
-  { key: 'appearance', icon: '🎨', label: '外观' },
-  { key: 'reading', icon: '📖', label: '阅读与标注' },
-  { key: 'editor', icon: '✏️', label: '编辑' },
-  { key: 'version', icon: '⟳', label: '版本' }
+const SECTIONS: Array<{ key: Section; icon: Section; label: string }> = [
+  { key: 'appearance', icon: 'appearance', label: '外观' },
+  { key: 'reading', icon: 'reading', label: '阅读与标注' },
+  { key: 'editor', icon: 'editor', label: '编辑' },
+  { key: 'version', icon: 'version', label: '版本' }
 ]
+
+function SettingsIcon({ section }: { section: Section }) {
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {section === 'appearance' ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : section === 'reading' ? <><path d="M12 5v15M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z" /></> : section === 'editor' ? <><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z" /></> : <><path d="M20 7a9 9 0 1 0 1 9M20 3v5h-5" /></>}
+  </svg>
+}
 
 /** 设置视图：占据整个内容区——左侧栏位置放设置导航（关闭按钮在标题上方），主体部分放设置内容 */
 export default function SettingsView() {
@@ -120,7 +126,8 @@ export default function SettingsView() {
           onClick={() => useStore.getState().closeSettings()}
           title="返回 (Esc)"
         >
-          ← 返回
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6" /></svg>
+          <span>返回</span>
         </button>
         <div className="st-title">设置</div>
         {SECTIONS.map((s) => (
@@ -129,7 +136,7 @@ export default function SettingsView() {
             className={`st-item ${section === s.key ? 'active' : ''}`}
             onClick={() => setSection(s.key)}
           >
-            <span className="st-icon">{s.icon}</span>
+            <span className="st-icon"><SettingsIcon section={s.icon} /></span>
             {s.label}
           </button>
         ))}
@@ -169,18 +176,6 @@ export default function SettingsView() {
                 <span className="st-value">{settings.fontSize}px</span>
               </div>
               <div className="st-hint">作用于 Markdown 阅读区正文</div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">阅读区宽度</div>
-              <div className="seg">
-                {[70, 80, 90, 100].map((w) => (
-                  <button key={w} className={settings.contentWidth === w ? 'active' : ''} onClick={() => setSetting('contentWidth', w)}>
-                    {w === 100 ? '全宽' : `${w}%`}
-                  </button>
-                ))}
-              </div>
-              <div className="st-hint">按阅读区宽度的百分比控制内容行宽，阅读与编辑模式同时生效</div>
             </div>
 
             <div className="st-row">
@@ -232,14 +227,14 @@ export default function SettingsView() {
             </div>
 
             <div className="st-row">
-              <div className="st-label">默认展开标注面板</div>
+              <div className="st-label">默认显示正文批注</div>
               <button
                 className={`switch ${settings.annPanelDefaultOpen ? 'on' : ''}`}
                 onClick={() => setSetting('annPanelDefaultOpen', !settings.annPanelDefaultOpen)}
               >
                 <span className="switch-dot" />
               </button>
-              <div className="st-hint">打开文档时自动带出右侧标注面板</div>
+              <div className="st-hint">在正文右侧留白显示标签、笔记与批注</div>
             </div>
           </div>
         )}

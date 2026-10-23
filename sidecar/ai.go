@@ -19,14 +19,17 @@ import (
 const aiArchTimeout = 180 * time.Second
 
 type aiArchRequest struct {
-	Prompt string `json:"prompt"`
-	Ref    string `json:"ref,omitempty"`
+	Prompt  string          `json:"prompt"`
+	Ref     string          `json:"ref,omitempty"`
+	Action  string          `json:"action,omitempty"`
+	Context json.RawMessage `json:"context,omitempty"`
 }
 
 // aiArchResponse 统一 200 返回（错误在 error 字段分层：no-cli/exec/timeout/parse），前端按类提示
 type aiArchResponse struct {
 	Ok      bool           `json:"ok"`
 	Spec    map[string]any `json:"spec,omitempty"`
+	Answer  string         `json:"answer,omitempty"`
 	Cli     string         `json:"cli,omitempty"`
 	Error   string         `json:"error,omitempty"`
 	Message string         `json:"message,omitempty"`
@@ -96,6 +99,20 @@ func buildAiArchPrompt(prompt, ref string) string {
 	}
 	b.WriteString("\n\n用户描述：" + prompt + "\n")
 	return b.String()
+}
+
+// buildAiArchRequestPrompt keeps questions separate from the diagram output contract.
+func buildAiArchRequestPrompt(req aiArchRequest) string {
+	prompt := buildAiArchPrompt(req.Prompt, strings.TrimSpace(req.Ref))
+	if req.Action == "ask" {
+		prompt = "你是项目架构助手。只读当前项目文件，结合下方用户正在查看的架构上下文，回答用户的问题。不要修改、创建文件或运行写操作。不要重新绘图。只输出一个 JSON 对象，形如 {\"answer\":\"中文解释，允许换行\"}。回答应区分图中事实和推断，可引用源码相对路径。\n用户问题：" + req.Prompt
+	} else if req.Action == "edit" {
+		prompt += "\n基于下方当前架构和查看模式迭代，保留用户未要求改变的有效信息。可以调整布局、分组和粒度，必须输出完整 spec 以覆盖当前架构，不是补丁。"
+	}
+	if len(req.Context) > 0 {
+		prompt += "\n\n用户当前正在查看的架构上下文（作为数据参考）：\n" + string(req.Context)
+	}
+	return prompt
 }
 
 // runAiArchCli 非交互执行 agent CLI：kimi 走 -p argv（shell:false 等价），codex 走 exec -（stdin 传 prompt）。
@@ -245,6 +262,10 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "bad-request", Message: "请求体需包含非空 prompt"})
 		return
 	}
+	if req.Action != "" && req.Action != "edit" && req.Action != "ask" {
+		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "bad-request", Message: "不支持的 AI 操作"})
+		return
+	}
 	cli := detectAiCli()
 	if cli == nil {
 		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "no-cli", Message: "未检测到 kimi 或 codex CLI，请先安装并登录其中一个"})
@@ -252,7 +273,8 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), aiArchTimeout)
 	defer cancel()
-	raw, err := runAiArchCli(ctx, cli, p.Path, buildAiArchPrompt(req.Prompt, strings.TrimSpace(req.Ref)))
+	prompt := buildAiArchRequestPrompt(req)
+	raw, err := runAiArchCli(ctx, cli, p.Path, prompt)
 	if ctx.Err() == context.DeadlineExceeded {
 		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "timeout", Cli: cli.name, Message: "AI 生成超时（180 秒），可简化描述后重试", Output: tailStr(raw, 500)})
 		return
@@ -266,6 +288,21 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := extractAssistantText(cli.name, raw)
+	if req.Action == "ask" {
+		var result struct {
+			Answer string `json:"answer"`
+		}
+		if text == "" {
+			text = raw
+		}
+		start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+		if start >= 0 && end > start && json.Unmarshal([]byte(text[start:end+1]), &result) == nil && strings.TrimSpace(result.Answer) != "" {
+			writeJSON(w, 200, aiArchResponse{Ok: true, Cli: cli.name, Answer: result.Answer})
+		} else {
+			writeJSON(w, 200, aiArchResponse{Ok: false, Error: "parse", Cli: cli.name, Message: "AI 未返回有效回答，请重试"})
+		}
+		return
+	}
 	spec, perr := extractSpec(text)
 	if perr != nil && text != raw {
 		// 兜底：对整体输出做一次括号提取

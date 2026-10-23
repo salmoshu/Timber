@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
 import { cpSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { readdir, stat } from 'node:fs/promises'
+import { dirname, join, resolve, isAbsolute } from 'node:path'
+import { tmpdir, homedir } from 'node:os'
 import { startSidecar, stopSidecar, setSidecarReadyListener } from './sidecar.js'
 import { renderArchHtml, compareArchDelta } from './archify.js'
 import { UpdateService, extractReleaseNotesSection } from './updater.js'
@@ -9,6 +10,7 @@ import type { ApiInfo } from '@shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let apiInfo: ApiInfo | null = null
+let startupError: string | null = null
 const updateService = new UpdateService()
 
 // 单实例锁
@@ -38,7 +40,7 @@ if (!app.requestSingleInstanceLock()) {
       apiInfo = await startSidecar()
     } catch (err) {
       console.error('[sidecar] 启动失败：', err)
-      dialog.showErrorBox('Timber 启动失败', String(err))
+      startupError = String(err)
     }
     createWindow()
     watchExternalPageStatus()
@@ -148,7 +150,10 @@ function createWindow(): void {
 }
 
 // ---- IPC ----
-ipcMain.handle('api:info', () => apiInfo)
+ipcMain.handle('api:info', () => {
+  if (startupError && !apiInfo) throw new Error(startupError)
+  return apiInfo
+})
 
 // archify 架构图：渲染快照 / 对比 delta（结果缓存在 <userData>/arch）
 ipcMain.handle('arch:render', (_e, spec: string, key: string) => renderArchHtml(spec, key))
@@ -156,14 +161,20 @@ ipcMain.handle('arch:delta', (_e, base: string, head: string, key: string) =>
   compareArchDelta(base, head, key)
 )
 
-ipcMain.handle('dialog:select-folder', async () => {
-  if (!mainWindow) return null
-  const r = await dialog.showOpenDialog(mainWindow, {
-    title: '选择项目目录',
-    properties: ['openDirectory']
-  })
-  return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+// 自定义文件夹选择器只通过桥读取目录，不调用系统原生弹窗。
+ipcMain.handle('files:browse', async (_e, input?: string) => {
+  const path = resolve(input?.trim() || homedir())
+  if (!(await stat(path)).isDirectory()) throw new Error('该路径不是文件夹')
+  const folders = (await readdir(path, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => ({ name: entry.name, path: join(path, entry.name) }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true }))
+  const roots = process.platform === 'win32'
+    ? Array.from({ length: 26 }, (_, i) => `${String.fromCharCode(65 + i)}:\\`).filter(existsSync)
+    : ['/']
+  return { path, parent: dirname(path), home: homedir(), roots, folders }
 })
+ipcMain.handle('files:exists', (_e, path: string) => existsSync(path))
 
 ipcMain.handle('shell:reveal', (_e, p: string) => {
   shell.showItemInFolder(p)
@@ -189,7 +200,7 @@ ipcMain.handle('app:version', () => app.getVersion())
 // 导出 PDF（v0.5.7）：渲染器把文档渲染成独立 HTML 字符串（浅色打印样式、图片已重写为
 // sidecar /raw 绝对 URL），这里写临时文件 → 隐藏窗口加载 → 等资源就绪 → printToPDF → 保存对话框。
 // 不能用主窗口 printToPDF：那会把整个应用 UI 打进去。
-ipcMain.handle('export:pdf', async (_e, payload: { html: string; defaultName: string }) => {
+ipcMain.handle('export:pdf', async (_e, payload: { html: string; path: string; overwrite: boolean }) => {
   const tmpHtml = join(tmpdir(), `timber-export-${process.pid}-${Date.now()}.html`)
   let win: BrowserWindow | null = null
   try {
@@ -205,19 +216,14 @@ ipcMain.handle('export:pdf', async (_e, payload: { html: string; defaultName: st
       })()`
     )
     if (!mainWindow) return { ok: false, error: '主窗口已关闭' }
-    const r = await dialog.showSaveDialog(mainWindow, {
-      title: '导出 PDF',
-      defaultPath: payload.defaultName,
-      filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
-    })
-    if (r.canceled || !r.filePath) return { ok: false, canceled: true }
+    if (!isAbsolute(payload.path) || !/\.pdf$/i.test(payload.path)) throw new Error('无效的 PDF 保存路径')
     const pdf = await win.webContents.printToPDF({
       printBackground: true,
       pageSize: 'A4',
       margins: { marginType: 'custom', top: 0.55, bottom: 0.55, left: 0.6, right: 0.6 }
     })
-    writeFileSync(r.filePath, pdf)
-    return { ok: true, path: r.filePath }
+    writeFileSync(payload.path, pdf, { flag: payload.overwrite ? 'w' : 'wx' })
+    return { ok: true, path: payload.path }
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) }
   } finally {

@@ -1,3 +1,4 @@
+import AnnotationPanel, { DocumentOutline } from './AnnotationPanel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import MarkdownView, { selectionAnchor } from './MarkdownView'
@@ -29,6 +30,11 @@ function locateKeyword(keyword: string): boolean {
 }
 
 export default function Reader() {
+  const [marginExpanded, setMarginExpanded] = useState(false)
+  const [marginHidden, setMarginHidden] = useState(false)
+  const showAnnotations = useStore((s) => s.settings.annPanelDefaultOpen)
+  const composeQuote = useStore((s) => s.composeQuote)
+  useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
   const {
     activeDoc,
     docLoading,
@@ -41,8 +47,6 @@ export default function Reader() {
     saveDoc,
     refreshActiveDoc,
     annotations,
-    annPanelOpen,
-    toggleAnnPanel,
     setComposeQuote,
     activeProjectId,
     activeTabId,
@@ -229,7 +233,7 @@ export default function Reader() {
   if (!activeDoc) {
     // 标签栏始终保留：打开失败的文档不再「吃掉」整个阅读区，错误卡片提供关闭出口
     return (
-      <div className="reader">
+      <div className="reader resource-reader">
         <TabsBar />
         <div className="reader-empty">
           {docLoading ? (
@@ -255,7 +259,7 @@ export default function Reader() {
   const crumbs = activeDoc.path.split('/')
 
   return (
-    <div className="reader">
+    <div className="reader resource-reader">
       <TabsBar>
         {!isImage && (
           <button
@@ -312,6 +316,8 @@ export default function Reader() {
 
       {findOpen && <FindBar onClose={() => setFindOpen(false)} />}
 
+      <div className={`document-workspace ${activeDoc.ext === 'md' || mode === 'source' ? 'with-outline' : ''}`}>
+      <DocumentOutline />
       <div
         className="reader-body"
         ref={proseWrapRef}
@@ -324,7 +330,9 @@ export default function Reader() {
           <MarkdownView
             annotations={annotations}
             onSelectAnn={() => {
-              if (!annPanelOpen) toggleAnnPanel()
+              setMarginExpanded(true)
+              setMarginHidden(false)
+              if (!showAnnotations) useStore.getState().setSetting('annPanelDefaultOpen', true)
             }}
           />
         ) : isImage ? (
@@ -364,6 +372,11 @@ export default function Reader() {
             🏷 添加标签
           </button>
         )}
+      </div>
+      <div className={`document-margin ${marginExpanded ? 'expanded' : ''} ${marginHidden || (!showAnnotations && !composeQuote) ? 'hidden' : ''}`}>
+        <button className="margin-open" aria-label="展开正文批注" aria-expanded={marginExpanded} onClick={() => { setMarginExpanded(!marginExpanded); setMarginHidden(false); if (!showAnnotations) useStore.getState().setSetting('annPanelDefaultOpen', true) }}>批注{annotations.length > 0 ? ` ${annotations.length}` : ''}</button>
+        <AnnotationPanel key={activeDoc.path} onClose={() => { setMarginExpanded(false); setMarginHidden(true) }} />
+      </div>
       </div>
     </div>
   )

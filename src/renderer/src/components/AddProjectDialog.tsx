@@ -1,3 +1,4 @@
+import { askConfirm, askInput, askPath } from '../utils/dialogs'
 import { useEffect, useRef, useState } from 'react'
 import type { RemoteConfig, RemoteKind } from '@shared/types'
 import { useStore } from '../store'
@@ -174,13 +175,13 @@ export default function AddProjectDialog() {
 
   const onPickLocal = async (): Promise<void> => {
     if (window.timber) {
-      const path = await window.timber.selectFolder()
+      const path = await askPath('folder')
       if (path) {
         await importProject(path)
         closeAddProject()
       }
     } else {
-      const path = window.prompt('纯 Web 预览模式：请输入项目目录的绝对路径')
+      const path = await askInput('纯 Web 预览模式：请输入项目目录的绝对路径')
       if (path) {
         await importProject(path)
         closeAddProject()
@@ -256,8 +257,8 @@ export default function AddProjectDialog() {
                         {!r.connected && <button onClick={() => void reconnectRemote(r.id)}>重连</button>}
                         <button
                           className="danger"
-                          onClick={() => {
-                            if (window.confirm(`确定从列表移除远程连接「${r.name}」？（不影响远端文件）`)) {
+                          onClick={async () => {
+                            if (await askConfirm(`确定从列表移除远程连接「${r.name}」？（不影响远端文件）`)) {
                               removeRemote(r.id)
                             }
                           }}

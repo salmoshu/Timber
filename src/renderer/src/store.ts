@@ -1,3 +1,4 @@
+import { askConfirm } from './utils/dialogs'
 import { create } from 'zustand'
 import type { Project, RemoteConfig } from '@shared/types'
 import type { Annotation, AnnotationKind, ArchDeltaReceipt, ArchResult, ArchSpec, CommitDetail, CommitInfo, DocContent, DocNode } from '@shared/types'
@@ -59,8 +60,6 @@ export interface DocTab {
   dirty: boolean
   /** 阅读区滚动位置（切换后恢复） */
   scrollTop: number
-  /** 右侧面板页签（目录/批注）记忆，默认目录 */
-  panel: 'toc' | 'ann'
   /** 已加载的文档内容缓存（切回标签即时呈现，后台校验新鲜度） */
   doc?: DocContent
 }
@@ -230,7 +229,7 @@ const annDynMax = (sbCollapsed: boolean, sbW: number): number =>
   Math.max(ANN_MIN_W, Math.min(ANN_MAX_W, window.innerWidth - (sbCollapsed ? SIDEBAR_COLLAPSED_W : sbW) - EDITOR_MIN_W))
 
 function loadLayout(): LayoutPrefs {
-  const def = { sidebarCollapsed: false, sidebarWidth: 272, annPanelWidth: 320 }
+  const def = { sidebarCollapsed: false, sidebarWidth: 240, annPanelWidth: 280 }
   try {
     const raw = localStorage.getItem(LAYOUT_KEY)
     if (!raw) return def
@@ -543,8 +542,10 @@ export const useStore = create<State>((set, get) => ({
     set({ commitsLoading: true, commits: [], commitsTotal: 0, commitsProjectId: id })
     try {
       const r = await gitLog(id, 0, COMMIT_PAGE_SIZE, apiCallFor(id))
+      if (get().activeProjectId !== id) return
       set({ commits: r.commits ?? [], commitsTotal: r.total ?? 0, commitsLoading: false })
     } catch (err) {
+      if (get().activeProjectId !== id) return
       set({ commitsLoading: false })
       get().toast('err', `提交历史加载失败：${err}`)
     }
@@ -557,8 +558,10 @@ export const useStore = create<State>((set, get) => ({
     set({ commitsLoading: true })
     try {
       const r = await gitLog(id, s.commits.length, COMMIT_PAGE_SIZE, apiCallFor(id))
+      if (get().activeProjectId !== id) return
       set({ commits: [...get().commits, ...(r.commits ?? [])], commitsTotal: r.total ?? s.commitsTotal, commitsLoading: false })
     } catch (err) {
+      if (get().activeProjectId !== id) return
       set({ commitsLoading: false })
       get().toast('err', `提交历史加载失败：${err}`)
     }
@@ -572,8 +575,9 @@ export const useStore = create<State>((set, get) => ({
     try {
       const detail = await gitShow(id, sha, apiCallFor(id))
       // 防止加载期间用户改选其它提交
-      if (get().selectedSha === sha) set({ commitDetail: detail, commitDetailLoading: false })
+      if (get().activeProjectId === id && get().selectedSha === sha) set({ commitDetail: detail, commitDetailLoading: false })
     } catch (err) {
+      if (get().activeProjectId !== id) return
       if (get().selectedSha === sha) set({ commitDetailLoading: false })
       get().toast('err', `提交详情加载失败：${err}`)
     }
@@ -585,6 +589,7 @@ export const useStore = create<State>((set, get) => ({
     const cached = get().archSpecCache.get(ref)
     if (cached) return { ok: true as const, spec: cached }
     const r = await archSpec(id, ref, apiCallFor(id))
+    if (get().activeProjectId !== id) return { ok: false as const, error: 'stale-project' }
     if (r.ok) {
       const next = new Map(get().archSpecCache)
       next.set(ref, r.spec)
@@ -608,6 +613,7 @@ export const useStore = create<State>((set, get) => ({
     try {
       const parent = c.parents[0]
       const [baseR, headR] = await Promise.all([get().ensureArchSpec(parent), get().ensureArchSpec(c.sha)])
+      if (get().activeProjectId !== id) return
       // 无源码/无提交等场景不显示徽章（text 空串）
       if (!baseR.ok || !headR.ok) {
         setImpact(set, get, c.sha, { text: '' })
@@ -619,13 +625,14 @@ export const useStore = create<State>((set, get) => ({
         return
       }
       const r = await b.archDelta(JSON.stringify(baseR.spec), JSON.stringify(headR.spec), `${id}:${parent}..${c.sha}`)
+      if (get().activeProjectId !== id) return
       if (!r.ok || !r.receipt) {
         setImpact(set, get, c.sha, { text: '' })
         return
       }
       setImpact(set, get, c.sha, { text: formatImpactSummary(r.receipt) })
     } catch {
-      setImpact(set, get, c.sha, { text: '' })
+      if (get().activeProjectId === id) setImpact(set, get, c.sha, { text: '' })
     } finally {
       pendingImpacts.delete(c.sha)
     }
@@ -807,7 +814,7 @@ export const useStore = create<State>((set, get) => ({
   async init() {
     const settings = get().settings
     applyAppearance(settings)
-    set({ annPanelOpen: settings.annPanelDefaultOpen })
+    set({ annPanelOpen: true })
     startActiveDocWatcher()
     try {
       const r = await api<{ projects: Project[] }>('GET', '/api/projects')
@@ -973,12 +980,15 @@ export const useStore = create<State>((set, get) => ({
     void get().loadCodeTree()
     try {
       const tree = await apiFor<DocNode>(id)('GET', `/api/projects/${id}/tree?${extsQuery().slice(1)}`)
+      if (get().activeProjectId !== id) return
       set({ tree, treeLoading: false })
     } catch (err) {
+      if (get().activeProjectId !== id) return
       set({ treeLoading: false })
       get().toast('err', `文档树加载失败：${err}`)
     }
     // 还原该项目上次的工作区
+    if (get().activeProjectId !== id) return
     const ws = projectWorkspaces.get(id)
     if (ws && ws.tabs.length > 0) {
       set({ tabs: ws.tabs, activeTabId: ws.activeTabId })
@@ -1040,7 +1050,7 @@ export const useStore = create<State>((set, get) => ({
     }
 
     if (pinned) {
-      const tab: DocTab = { id: newTabId(), path, pinned: true, mode, draft: '', dirty: false, scrollTop: 0, panel: 'toc' }
+      const tab: DocTab = { id: newTabId(), path, pinned: true, mode, draft: '', dirty: false, scrollTop: 0 }
       set({ tabs: [...s.tabs, tab] })
       await loadTabInto(tab, set, get)
       return
@@ -1049,13 +1059,14 @@ export const useStore = create<State>((set, get) => ({
     // 预览：复用现有预览标签（脏草稿需确认）
     const preview = s.tabs.find((t) => !t.pinned)
     if (preview) {
-      if (preview.dirty && !window.confirm('预览标签有未保存的修改，切换文档将丢弃。继续？')) return
-      const tab: DocTab = { ...preview, path, mode, draft: '', dirty: false, scrollTop: 0, panel: 'toc', doc: undefined }
+      if (preview.dirty && !await askConfirm('预览标签有未保存的修改，切换文档将丢弃。继续？')) return
+      if (get().activeProjectId !== projectId || get().tabs !== s.tabs) return
+      const tab: DocTab = { ...preview, path, mode, draft: '', dirty: false, scrollTop: 0, doc: undefined }
       set({ tabs: s.tabs.map((t) => (t.id === tab.id ? tab : t)) })
       await loadTabInto(tab, set, get)
       return
     }
-    const tab: DocTab = { id: newTabId(), path, pinned: false, mode, draft: '', dirty: false, scrollTop: 0, panel: 'toc' }
+    const tab: DocTab = { id: newTabId(), path, pinned: false, mode, draft: '', dirty: false, scrollTop: 0 }
     set({ tabs: [...s.tabs, tab] })
     await loadTabInto(tab, set, get)
   },
@@ -1088,11 +1099,12 @@ export const useStore = create<State>((set, get) => ({
     await loadTabInto(target, set, get)
   },
 
-  closeTab(id) {
+  async closeTab(id) {
     const s = get()
     const tab = s.tabs.find((t) => t.id === id)
     if (!tab) return
-    if (tab.dirty && !window.confirm('该标签有未保存的修改，关闭将丢弃。继续？')) return
+    if (tab.dirty && !await askConfirm('该标签有未保存的修改，关闭将丢弃。继续？')) return
+    if (get().activeProjectId !== s.activeProjectId || get().tabs !== s.tabs) return
     const idx = s.tabs.findIndex((t) => t.id === id)
     const tabs = s.tabs.filter((t) => t.id !== id)
     if (s.activeTabId !== id) {
@@ -1109,14 +1121,15 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  closeOtherTabs(id) {
+  async closeOtherTabs(id) {
     const s = get()
     const target = s.tabs.find((t) => t.id === id)
     if (!target) return
     const closing = s.tabs.filter((t) => t.id !== id)
     if (closing.length === 0) return
     const dirtyCount = closing.filter((t) => t.dirty).length
-    if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 个标签包含未保存的修改，关闭将丢弃。继续？`)) return
+    if (dirtyCount > 0 && !await askConfirm(`有 ${dirtyCount} 个标签包含未保存的修改，关闭将丢弃。继续？`)) return
+    if (get().activeProjectId !== s.activeProjectId || get().tabs !== s.tabs) return
     if (s.activeTabId !== id) {
       // 激活标签被一并关闭：切到保留的 id 标签并加载（id 始终保留，不存在全关分支）
       set({ tabs: [target], activeTabId: id })
@@ -1126,14 +1139,15 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  closeTabsToRight(id) {
+  async closeTabsToRight(id) {
     const s = get()
     const idx = s.tabs.findIndex((t) => t.id === id)
     if (idx < 0) return
     const closing = s.tabs.slice(idx + 1)
     if (closing.length === 0) return
     const dirtyCount = closing.filter((t) => t.dirty).length
-    if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 个标签包含未保存的修改，关闭将丢弃。继续？`)) return
+    if (dirtyCount > 0 && !await askConfirm(`有 ${dirtyCount} 个标签包含未保存的修改，关闭将丢弃。继续？`)) return
+    if (get().activeProjectId !== s.activeProjectId || get().tabs !== s.tabs) return
     const kept = s.tabs.slice(0, idx + 1)
     if (s.activeTabId && closing.some((t) => t.id === s.activeTabId)) {
       // 激活标签在右侧被关：回退激活 id 标签并加载
@@ -1243,7 +1257,8 @@ export const useStore = create<State>((set, get) => ({
     if (!s.activeDoc || !s.activeProjectId || !tabId) return
     // 图片经 /raw 直读文件，无文本内容可刷新（与外部变更轮询一致跳过）
     if (IMAGE_EXT_SET.has(s.activeDoc.ext)) return
-    if (s.dirty && !window.confirm('当前有未保存的修改，刷新将丢弃。继续？')) return
+    if (s.dirty && !await askConfirm('当前有未保存的修改，刷新将丢弃。继续？')) return
+    if (get().activeProjectId !== s.activeProjectId || get().activeTabId !== tabId || get().draft !== s.draft) return
     try {
       const doc = await apiFor<DocContent>(s.activeProjectId)(
         'GET',
@@ -1267,8 +1282,10 @@ export const useStore = create<State>((set, get) => ({
         'GET',
         `/api/projects/${s.activeProjectId}/annotations?doc=${encodeURIComponent(s.activeDoc.path)}`
       )
+      if (get().activeProjectId !== s.activeProjectId || get().activeDoc?.path !== s.activeDoc.path) return
       set({ annotations: r.annotations ?? [] })
     } catch {
+      if (get().activeProjectId !== s.activeProjectId || get().activeDoc?.path !== s.activeDoc.path) return
       set({ annotations: [] })
     }
   },
@@ -1340,7 +1357,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setComposeQuote(q) {
-    set({ composeQuote: q, annPanelOpen: q ? true : get().annPanelOpen })
+    set({ composeQuote: q })
   },
 
   async createAnnotation(text, kind) {
@@ -1449,7 +1466,9 @@ async function loadTabInto(
     // UTF-8 BOM（\uFEFF）是编码标记而非内容：留着会让首行 `# 标题` 的 # 不在行首，
     // ATX 标题不解析、井号原样显示（v0.5.7 修复）。加载即剥离，下次保存后文件也不再带 BOM。
     doc.content = doc.content.replace(/^\uFEFF/, '')
+    if (get().activeProjectId !== projectId) return
     cacheTabDoc(tab.id, doc, set, get)
+    if (get().activeTabId !== tab.id) return
     const fresh = get().tabs.find((t) => t.id === tab.id)
     if (!fresh) return
     if (!cached) {
@@ -1463,6 +1482,7 @@ async function loadTabInto(
       set({ activeDoc: doc, draft: doc.content, dirty: false })
     }
   } catch (err) {
+    if (get().activeProjectId !== projectId || get().activeTabId !== tab.id) return
     if (!cached) {
       // 打开失败：保留标签，错误在正文区呈现（含关闭按钮），不再只弹一条 toast
       set({ docLoading: false, docError: String(err instanceof Error ? err.message : err) })
@@ -1486,6 +1506,7 @@ function restoreScroll(tab: DocTab, get: () => State): void {
   const remembered = get().tabs.find((t) => t.id === tab.id)?.scrollTop ?? 0
   if (remembered > 0) {
     setTimeout(() => {
+      if (get().activeTabId !== tab.id) return
       const body = document.querySelector('.reader-body')
       if (body) body.scrollTop = remembered
     }, 80)
