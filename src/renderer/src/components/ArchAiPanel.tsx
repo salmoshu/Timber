@@ -1,16 +1,19 @@
-// 固定架构助手：基于当前画布迭代或问答，成功校验后覆盖当前 spec。
-// 链路：sidecar 探测 agent CLI（kimi 优先、codex 兜底）产出 archify spec
+// 架构 AI 助手：基于当前画布迭代或问答，成功校验后覆盖当前 spec。
+// 后端二选一（v0.6.3）：设置页配置的 OpenAI 兼容接口（优先），
+// 或本机 agent CLI（kimi 优先、codex 兜底）产出 archify spec
 // → 前端基本校验 → window.timber.archRender 走既有渲染链路 → 主画布 iframe。
 import { useEffect, useRef, useState } from 'react'
 import type { ArchSpec } from '@shared/types'
-import { archAiGenerate, type AiArchResult } from '../api'
-import { apiCallFor } from '../store'
+import { aiCliStatus, archAiGenerate, type AiArchResult } from '../api'
+import { apiCallFor, useStore } from '../store'
 
 /** sidecar 错误码 → 面板状态文案 */
 function aiErrorText(r: AiArchResult): string {
   switch (r.error) {
     case 'no-cli':
-      return '未检测到 kimi / codex CLI，请先安装并登录其中一个后重试'
+      return 'AI 未配置：请在 设置 → AI 填写 OpenAI 兼容接口（地址 / 密钥 / 模型），或安装并登录 kimi / codex CLI'
+    case 'api':
+      return `AI 接口调用失败：${r.message ?? '请检查 设置 → AI 中的地址 / 密钥 / 模型'}`
     case 'timeout':
       return r.message ?? '生成超时（180 秒），可简化描述后重试'
     case 'parse':
@@ -42,6 +45,12 @@ function cliName(cli?: string): string {
   return cli === 'codex' ? 'Codex' : 'Kimi'
 }
 
+/** 结果回执的后端标签：API 模式显示模型名，CLI 模式显示 agent 名 */
+function backendLabel(r: AiArchResult): string {
+  if (r.backend === 'api') return r.model ? `API · ${r.model}` : 'API'
+  return cliName(r.cli)
+}
+
 export interface ArchAiContext {
   spec?: ArchSpec
   mode: string
@@ -64,6 +73,19 @@ export default function ArchAiPanel(props: {
   const abortRef = useRef<AbortController | null>(null)
   useEffect(() => () => { abortRef.current?.abort() }, [])
 
+  // AI 后端就绪状态：设置页 API 配置（三项齐全）或本机 agent CLI（挂载时探测一次）
+  const ai = useStore((s) => s.settings.ai)
+  const hasApi = !!(ai.baseUrl && ai.apiKey && ai.model)
+  const [cliReady, setCliReady] = useState<'kimi' | 'codex' | null | undefined>(undefined)
+  useEffect(() => {
+    let dead = false
+    setCliReady(undefined)
+    aiCliStatus(props.projectId, apiCallFor(props.projectId))
+      .then((r) => { if (!dead) setCliReady(r.cli === 'kimi' || r.cli === 'codex' ? r.cli : null) })
+      .catch(() => { if (!dead) setCliReady(null) })
+    return () => { dead = true }
+  }, [props.projectId])
+
   const generate = async (): Promise<void> => {
     const p = prompt.trim()
     if (!p || busy) return
@@ -74,13 +96,17 @@ export default function ArchAiPanel(props: {
     try {
       const context = await props.getContext()
       if (ac.signal.aborted) return
-      const r = await archAiGenerate(props.projectId, p, ac.signal, apiCallFor(props.projectId), { action, context })
+      const r = await archAiGenerate(props.projectId, p, ac.signal, apiCallFor(props.projectId), {
+        action,
+        context,
+        ai: hasApi ? ai : undefined
+      })
       if (ac.signal.aborted) return
       if (!r.ok) { setStatus(aiErrorText(r)); return }
       if (action === 'ask') {
         if (!r.answer) { setStatus('AI 未返回解释，请重试'); return }
         setAnswer(r.answer)
-        setStatus(`已回答 · ${cliName(r.cli)}`)
+        setStatus(`已回答 · ${backendLabel(r)}`)
         return
       }
       if (!r.spec) { setStatus('AI 未返回有效架构，当前画布已保留'); return }
@@ -97,7 +123,7 @@ export default function ArchAiPanel(props: {
       }
       if (!rr.ok || !rr.html) { setStatus(`架构未通过渲染校验：${rr.error ?? 'unknown'}。当前画布已保留`); return }
       props.onRendered(rr.html, spec, p)
-      setStatus(`当前架构已更新 · ${cliName(r.cli)}`)
+      setStatus(`当前架构已更新 · ${backendLabel(r)}`)
     } catch (e) {
       if (!ac.signal.aborted) setStatus(e instanceof Error ? e.message : String(e))
     } finally {
@@ -108,6 +134,18 @@ export default function ArchAiPanel(props: {
     <aside className="av-ai-panel" aria-label="架构 AI 助手">
       <div className="av-ai-title">AI 助手</div>
       <p className="av-ai-intro">围绕左侧当前内容，调整架构、优化表达或解释依赖关系。</p>
+      {/* 后端就绪提示：两项都不可用时给出可操作的指引（v0.6.3） */}
+      {hasApi ? (
+        <div className="av-ai-backend api" title="在 设置 → AI 中修改">接口：{ai.model}</div>
+      ) : cliReady === 'kimi' || cliReady === 'codex' ? (
+        <div className="av-ai-backend cli" title="本机检测到的 agent CLI；配置 设置 → AI 后优先走接口">{cliName(cliReady)} CLI</div>
+      ) : cliReady === null ? (
+        <div className="av-ai-backend none">
+          AI 未配置 —— 在
+          <button className="av-ai-link" onClick={() => useStore.getState().openSettings()}>设置 → AI</button>
+          填写 API 信息，或安装 kimi / codex CLI
+        </div>
+      ) : null}
       <div className="seg av-ai-mode">
         <button disabled={busy} className={action === 'edit' ? 'active' : ''} onClick={() => setAction('edit')}>调整架构</button>
         <button disabled={busy} className={action === 'ask' ? 'active' : ''} onClick={() => setAction('ask')}>问答解释</button>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Vditor from 'vditor'
 import hljs from 'highlight.js/lib/common'
@@ -339,6 +339,150 @@ function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => v
   )
 }
 
+/** 从 mermaid SVG 字符串解析自然尺寸与规范化后的标记（lightbox 展示用） */
+function parseMermaidSvg(svg: string): { w: number; h: number; html: string } | null {
+  const template = document.createElement('template')
+  template.innerHTML = svg.trim()
+  const el = template.content.firstElementChild as SVGElement | null
+  if (!el) return null
+  const vb = /viewBox\s*=\s*"([\d.eE+-]+)[\s,]+([\d.eE+-]+)[\s,]+([\d.eE+-]+)[\s,]+([\d.eE+-]+)"/.exec(svg)
+  if (vb) {
+    const w = parseFloat(vb[3])
+    const h = parseFloat(vb[4])
+    if (w > 0 && h > 0) return { w, h, html: el.outerHTML }
+  }
+  const w = parseFloat(el.getAttribute('width') ?? '')
+  const h = parseFloat(el.getAttribute('height') ?? '')
+  return w > 0 && h > 0 ? { w, h, html: el.outerHTML } : null
+}
+
+const clampZoom = (v: number): number => Math.min(8, Math.max(0.1, v))
+
+/** Mermaid 全屏查看浮层（v0.6.3，图片交互看齐正文图片 lightbox）：
+ *  滚轮缩放（指向光标锚定）、拖拽平移、双击/底部按钮在「适应窗口」与 100% 间切换。 */
+function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void }) {
+  const parsed = useMemo(() => parseMermaidSvg(svg), [svg])
+  const stageRef = useRef<HTMLDivElement>(null)
+  const [stage, setStage] = useState({ w: 0, h: 0 })
+  const [fit, setFit] = useState(true)
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const dragRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null)
+  const movedRef = useRef(false)
+  const [dragging, setDragging] = useState(false)
+
+  // Esc 关闭、禁背景滚动、移走焦点（与图片 lightbox 同一套约定）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [onClose])
+
+  // 舞台尺寸（fit 缩放比依据）：挂载 + 窗口变化时重测
+  useEffect(() => {
+    const measure = (): void => {
+      const el = stageRef.current
+      if (el) setStage({ w: el.clientWidth, h: el.clientHeight })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+
+  // 切回适应模式时清平移
+  useEffect(() => { if (fit) setPan({ x: 0, y: 0 }) }, [fit])
+
+  const fitScale = parsed && stage.w > 0
+    ? Math.min(1.6, Math.max(0.05, Math.min((stage.w - 56) / parsed.w, (stage.h - 56) / parsed.h)))
+    : 1
+  const scale = fit ? fitScale : zoom
+
+  /** 以 (cx, cy)（舞台中心坐标系）为锚点缩放到 next */
+  const zoomAt = (next: number, cx = 0, cy = 0): void => {
+    const cur = fit ? fitScale : zoom
+    const basePan = fit ? { x: 0, y: 0 } : pan
+    setFit(false)
+    setZoom(next)
+    setPan({ x: cx - ((cx - basePan.x) / cur) * next, y: cy - ((cy - basePan.y) / cur) * next })
+  }
+
+  // 滚轮缩放要走原生非被动监听（React onWheel 是被动的，preventDefault 无效）
+  useEffect(() => {
+    const el = stageRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      zoomAt(clampZoom(scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)), e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  })
+
+  if (!parsed) return null
+  return (
+    <div className="mm-lightbox">
+      <div
+        ref={stageRef}
+        className={`mm-stage${dragging ? ' dragging' : ''}`}
+        onMouseDown={(e) => {
+          if (e.button !== 0) return
+          movedRef.current = false
+          dragRef.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y }
+          setDragging(true)
+        }}
+        onMouseMove={(e) => {
+          const d = dragRef.current
+          if (!d) return
+          if (Math.abs(e.clientX - d.sx) + Math.abs(e.clientY - d.sy) > 3) movedRef.current = true
+          setPan({ x: d.px + e.clientX - d.sx, y: d.py + e.clientY - d.sy })
+        }}
+        onMouseUp={() => { dragRef.current = null; setDragging(false) }}
+        onMouseLeave={() => { dragRef.current = null; setDragging(false) }}
+        onClick={() => { if (!movedRef.current) onClose() }}
+        onDoubleClick={() => {
+          if (fit) { setFit(false); setZoom(1); setPan({ x: 0, y: 0 }) } else setFit(true)
+        }}
+      >
+        <div
+          className="mm-canvas"
+          style={{
+            width: parsed.w,
+            height: parsed.h,
+            marginLeft: -parsed.w / 2,
+            marginTop: -parsed.h / 2,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`
+          }}
+          dangerouslySetInnerHTML={{ __html: parsed.html }}
+        />
+      </div>
+      <button className="img-lightbox-close" onClick={onClose} title="关闭 (Esc)">✕</button>
+      <div
+        className="mm-bar"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <button title="缩小" onClick={() => zoomAt(clampZoom(scale / 1.25))}>−</button>
+        <button className="mm-pct" title="切换 适应窗口 / 100%" onClick={() => { if (fit) { setFit(false); setZoom(1); setPan({ x: 0, y: 0 }) } else setFit(true) }}>
+          {Math.round(scale * 100)}%
+        </button>
+        <button title="放大" onClick={() => zoomAt(clampZoom(scale * 1.25))}>＋</button>
+        <span className="mm-size">{parsed.w} × {parsed.h}</span>
+      </div>
+    </div>
+  )
+}
+
 /** 阅读模式：保留渲染排版，正文始终可编辑，双击仅执行正常的文字选择。 */
 export default function MarkdownView({ annotations, onSelectAnn }: Props) {
   const ref = useRef<HTMLDivElement>(null)
@@ -353,6 +497,8 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
   const refreshRef = useRef<(() => void) | null>(null)
   // 图片最大化查看浮层（本地状态，不进全局 store）
   const [lightbox, setLightbox] = useState<LightboxInfo | null>(null)
+  // Mermaid 全屏查看浮层（v0.6.3）：存 SVG outerHTML
+  const [mermaid, setMermaid] = useState<string | null>(null)
   // 代码块悬浮「复制」按钮（v0.5.6，参考飞书/Notion）：portal + fixed 定位于块右上角，
   // 不插入 Vditor DOM（避免污染序列化），滚动时随块重算位置
   const [codeCopy, setCodeCopy] = useState<{ top: number; right: number } | null>(null)
@@ -361,8 +507,9 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
   // 关闭浮层后偶发回到文档顶部（诱因不稳定，疑似滚动锚定/布局重置的竞争）：打开时记录
   // 正文滚动位置，关闭后按 立即/下一帧/120ms/350ms 多次恢复，覆盖同步与异步两种时机（v0.5.4）
   const scrollGuardRef = useRef<{ pos: number; docPath: string } | null>(null)
-  const closeLightbox = useCallback(() => {
+  const closeOverlays = useCallback(() => {
     setLightbox(null)
+    setMermaid(null)
     const guard = scrollGuardRef.current
     scrollGuardRef.current = null
     if (!guard) return
@@ -456,25 +603,61 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
         image.dataset.anDisplaySrc = image.getAttribute('src')!
       })
     }
+    // Mermaid 外观重刷（v0.6.3，GitHub 风格）：白底卡片节点 + 石板灰边线 +
+    // 系统字体 + 轻投影，深色模式镜像。只改颜色/圆角/投影不动布局；
+    // pie/甘特等按颜色表意的图形不覆盖填充色，仅统一文字。
     const styleMermaidDiagrams = (prose: HTMLElement): void => {
-      const colors = theme === 'dark'
-        ? { node: '#1e2a38', border: '#3b78b8', line: '#9aa7b4', ink: '#e5e7eb', paper: '#121212', bg: '#1f1f1f', clusterBorder: '#404040', note: '#2b2616' }
-        : { node: '#e8f3ff', border: '#78b0f5', line: '#728095', ink: '#243447', paper: '#ffffff', bg: '#f5f5f5', clusterBorder: '#d9e2ec', note: '#fff8db' }
+      const c = theme === 'dark'
+        ? {
+            node: '#1c2635', nodeStroke: '#4a6488', edge: '#8199b4', ink: '#e6edf3',
+            paper: '#141b24', cluster: '#111823', clusterStroke: '#33445a', labelBg: '#141b24',
+            note: '#3d3213', noteStroke: '#a08420', actor: '#132a44', actorStroke: '#3f7fc2',
+            shadow: 'drop-shadow(0 2px 6px rgba(0,0,0,.5))'
+          }
+        : {
+            node: '#ffffff', nodeStroke: '#8296b0', edge: '#71809a', ink: '#1f2b3d',
+            paper: '#ffffff', cluster: '#f4f6f9', clusterStroke: '#d5dde6', labelBg: '#ffffff',
+            note: '#fdf6d8', noteStroke: '#d6a72c', actor: '#e8f3ff', actorStroke: '#54a3ff',
+            shadow: 'drop-shadow(0 2px 6px rgba(31,43,61,.16))'
+          }
+      const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
       prose.querySelectorAll<SVGElement>('.language-mermaid svg').forEach((svg) => {
         const paint = (selector: string, styles: Record<string, string>): void => {
           svg.querySelectorAll<SVGElement | HTMLElement>(selector).forEach((el) => {
             Object.entries(styles).forEach(([property, value]) => el.style.setProperty(property, value, 'important'))
           })
         }
-        paint('.node rect, .node polygon, .node circle, .node ellipse, .node path, .actor', { fill: colors.node, stroke: colors.border })
-        paint('.cluster rect', { fill: colors.paper, stroke: colors.clusterBorder })
-        paint('.edgePath path, .flowchart-link, .actor-line, .signal', { stroke: colors.line, 'stroke-width': '1.5px' })
-        paint('.arrowheadPath, marker path', { fill: colors.line, stroke: colors.line })
-        paint('.nodeLabel, .edgeLabel, .label, .messageText', { color: colors.ink, fill: colors.ink, 'font-family': '-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif' })
-        paint('.edgeLabel', { 'background-color': colors.bg })
-        paint('.edgeLabel rect', { fill: colors.bg })
-        paint('.note', { fill: colors.note, stroke: '#ffd230' })
-        svg.querySelectorAll<SVGElement>('.node rect, .actor').forEach((el) => { el.setAttribute('rx', '8'); el.setAttribute('ry', '8') })
+        // 节点形状（流程图 / 状态图 / 类图 / ER / 旅程 / 思维导图）
+        paint(
+          '.node rect, .node circle, .node ellipse, .node polygon, .node path, g.classGroup rect, g.stateGroup rect, g.stateGroup circle, g.entityBox rect, rect.actor, g.actor rect',
+          { fill: c.node, stroke: c.nodeStroke, 'stroke-width': '1.3px', filter: c.shadow }
+        )
+        // 时序图参与者与激活条：淡蓝底区分
+        paint('rect.actor, g.actor rect, rect.activation0, rect.activation1, rect.activation2', { fill: c.actor, stroke: c.actorStroke, 'stroke-width': '1.2px' })
+        // 分组框：浅灰底弱边
+        paint('.cluster rect, g.cluster rect', { fill: c.cluster, stroke: c.clusterStroke, 'stroke-width': '1.2px' })
+        // 边线 / 生命线 / 消息线 / 循环框 / 类图分隔线 / 思维导图连线
+        paint(
+          '.edgePath path, path.flowchart-link, .actor-line, .signal, .messageLine0, .messageLine1, .loopLine, g.classGroup line, .er.relationshipLine, .transition path, .mindmap-edges path',
+          { stroke: c.edge, 'stroke-width': '1.5px' }
+        )
+        paint('marker path, marker polygon, .arrowheadPath, .arrowMarkerPath', { fill: c.edge, stroke: c.edge })
+        // 边标签：与画布同底，避免文字压线
+        paint('.edgeLabel rect, g.edgeLabel rect', { fill: c.labelBg, stroke: 'none' })
+        paint('.edgeLabel, span.edgeLabel', { 'background-color': c.labelBg, color: c.ink, 'font-family': font })
+        // 注释便签
+        paint('.note, rect.note, g.note rect', { fill: c.note, stroke: c.noteStroke, 'stroke-width': '1.2px' })
+        // 文字统一（含标题 / 图例 / 甘特分区）
+        paint(
+          'text, .nodeLabel, .edgeLabel, .label, .messageText, .noteText, .loopText, .cluster-label, .pieTitle, .legend, .sectionTitle, .taskText, .titleText',
+          { color: c.ink, fill: c.ink, 'font-family': font }
+        )
+        // 圆角：矩形节点与分组框
+        svg.querySelectorAll<SVGElement>('.node rect, g.classGroup rect, g.stateGroup rect, rect.actor, g.actor rect, .cluster rect, g.cluster rect, rect.note, g.note rect').forEach((el) => {
+          el.setAttribute('rx', '8')
+          el.setAttribute('ry', '8')
+        })
+        svg.style.setProperty('background', c.paper, 'important')
       })
     }
     const refresh = (): void => {
@@ -621,7 +804,7 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
         // 拦截本次点击，避免 Vditor 的图片气泡在浮层背后弹出（与上面链接分支同理）
         event.preventDefault()
         event.stopPropagation()
-        // 记录当前滚动位置，供 closeLightbox 恢复（防偶发回顶）
+        // 记录当前滚动位置，供 closeOverlays 恢复（防偶发回顶）
         scrollGuardRef.current = {
           pos: document.querySelector('.reader-body')?.scrollTop ?? 0,
           docPath
@@ -631,6 +814,19 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
           origSrc: image.dataset.anOrigSrc ?? image.getAttribute('src') ?? '',
           alt: image.alt
         })
+        return
+      }
+      // Mermaid 图点击进入全屏查看（缩放/平移，v0.6.3）：与图片浮层同一套
+      // 滚动位置守卫；拦截点击避免 Vditor 把代码块切到编辑态
+      const mermaidSvg = (event.target as Element).closest?.('svg')
+      if (mermaidSvg && mermaidSvg.closest('.language-mermaid') && useStore.getState().mode === 'read') {
+        event.preventDefault()
+        event.stopPropagation()
+        scrollGuardRef.current = {
+          pos: document.querySelector('.reader-body')?.scrollTop ?? 0,
+          docPath
+        }
+        setMermaid(mermaidSvg.outerHTML)
         return
       }
       const hit = annotationRanges.find(({ range }) => [...range.getClientRects()].some((rect) =>
@@ -762,8 +958,9 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       syncDraft()
       disposed = true
       refreshRef.current = null
-      // 切换文档/标签时关掉可能开着的图片浮层
+      // 切换文档/标签时关掉可能开着的图片/Mermaid 浮层
       setLightbox(null)
+      setMermaid(null)
       unsubscribe?.()
       observer.disconnect()
       popObserver?.disconnect()
@@ -793,7 +990,8 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       <div className="markdown-editor" ref={ref} />
       {/* 浮层 portal 到 body：容器上的原生点击委托（链接/图片/批注）不会拦截浮层内点击，
           也不会被 Vditor 对容器 innerHTML 的重写波及 */}
-      {lightbox && createPortal(<ImageLightbox info={lightbox} onClose={closeLightbox} />, document.body)}
+      {lightbox && createPortal(<ImageLightbox info={lightbox} onClose={closeOverlays} />, document.body)}
+      {mermaid && createPortal(<MermaidLightbox svg={mermaid} onClose={closeOverlays} />, document.body)}
       {/* 代码块悬浮复制钮：fixed 定位于代码块右上角内侧；mousedown 拦截避免改变光标/选区 */}
       {codeCopy &&
         createPortal(

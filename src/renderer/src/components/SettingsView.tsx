@@ -2,20 +2,22 @@ import { useEffect, useState } from 'react'
 import type { UpdateStatusEvent, UpdaterPrefs } from '@shared/types'
 import { DOC_FORMAT_GROUPS } from '@shared/types'
 import { useStore } from '../store'
+import { aiTest } from '../api'
 import { loadUpdaterPrefs, saveUpdaterPrefs } from '../utils/updater-prefs'
 
-type Section = 'appearance' | 'reading' | 'editor' | 'version'
+type Section = 'appearance' | 'reading' | 'editor' | 'ai' | 'version'
 
 const SECTIONS: Array<{ key: Section; icon: Section; label: string }> = [
   { key: 'appearance', icon: 'appearance', label: '外观' },
   { key: 'reading', icon: 'reading', label: '阅读与标注' },
   { key: 'editor', icon: 'editor', label: '编辑' },
+  { key: 'ai', icon: 'ai', label: 'AI' },
   { key: 'version', icon: 'version', label: '版本' }
 ]
 
 function SettingsIcon({ section }: { section: Section }) {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {section === 'appearance' ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : section === 'reading' ? <><path d="M12 5v15M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z" /></> : section === 'editor' ? <><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z" /></> : <><path d="M20 7a9 9 0 1 0 1 9M20 3v5h-5" /></>}
+    {section === 'appearance' ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : section === 'reading' ? <><path d="M12 5v15M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z" /></> : section === 'editor' ? <><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z" /></> : section === 'ai' ? <><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8L12 3Z" /><path d="M18.5 14.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2Z" /></> : <><path d="M20 7a9 9 0 1 0 1 9M20 3v5h-5" /></>}
   </svg>
 }
 
@@ -31,6 +33,31 @@ export default function SettingsView() {
   const [updaterPrefs, setUpdaterPrefs] = useState<UpdaterPrefs>(loadUpdaterPrefs)
   const [checking, setChecking] = useState(false)
   const [downloading, setDownloading] = useState(false)
+
+  // ---- AI 区状态（v0.6.3） ----
+  const ai = useStore((s) => s.settings.ai)
+  const aiComplete = !!(ai.baseUrl && ai.apiKey && ai.model)
+  const [showKey, setShowKey] = useState(false)
+  const [aiTesting, setAiTesting] = useState(false)
+  const [aiTestMsg, setAiTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const testAi = async (): Promise<void> => {
+    if (!aiComplete || aiTesting) return
+    setAiTesting(true)
+    setAiTestMsg(null)
+    try {
+      const r = await aiTest(ai)
+      setAiTestMsg(
+        r.ok
+          ? { ok: true, text: `连接成功（${r.model ?? ai.model} 已响应）` }
+          : { ok: false, text: r.message ?? r.error ?? '测试失败' }
+      )
+    } catch (e) {
+      setAiTestMsg({ ok: false, text: String(e instanceof Error ? e.message : e) })
+    } finally {
+      setAiTesting(false)
+    }
+  }
 
   useEffect(() => {
     bridge?.appVersion().then(setAppVersion).catch(() => {})
@@ -266,6 +293,77 @@ export default function SettingsView() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {section === 'ai' && (
+          <div className="st-card">
+            <div className="st-card-title">AI 服务</div>
+
+            <div className="st-row">
+              <div className="st-label">API 地址</div>
+              <div className="st-input-wrap">
+                <input
+                  className="st-input"
+                  type="text"
+                  spellCheck={false}
+                  placeholder="https://api.openai.com/v1"
+                  value={ai.baseUrl}
+                  onChange={(e) => setSetting('ai', { ...ai, baseUrl: e.target.value.trim() })}
+                />
+              </div>
+              <div className="st-hint">OpenAI 兼容接口的 Base URL（OpenAI / DeepSeek / Moonshot / 智谱 / 本地 Ollama 等），通常以 /v1 结尾</div>
+            </div>
+
+            <div className="st-row">
+              <div className="st-label">API Key</div>
+              <div className="st-input-wrap st-key-row">
+                <input
+                  className="st-input mono"
+                  type={showKey ? 'text' : 'password'}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="sk-…"
+                  value={ai.apiKey}
+                  onChange={(e) => setSetting('ai', { ...ai, apiKey: e.target.value })}
+                />
+                <button className="btn-ghost sm" onClick={() => setShowKey((v) => !v)}>
+                  {showKey ? '隐藏' : '显示'}
+                </button>
+              </div>
+              <div className="st-hint">仅保存在本机设置中，请求时直接发往所填服务商，不经过其它中间服务</div>
+            </div>
+
+            <div className="st-row">
+              <div className="st-label">模型</div>
+              <div className="st-input-wrap">
+                <input
+                  className="st-input mono"
+                  type="text"
+                  spellCheck={false}
+                  placeholder="如 gpt-4o / deepseek-chat / glm-4.6 / kimi-k2"
+                  value={ai.model}
+                  onChange={(e) => setSetting('ai', { ...ai, model: e.target.value.trim() })}
+                />
+              </div>
+              <div className="st-hint">填写服务商提供的模型名；生成质量随模型能力差异较大</div>
+            </div>
+
+            <div className="st-row">
+              <div className="st-label">连接测试</div>
+              <div className="st-control">
+                <button className="btn-primary sm" disabled={!aiComplete || aiTesting} onClick={() => void testAi()}>
+                  {aiTesting ? '测试中…' : '测试连接'}
+                </button>
+                {aiTestMsg && (
+                  <span className={`st-test-msg ${aiTestMsg.ok ? 'ok' : 'err'}`}>{aiTestMsg.text}</span>
+                )}
+              </div>
+              <div className="st-hint">
+                三项填写齐全后，架构视图的「AI 助手」优先经此接口生成与解释架构；
+                未配置时自动改用本机 kimi / codex CLI（需已安装并登录）。
+              </div>
+            </div>
           </div>
         )}
 

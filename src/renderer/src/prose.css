@@ -81,7 +81,10 @@
   background: transparent; color: var(--ink);
   font-family: var(--system-fonts); white-space: normal;
 }
-.prose code.language-mermaid > svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.prose code.language-mermaid > svg {
+  display: block; max-width: 100%; height: auto; margin: 0 auto;
+  border-radius: 10px; cursor: zoom-in;
+}
 .prose pre.vditor-wysiwyg__pre svg .nodeLabel { font-weight: var(--font-weight-medium); }
 
 /* 进入代码块 / HTML 块编辑时，Vditor 会同时显示可编辑源码 pre 与渲染预览 pre，

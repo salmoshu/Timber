@@ -114,6 +114,20 @@ function formatImpactSummary(receipt: ArchDeltaReceipt): string {
 
 const IMAGE_EXT_SET = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
 
+/** UTF-8 BOM（\uFEFF）是编码标记而非内容：所有加载入口统一剥离（v0.5.7 首载剥离，
+ *  v0.6.3 补齐外部重载/手动刷新两条路径），否则 BOM 会让首行 `# 标题` 不解析，
+ *  且「带 BOM 的原文 ↔ 无 BOM 的编辑器序列化」来回制造假性差异。 */
+function stripBom(s: string): string {
+  return s.startsWith('\uFEFF') ? s.slice(1) : s
+}
+
+/** 修改判定用的规范化：剥 BOM + 统一换行（CRLF/CR → LF）。
+ *  Markdown 编辑器（Lute/Vditor）序列化恒为 LF 且无 BOM，磁盘原文在这些不可见
+ *  字符上与序列化输出的差异不应被当成「已修改」（v0.6.3 修复无操作却标脏误报）。 */
+function normalizeDocText(s: string): string {
+  return stripBom(s).replace(/\r\n?/g, '\n')
+}
+
 /**
  * 活动文档外部变更轮询：标签打开期间磁盘原文被其它程序（agent / 编辑器）更新时，
  * 若本地没有未保存修改，自动重载内容——阅读模式经订阅整体重渲染，编辑模式刷新草稿。
@@ -136,8 +150,9 @@ function startActiveDocWatcher(): void {
         const cur = useStore.getState()
         if (cur.activeTabId !== s.activeTabId || cur.dirty || cur.docLoading) return
         if (doc.mtime !== s.activeDoc.mtime || doc.size !== s.activeDoc.size) {
-          cur.patchActiveTab({ doc })
-          useStore.setState({ activeDoc: doc, draft: doc.content, dirty: false })
+          const content = stripBom(doc.content)
+          cur.patchActiveTab({ doc: { ...doc, content } })
+          useStore.setState({ activeDoc: { ...doc, content }, draft: content, dirty: false })
         }
       } catch {
         /* 静默重试 */
@@ -1196,7 +1211,8 @@ export const useStore = create<State>((set, get) => ({
 
   setDraft(d) {
     const s = get()
-    const dirty = d !== s.activeDoc?.content
+    // 脏状态按规范化内容比较：BOM / 换行风格这类不可见差异不算修改（v0.6.3）
+    const dirty = s.activeDoc !== null && normalizeDocText(d) !== normalizeDocText(s.activeDoc.content)
     const cur = s.tabs.find((t) => t.id === s.activeTabId)
     // tabs 与 draft 必须在同一次 set 中更新：分两次会让订阅方在中间态
     // 读到「旧 draft + 新 tabs」，编辑器订阅据此误判外部变更而整体重渲染，
@@ -1266,8 +1282,10 @@ export const useStore = create<State>((set, get) => ({
       )
       // 等待响应期间可能已切换标签/项目：仅仍是同一标签时落地
       if (get().activeTabId !== tabId) return
-      cacheTabDoc(tabId, doc, set, get)
-      set({ activeDoc: doc, draft: doc.content, dirty: false })
+      const content = stripBom(doc.content)
+      const fresh = { ...doc, content }
+      cacheTabDoc(tabId, fresh, set, get)
+      set({ activeDoc: fresh, draft: content, dirty: false })
       get().toast('ok', '已刷新')
     } catch (err) {
       get().toast('err', `刷新失败：${err}`)
@@ -1463,9 +1481,9 @@ async function loadTabInto(
       'GET',
       `/api/projects/${projectId}/doc?path=${encodeURIComponent(tab.path)}`
     )
-    // UTF-8 BOM（\uFEFF）是编码标记而非内容：留着会让首行 `# 标题` 的 # 不在行首，
-    // ATX 标题不解析、井号原样显示（v0.5.7 修复）。加载即剥离，下次保存后文件也不再带 BOM。
-    doc.content = doc.content.replace(/^\uFEFF/, '')
+    // UTF-8 BOM（\uFEFF）是编码标记而非内容：加载即剥离（v0.5.7 修复 BOM 让首行
+    // `# 标题` 不解析的问题；v0.6.3 收敛为统一的 stripBom 工具）
+    doc.content = stripBom(doc.content)
     if (get().activeProjectId !== projectId) return
     cacheTabDoc(tab.id, doc, set, get)
     if (get().activeTabId !== tab.id) return

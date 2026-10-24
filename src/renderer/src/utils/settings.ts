@@ -1,6 +1,14 @@
 // 应用设置：localStorage 持久化（Web 预览模式同样可用），变更即生效
 import { DOC_FORMAT_GROUPS } from '@shared/types'
 
+/** AI 服务配置（OpenAI 兼容接口，v0.6.3）：架构 AI 助手经此生成/解释；
+ *  三项齐全时优先走该接口，否则回退本机 kimi / codex CLI */
+export interface AiSettings {
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
 export interface AppSettings {
   /** 主题：浅色 / 深色 / 跟随系统 */
   theme: 'light' | 'dark' | 'system'
@@ -20,6 +28,8 @@ export interface AppSettings {
   autoSaveDelayMs: number
   /** 资源视图文件树按项目记忆：true=仅文档，无记录=全部源码文件（项目级化） */
   resourceFilterDocsByProject: Record<string, boolean>
+  /** AI 服务（OpenAI 兼容接口） */
+  ai: AiSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -31,7 +41,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSave: false,
   autoSaveDelayMs: 2000,
   docFormats: ['md', 'html', 'txt'],
-  resourceFilterDocsByProject: {}
+  resourceFilterDocsByProject: {},
+  ai: { baseUrl: '', apiKey: '', model: '' }
 }
 
 const SETTINGS_KEY = 'timber-settings'
@@ -66,6 +77,13 @@ export function filterDocsForProject(
   return s.resourceFilterDocsByProject[filterKeyForProject(p)] === true
 }
 
+/** 清洗 AI 配置：字段须为字符串（旧版本无该字段时回默认空配置） */
+function normalizeAi(raw: unknown): AiSettings {
+  const a = (raw && typeof raw === 'object' ? raw : {}) as Partial<AiSettings>
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+  return { baseUrl: str(a.baseUrl).trim(), apiKey: str(a.apiKey).trim(), model: str(a.model).trim() }
+}
+
 export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
@@ -80,7 +98,8 @@ export function loadSettings(): AppSettings {
         theme: saved.theme === 'dark' || saved.theme === 'system' ? saved.theme : 'light',
         defaultMode: saved.defaultMode === 'source' || saved.defaultMode === 'edit' ? 'source' : 'read',
         docFormats: normalizeFormats(saved.docFormats),
-        resourceFilterDocsByProject: normalizeFilterMap(saved.resourceFilterDocsByProject)
+        resourceFilterDocsByProject: normalizeFilterMap(saved.resourceFilterDocsByProject),
+        ai: normalizeAi(saved.ai)
       }
     }
   } catch {

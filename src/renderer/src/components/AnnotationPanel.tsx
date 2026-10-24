@@ -166,13 +166,17 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
     return compact ? null : <div className="ap-empty">当前文档没有可用的标题目录。</div>
   }
 
+  // 层级按相对深度归一（v0.6.3）：文档从 h2/h3 起笔时顶层仍从零缩进起，
+  // 深度超过 2 层的并到同一档（dep2），避免窄面板里缩进吃掉标题宽度。
+  // 缩进量经 --toc-pad 变量传入：目录条收起时保持居中标记，展开才应用缩进。
+  const minLv = Math.min(...toc.map((h) => h.level))
   return (
     <nav className={compact ? "toc-list toc-compact" : "toc-list"} aria-label="文档目录">
       {toc.map((h, i) => (
         <button
           key={i}
-          className={`toc-item lv${h.level} ${activeIndex === i ? 'active' : ''}`}
-          style={{ paddingLeft: 8 + (h.level - 1) * 12 }}
+          className={`toc-item dep${Math.min(h.level - minLv, 2)} ${activeIndex === i ? 'active' : ''}`}
+          style={{ '--toc-pad': `${6 + (h.level - minLv) * 12}px` } as React.CSSProperties}
           aria-label={h.text}
           aria-current={activeIndex === i ? 'location' : undefined}
           onClick={() => {
@@ -380,10 +384,22 @@ export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: 
 
           <div className="ap-list">
           {annotations.length === 0 && !composeQuote && (
-            <div className="ap-empty">
-              本文档暂无标注。
-              <br />
-              选中正文或源码中的文字即可添加标签 / 笔记 / 批注。
+            <div className="ap-empty-state">
+              <svg className="ap-empty-icon" viewBox="0 0 48 48" width="46" height="46" aria-hidden="true">
+                <path
+                  d="M13 8h22a7 7 0 0 1 7 7v12a7 7 0 0 1-7 7H24l-8 7v-7h-3a7 7 0 0 1-7-7V15a7 7 0 0 1 7-7Z"
+                  fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round"
+                />
+                <path d="M16 17.5h16M16 24.5h9" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+              </svg>
+              <div className="ap-empty-title">还没有批注</div>
+              <div className="ap-empty-desc">选中正文或源码中的文字，点击弹出的「🏷 添加标签」，即可创建：</div>
+              <div className="ap-empty-kinds">
+                <span className="ap-kind tag">🏷 标签</span>
+                <span className="ap-kind note">📝 笔记</span>
+                <span className="ap-kind annotation">✎ 批注</span>
+              </div>
+              <div className="ap-empty-tip">批注保存在项目 .timber/annotations.json，可复制标注地址交给 agent 执行</div>
             </div>
           )}
         {annotations.map((a) => (

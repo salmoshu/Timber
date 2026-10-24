@@ -188,26 +188,49 @@ export async function entireSearch(
   )
 }
 
-// ---- AI 架构图（sidecar 探测 agent CLI 生成 archify spec；远程项目走远端 timberd） ----
+// ---- AI 架构图（sidecar 生成 archify spec；优先 OpenAI 兼容接口，回退本机 agent CLI） ----
 
-/** AI 架构生成结果；ok:false 时 error 分层：no-cli / exec / timeout / parse */
+/** AI 架构生成结果；ok:false 时 error 分层：no-cli / exec / timeout / parse / api */
 export interface AiArchResult {
   ok: boolean
   spec?: ArchSpec
   answer?: string
+  /** CLI 模式的 agent 名（kimi | codex） */
   cli?: string
+  /** 生成后端：cli | api（v0.6.3，OpenAI 兼容接口） */
+  backend?: string
+  /** api 后端使用的模型名 */
+  model?: string
   error?: string
   message?: string
   output?: string
 }
 
-/** AI 生成架构 spec：长请求（agent 读项目再成图），必须可经 signal 取消 */
+/** AI 生成架构 spec：长请求（读项目再成图），必须可经 signal 取消；
+ *  ai 三项齐全时 sidecar 优先走 OpenAI 兼容接口，否则探测本机 CLI */
 export async function archAiGenerate(
   id: string,
   prompt: string,
   signal: AbortSignal,
   call: ApiCall = api,
-  options?: { action: 'edit' | 'ask'; context: import('./components/ArchAiPanel').ArchAiContext }
+  options?: { action: 'edit' | 'ask'; context: import('./components/ArchAiPanel').ArchAiContext; ai?: import('./utils/settings').AiSettings }
 ): Promise<AiArchResult> {
-  return call<AiArchResult>('POST', `/api/projects/${id}/ai/arch`, { prompt, ...options, ref: options?.context.ref }, { signal })
+  return call<AiArchResult>(
+    'POST',
+    `/api/projects/${id}/ai/arch`,
+    { prompt, action: options?.action, context: options?.context, ref: options?.context.ref, ai: options?.ai },
+    { signal }
+  )
+}
+
+/** 设置页「测试连接」：sidecar 用给定配置发一条最小消息验证可用性 */
+export async function aiTest(
+  cfg: import('./utils/settings').AiSettings
+): Promise<{ ok: boolean; model?: string; message?: string; error?: string }> {
+  return api('POST', '/api/ai/test', cfg)
+}
+
+/** agent CLI 探测（AI 面板提示当前可用后端；远程项目探测的是远端机器） */
+export async function aiCliStatus(projectId: string, call: ApiCall = api): Promise<{ cli: string | null }> {
+  return call<{ cli: string | null }>('GET', `/api/projects/${projectId}/ai/cli`)
 }
