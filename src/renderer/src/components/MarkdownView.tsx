@@ -456,6 +456,27 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
         image.dataset.anDisplaySrc = image.getAttribute('src')!
       })
     }
+    const styleMermaidDiagrams = (prose: HTMLElement): void => {
+      const colors = theme === 'dark'
+        ? { node: '#1e2a38', border: '#3b78b8', line: '#9aa7b4', ink: '#e5e7eb', paper: '#121212', bg: '#1f1f1f', clusterBorder: '#404040', note: '#2b2616' }
+        : { node: '#e8f3ff', border: '#78b0f5', line: '#728095', ink: '#243447', paper: '#ffffff', bg: '#f5f5f5', clusterBorder: '#d9e2ec', note: '#fff8db' }
+      prose.querySelectorAll<SVGElement>('.language-mermaid svg').forEach((svg) => {
+        const paint = (selector: string, styles: Record<string, string>): void => {
+          svg.querySelectorAll<SVGElement | HTMLElement>(selector).forEach((el) => {
+            Object.entries(styles).forEach(([property, value]) => el.style.setProperty(property, value, 'important'))
+          })
+        }
+        paint('.node rect, .node polygon, .node circle, .node ellipse, .node path, .actor', { fill: colors.node, stroke: colors.border })
+        paint('.cluster rect', { fill: colors.paper, stroke: colors.clusterBorder })
+        paint('.edgePath path, .flowchart-link, .actor-line, .signal', { stroke: colors.line, 'stroke-width': '1.5px' })
+        paint('.arrowheadPath, marker path', { fill: colors.line, stroke: colors.line })
+        paint('.nodeLabel, .edgeLabel, .label, .messageText', { color: colors.ink, fill: colors.ink, 'font-family': '-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif' })
+        paint('.edgeLabel', { 'background-color': colors.bg })
+        paint('.edgeLabel rect', { fill: colors.bg })
+        paint('.note', { fill: colors.note, stroke: '#ffd230' })
+        svg.querySelectorAll<SVGElement>('.node rect, .actor').forEach((el) => { el.setAttribute('rx', '8'); el.setAttribute('ry', '8') })
+      })
+    }
     const refresh = (): void => {
       const prose = container.querySelector<HTMLElement>('.prose')
       if (!prose || disposed) return
@@ -472,6 +493,7 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       sanitizeRenderedHtml(prose)
       upgradeInlineHtml(prose)
       rewriteImages()
+      styleMermaidDiagrams(prose)
       // 引用块（> 摘要式分行）内的行内软换行升级为真实换行；幂等，重复执行无副作用
       upgradeQuoteBreaks(prose)
       prose.querySelectorAll<HTMLElement>('.vditor-wysiwyg__preview code:not([data-highlighted])').forEach((code) => {
@@ -537,6 +559,10 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
     const onCodeOver = (event: MouseEvent): void => {
       const pre = (event.target as HTMLElement).closest?.('pre')
       if (!pre || !(pre as HTMLElement).closest('.prose')) return
+      if (pre.matches('.vditor-wysiwyg__pre:has(> code.language-mermaid)')) {
+        hideCodeCopy()
+        return
+      }
       // wysiwyg 代码块含「编辑 pre + 预览 pre」双副本，未编辑时编辑副本隐藏（rect 为 0），跳过
       const rect = (pre as HTMLElement).getBoundingClientRect()
       if (rect.width === 0 || rect.height === 0) return

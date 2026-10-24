@@ -82,8 +82,8 @@ export default function TitleBar() {
         <button
           className={`tb-set ${annPanelOpen ? 'on' : ''}`}
           onClick={toggleAnnPanel}
-          title="右侧边栏（文件 / 搜索 / Git）"
-          disabled={settingsOpen || view !== 'resources'}
+          title={view === 'history' ? '历史记录侧栏' : '右侧边栏（文件 / 搜索 / Git）'}
+          disabled={settingsOpen || (view !== 'resources' && view !== 'history')}
         >
           <IconPanelRight />
         </button>

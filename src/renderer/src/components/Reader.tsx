@@ -8,7 +8,7 @@ import TabsBar from './TabsBar'
 import FindBar from './FindBar'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { rawBaseFor, origProjectId } from '../store'
-import { IconExportPdf, IconSave } from './icons'
+import { IconAnnotation, IconExportPdf, IconSave } from './icons'
 import { exportActiveDocPdf } from '../utils/exportPdf'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
@@ -30,10 +30,12 @@ function locateKeyword(keyword: string): boolean {
 }
 
 export default function Reader() {
-  const [marginExpanded, setMarginExpanded] = useState(false)
-  const [marginHidden, setMarginHidden] = useState(false)
   const showAnnotations = useStore((s) => s.settings.annPanelDefaultOpen)
+  const [marginExpanded, setMarginExpanded] = useState(showAnnotations)
+  const [marginHidden, setMarginHidden] = useState(false)
+  const [marginWidth, setMarginWidth] = useState(208)
   const composeQuote = useStore((s) => s.composeQuote)
+  const annotationsOpen = !marginHidden && (showAnnotations || !!composeQuote)
   useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
   const {
     activeDoc,
@@ -58,6 +60,20 @@ export default function Reader() {
   const [rawBase, setRawBase] = useState('')
   const [findOpen, setFindOpen] = useState(false)
   const [htmlError, setHtmlError] = useState<string | null>(null)
+  const startMarginResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = e.currentTarget.parentElement!.getBoundingClientRect().width
+    const onMove = (ev: MouseEvent): void => setMarginWidth(Math.min(420, Math.max(180, startW + startX - ev.clientX)))
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('col-resizing')
+    }
+    document.body.classList.add('col-resizing')
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
 
   // HTML 文档经 sidecar /raw 以真实 URL 加载（远程项目走远端 base）
   useEffect(() => {
@@ -257,52 +273,84 @@ export default function Reader() {
 
   // 面包屑分段（VSCode 风格：目录 › 目录 › 文件）
   const crumbs = activeDoc.path.split('/')
+  const hasModeTools = isMd || activeDoc.ext === 'txt' || isHtml
+  const hasFileTools = !isImage || dirty || saving || (isMd && !!window.timber)
 
   return (
     <div className="reader resource-reader">
       <TabsBar>
-        {!isImage && (
-          <button
-            className="rt-btn"
-            onClick={() => void refreshActiveDoc()}
-            title="刷新：重新从磁盘读取文档 (F5)"
-          >
-            ⟳
-          </button>
-        )}
-        {(isMd || activeDoc.ext === 'txt' || isHtml) && (
-          <div className="seg icon-seg">
-            <button
-              className={mode === 'read' ? 'active' : ''}
-              onClick={() => setMode('read')}
-              title={isHtml ? '阅读模式（渲染网页）' : '阅读模式（可直接编辑）'}
-              aria-label="阅读模式"
-              aria-pressed={mode === 'read'}
-            >
-              📖
-            </button>
-            <button
-              className={mode === 'source' ? 'active' : ''}
-              onClick={() => setMode('source')}
-              title={isHtml ? '编辑模式（编辑 HTML 源码）' : '编辑模式（编辑源码）'}
-              aria-label="编辑模式"
-              aria-pressed={mode === 'source'}
-            >
-              ✎
-            </button>
+        {hasModeTools && (
+          <div className="rt-tool-group">
+            <div className="seg icon-seg">
+              <button
+                className={mode === 'read' ? 'active' : ''}
+                onClick={() => setMode('read')}
+                title={isHtml ? '阅读模式（渲染网页）' : '阅读模式（可直接编辑）'}
+                aria-label="阅读模式"
+                aria-pressed={mode === 'read'}
+              >
+                📖
+              </button>
+              <button
+                className={mode === 'source' ? 'active' : ''}
+                onClick={() => setMode('source')}
+                title={isHtml ? '编辑模式（编辑 HTML 源码）' : '编辑模式（编辑源码）'}
+                aria-label="编辑模式"
+                aria-pressed={mode === 'source'}
+              >
+                ✎
+              </button>
+            </div>
           </div>
         )}
-        {dirty && !saving && (
-          <button className="icon-save" onClick={() => void saveDoc()} title="保存 (Ctrl+S)">
-            <IconSave />
-          </button>
+        {hasFileTools && (
+          <>
+            {hasModeTools && <span className="rt-divider" aria-hidden="true" />}
+            <div className="rt-tool-group">
+              {!isImage && (
+                <button
+                  className="rt-btn"
+                  onClick={() => void refreshActiveDoc()}
+                  title="刷新：重新从磁盘读取文档 (F5)"
+                >
+                  ⟳
+                </button>
+              )}
+              {dirty && !saving && (
+                <button className="icon-save" onClick={() => void saveDoc()} title="保存 (Ctrl+S)">
+                  <IconSave />
+                </button>
+              )}
+              {saving && <span className="icon-saving" title="保存中…">…</span>}
+              {isMd && window.timber && (
+                <button className="rt-btn" onClick={() => void exportActiveDocPdf()} title="导出 PDF">
+                  <IconExportPdf />
+                </button>
+              )}
+            </div>
+          </>
         )}
-        {saving && <span className="icon-saving" title="保存中…">…</span>}
-        {isMd && window.timber && (
-          <button className="rt-btn" onClick={() => void exportActiveDocPdf()} title="导出 PDF">
-            <IconExportPdf />
+        {(hasModeTools || hasFileTools) && <span className="rt-divider" aria-hidden="true" />}
+        <div className="rt-tool-group">
+          <button
+            className={`rt-btn ${annotationsOpen ? 'active' : ''}`}
+            title={annotationsOpen ? `收起批注（${annotations.length}）` : `展开批注（${annotations.length}）`}
+            aria-label={annotationsOpen ? '收起批注' : '展开批注'}
+            aria-expanded={annotationsOpen}
+            onClick={() => {
+              if (annotationsOpen) {
+                setMarginExpanded(false)
+                setMarginHidden(true)
+              } else {
+                setMarginExpanded(true)
+                setMarginHidden(false)
+                if (!showAnnotations) useStore.getState().setSetting('annPanelDefaultOpen', true)
+              }
+            }}
+          >
+            <IconAnnotation />
           </button>
-        )}
+        </div>
       </TabsBar>
 
       <div className="rt-breadcrumb" title={activeDoc.path}>
@@ -373,9 +421,15 @@ export default function Reader() {
           </button>
         )}
       </div>
-      <div className={`document-margin ${marginExpanded ? 'expanded' : ''} ${marginHidden || (!showAnnotations && !composeQuote) ? 'hidden' : ''}`}>
-        <button className="margin-open" aria-label="展开正文批注" aria-expanded={marginExpanded} onClick={() => { setMarginExpanded(!marginExpanded); setMarginHidden(false); if (!showAnnotations) useStore.getState().setSetting('annPanelDefaultOpen', true) }}>批注{annotations.length > 0 ? ` ${annotations.length}` : ''}</button>
-        <AnnotationPanel key={activeDoc.path} onClose={() => { setMarginExpanded(false); setMarginHidden(true) }} />
+      <div
+        className={`document-margin ${marginExpanded ? 'expanded' : ''} ${annotationsOpen ? '' : 'hidden'}`}
+        style={{ '--document-ann-width': `${marginWidth}px` } as React.CSSProperties}
+      >
+        <AnnotationPanel
+          key={activeDoc.path}
+          onClose={() => { setMarginExpanded(false); setMarginHidden(true) }}
+          onResizeStart={startMarginResize}
+        />
       </div>
       </div>
     </div>

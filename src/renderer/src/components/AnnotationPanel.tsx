@@ -194,7 +194,7 @@ export function DocumentOutline() {
   return <div className="document-outline"><TocView activeDoc={activeDoc} mode={mode} compact /></div>
 }
 
-export default function AnnotationPanel({ onClose }: { onClose?: () => void }) {
+export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: () => void; onResizeStart?: (e: React.MouseEvent<HTMLDivElement>) => void }) {
   const {
     annotations,
     composeQuote,
@@ -301,6 +301,7 @@ export default function AnnotationPanel({ onClose }: { onClose?: () => void }) {
 
   return (
     <aside className="ann-panel document-annotations" aria-label="正文批注">
+      {onResizeStart && <div className="document-ann-resizer" onMouseDown={onResizeStart} title="拖拽调整批注宽度" />}
       <div className="ap-head">
         <strong>批注 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
         <span className="ap-count">{open.length} 待处理 · {done.length} 已完成</span>

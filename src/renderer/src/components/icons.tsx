@@ -66,6 +66,17 @@ export function IconExportPdf({ size = 14 }: { size?: number }) {
   )
 }
 
+/** 正文批注：对话气泡 + 批注横线 */
+export function IconAnnotation({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3z" />
+      <line x1="8" y1="9" x2="16" y2="9" />
+      <line x1="8" y1="13" x2="13" y2="13" />
+    </svg>
+  )
+}
+
 /** 查找：上一个（chevron 上），与 IconChevronDown 成对 */
 export function IconChevronUp({ size = 13 }: { size?: number }) {
   return (

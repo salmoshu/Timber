@@ -6,6 +6,7 @@ import Chevron from './Chevron'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
+import { HistoryList } from './HistoryView'
 import { CodeTree } from './CodeView'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
 import {
@@ -174,7 +175,7 @@ function countDocs(node: DocNode): number {
   return (node.children ?? []).reduce((acc, c) => acc + countDocs(c), 0)
 }
 
-export default function Sidebar({ section = 'projects' }: { section?: 'projects' | 'files' }) {
+export default function Sidebar({ section = 'projects' }: { section?: 'projects' | 'files' | 'history' }) {
   const {
     projects,
     activeProjectId,
@@ -202,12 +203,12 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     setSelectedDir
   } = useStore()
 
-  /** 右缘拖拽调宽（HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件） */
+  /** 侧栏边缘拖拽调宽（HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件） */
   const startResize = (e: ReactMouseEvent): void => {
     e.preventDefault()
     const startX = e.clientX
     const startW = e.currentTarget.parentElement!.getBoundingClientRect().width
-    const onMove = (ev: MouseEvent): void => section === 'files' ? useStore.getState().setAnnPanelWidth(startW - ev.clientX + startX) : setSidebarWidth(startW + ev.clientX - startX)
+    const onMove = (ev: MouseEvent): void => section !== 'projects' ? useStore.getState().setAnnPanelWidth(startW - ev.clientX + startX) : setSidebarWidth(startW + ev.clientX - startX)
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
@@ -554,7 +555,11 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
   if (section === 'projects' && sidebarCollapsed) return null
 
   return (
-    <aside className={`sidebar ${section === 'files' ? 'resource-sidebar' : 'project-sidebar'}`} style={{ width: section === 'files' ? annPanelWidth : sidebarWidth }} aria-label={section === 'files' ? '项目文件' : '项目列表'}>
+    <aside
+      className={`sidebar ${section === 'projects' ? 'project-sidebar' : section === 'files' ? 'resource-sidebar' : 'history-sidebar'}`}
+      style={{ width: section === 'projects' ? sidebarWidth : annPanelWidth }}
+      aria-label={section === 'projects' ? '项目列表' : section === 'files' ? '项目文件' : '提交历史'}
+    >
       <div className="sb-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
       {section === 'projects' && <div className="sb-projects">
         <div className="sb-head-row">
@@ -810,6 +815,8 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
           )}
         </>
       )}
+
+      {section === 'history' && <HistoryList />}
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />

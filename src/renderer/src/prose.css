@@ -69,6 +69,21 @@
 }
 .prose pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
 
+.prose pre.vditor-wysiwyg__pre:has(> code.language-mermaid) {
+  margin: 22px 0; padding: 22px 24px;
+  background: var(--Bg-Secondary); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-xs); overflow-x: auto;
+  white-space: normal; text-align: center;
+}
+.prose pre.vditor-wysiwyg__pre > code.language-mermaid {
+  display: block; margin: 0; padding: 0;
+  background: transparent; color: var(--ink);
+  font-family: var(--system-fonts); white-space: normal;
+}
+.prose code.language-mermaid > svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.prose pre.vditor-wysiwyg__pre svg .nodeLabel { font-weight: var(--font-weight-medium); }
+
 /* 进入代码块 / HTML 块编辑时，Vditor 会同时显示可编辑源码 pre 与渲染预览 pre，
    两块等高堆叠在纸张正文里表现为一块多余的同高空白区。编辑态（源码 pre 带
    display:block 内联样式）隐藏预览副本，只留可编辑源码；失焦后自动还原。 */

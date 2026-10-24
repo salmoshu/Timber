@@ -78,6 +78,7 @@ export default function App() {
                 {view === 'history' ? <HistoryView /> : view === 'architecture' ? <ArchitectureView key={activeProjectId} /> : <ResourceView />}
               </main>
               {view === 'resources' && annPanelOpen && <Sidebar section="files" />}
+              {view === 'history' && annPanelOpen && <Sidebar section="history" />}
             </>
           )}
         </div>

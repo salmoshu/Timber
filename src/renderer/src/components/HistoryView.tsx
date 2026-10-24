@@ -1,4 +1,4 @@
-// 提交历史视图：左侧提交列表（lane 圆点 + kind 徽章 + 统计 + 架构影响懒算），右侧提交详情
+// 提交历史：右侧栏记录列表（lane 圆点 + kind 徽章 + 统计 + 架构影响懒算），中间提交详情
 import { useEffect, useRef } from 'react'
 import type { CommitInfo } from '@shared/types'
 import { useStore } from '../store'
@@ -95,28 +95,21 @@ function CommitRow({ commit }: { commit: CommitInfo }) {
   )
 }
 
-export default function HistoryView() {
+export function HistoryList() {
   const activeProjectId = useStore((s) => s.activeProjectId)
   const commits = useStore((s) => s.commits)
   const commitsTotal = useStore((s) => s.commitsTotal)
   const commitsLoading = useStore((s) => s.commitsLoading)
-  const commitsProjectId = useStore((s) => s.commitsProjectId)
-  const loadCommits = useStore((s) => s.loadCommits)
   const loadMoreCommits = useStore((s) => s.loadMoreCommits)
 
-  // 项目切换后（或首次进入）加载第一页
-  useEffect(() => {
-    if (activeProjectId && commitsProjectId !== activeProjectId && !commitsLoading) {
-      void loadCommits()
-    }
-  }, [activeProjectId, commitsProjectId, commitsLoading, loadCommits])
-
-  if (!activeProjectId) {
-    return <div className="hv-empty">请先在左侧选择项目</div>
-  }
+  if (!activeProjectId) return <div className="hv-empty">请先在左侧选择项目</div>
 
   return (
-    <div className="history-view">
+    <>
+      <div className="history-side-head">
+        <strong>提交历史</strong>
+        {commitsTotal > 0 && <span>{commits.length} / {commitsTotal}</span>}
+      </div>
       <div className="hv-list">
         {commits.map((c) => (
           <CommitRow key={c.sha} commit={c} />
@@ -131,6 +124,27 @@ export default function HistoryView() {
           </button>
         )}
       </div>
+    </>
+  )
+}
+
+export default function HistoryView() {
+  const activeProjectId = useStore((s) => s.activeProjectId)
+  const commitsProjectId = useStore((s) => s.commitsProjectId)
+  const commitsLoading = useStore((s) => s.commitsLoading)
+  const loadCommits = useStore((s) => s.loadCommits)
+
+  // 项目切换后（或首次进入）加载第一页
+  useEffect(() => {
+    if (activeProjectId && commitsProjectId !== activeProjectId && !commitsLoading) {
+      void loadCommits()
+    }
+  }, [activeProjectId, commitsProjectId, commitsLoading, loadCommits])
+
+  if (!activeProjectId) return <div className="hv-empty">请先在左侧选择项目</div>
+
+  return (
+    <div className="history-view">
       <div className="hv-detail">
         <CommitDetail />
       </div>

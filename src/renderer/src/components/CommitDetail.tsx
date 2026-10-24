@@ -63,7 +63,7 @@ export default function CommitDetail() {
     if (c) void ensureCommitImpact(c)
   }, [selectedSha, ensureCommitImpact])
 
-  if (!selectedSha) return <div className="hv-empty">选择左侧提交查看详情</div>
+  if (!selectedSha) return <div className="hv-empty">选择右侧提交查看详情</div>
   if (loading || !detail) return <div className="hv-loading">加载中…</div>
 
   const c = detail.commit
@@ -105,7 +105,7 @@ export default function CommitDetail() {
         </div>
       )}
       {c.entireCheckpoint && activeProjectId && (
-        <EntireCard projectId={activeProjectId} checkpointId={c.entireCheckpoint} />
+        <EntireCard key={c.entireCheckpoint} projectId={activeProjectId} checkpointId={c.entireCheckpoint} />
       )}
       <div className="cd-files">
         <div className="cd-files-title">变更文件（{detail.files.length}）</div>
