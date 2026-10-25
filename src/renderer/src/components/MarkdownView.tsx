@@ -768,6 +768,120 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
     window.addEventListener('scroll', onCodeScroll, true)
     window.addEventListener('resize', onCodeScroll)
 
+    // ---- 表格列宽拖拽（v0.6.4）：悬停列边界出现 col-resize 光标，拖动调整列宽。
+    //      列宽写在首行单元格的 style.width 上（table-layout:fixed 以首行为准）；
+    //      不能用 colgroup——Lute 序列化带 colgroup 的表格会把整表丢掉。
+    //      单元格 style 属性序列化时被剥掉，不会污染 Markdown 源码；表格内容再编辑
+    //      触发 Spin 重建 DOM 后恢复自适应布局。
+    const tableColEdge = (event: MouseEvent): { table: HTMLTableElement; index: number } | null => {
+      const cell = (event.target as HTMLElement).closest?.('td,th')
+      const table = cell?.closest('table')
+      const prose = container.querySelector('.prose')
+      if (!cell || !table || !prose?.contains(table)) return null
+      const row = table.querySelector('tr')
+      if (!row || row.children.length < 2) return null
+      const cells = [...row.children]
+      // 最后一列的右缘是表格边框，不作为调宽把手
+      for (let i = 0; i < cells.length - 1; i++) {
+        if (Math.abs(event.clientX - cells[i].getBoundingClientRect().right) < 6) {
+          return { table: table as HTMLTableElement, index: i }
+        }
+      }
+      return null
+    }
+    const onTableMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 0) return
+      const hit = tableColEdge(event)
+      if (!hit) return
+      const { table, index } = hit
+      const cells = [...table.querySelector('tr')!.children] as HTMLElement[]
+      // 首次拖拽：先量好自适应列宽，再切固定布局应用——顺序反了会让 fixed
+      // 布局先把列压成均分，把均分值误固化成初始宽度
+      if (!table.classList.contains('an-col-resized')) {
+        const autoWidths = cells.map((cell) => Math.round(cell.getBoundingClientRect().width))
+        table.classList.add('an-col-resized')
+        cells.forEach((cell, i) => { cell.style.width = `${autoWidths[i]}px` })
+      }
+      event.preventDefault()
+      const startX = event.clientX
+      const startW = cells[index].getBoundingClientRect().width
+      const nextCell = cells[index + 1]
+      const startNextW = nextCell.getBoundingClientRect().width
+      // 与右邻列此消彼长：总宽不变，拖动量 1:1 生效（fixed 布局会把指定的列宽
+      // 按比例缩放到表格总宽，只改一列时增量会被稀释）
+      const onMove = (ev: MouseEvent): void => {
+        const delta = Math.max(36 - startW, Math.min(startNextW - 36, ev.clientX - startX))
+        cells[index].style.width = `${Math.round(startW + delta)}px`
+        nextCell.style.width = `${Math.round(startNextW - delta)}px`
+      }
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove)
+        document.body.classList.remove('col-resizing')
+      }
+      document.body.classList.add('col-resizing')
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp, { once: true })
+    }
+    const onTableHover = (event: MouseEvent): void => {
+      const want = tableColEdge(event) ? 'col-resize' : ''
+      if (container.style.cursor !== want) container.style.cursor = want
+    }
+    const onTableLeave = (): void => { container.style.cursor = '' }
+    container.addEventListener('mousedown', onTableMouseDown)
+    container.addEventListener('mousemove', onTableHover)
+    container.addEventListener('mouseleave', onTableLeave)
+
+    /** 回车接管（v0.6.4）：Chromium 对 contenteditable <pre> 根节点的回车默认行为
+     *  不可靠（实测在正文段末回车不产生新段，光标跳到下一块行首）。这里按
+     *  Typora/Word 语义手动拆块：光标后内容移入新块，光标落到拆分点后的行首；
+     *  块首回车产生上方空行，标题中段拆出同级标题、末尾拆出普通段落。
+     *  列表/表格/代码块/脚注等结构块仍交给 Vditor 原生处理。
+     *  走 capture 阶段拦截：先于 Vditor 挂在编辑器元素上的 keydown。 */
+    const onEnterKeydown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Enter' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      if (!ready || !editor || disposed) return
+      const hint = container.querySelector<HTMLElement>('.vditor-hint')
+      if (hint && hint.style.display === 'block') return // 补全面板开着：回车用于选中候选
+      const prose = container.querySelector<HTMLElement>('.prose')
+      const selection = window.getSelection()
+      if (!prose || !selection || selection.rangeCount === 0) return
+      const range = selection.getRangeAt(0)
+      if (!range.collapsed || !prose.contains(range.startContainer)) return
+      const anchorEl = (range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement
+        : range.startContainer) as HTMLElement | null
+      const block = anchorEl?.closest('p, h1, h2, h3, h4, h5, h6')
+      if (!block || !prose.contains(block)) return
+      if (block.closest('li, td, th, .vditor-wysiwyg__block, [data-type="footnotes-block"], [data-type="link-ref-defs-block"]')) return
+      // 引用块内空段回车 = 逐层跳出（Vditor 原生语义）
+      const blockEmpty = !(block.textContent ?? '').replace(/\u200b/g, '').trim() && !block.querySelector('img')
+      if (block.closest('blockquote') && blockEmpty) return
+      event.preventDefault()
+      event.stopPropagation()
+      // 拆块：光标后内容 → 新块
+      const trailing = range.cloneRange()
+      trailing.setEnd(block, block.childNodes.length)
+      const fragment = trailing.extractContents()
+      const trailingHasContent = !!fragment.textContent?.trim() || !!fragment.querySelector('img, code, span[data-type]')
+      const newBlock = document.createElement(trailingHasContent && block.tagName !== 'P' ? block.tagName : 'p')
+      newBlock.setAttribute('data-block', '0')
+      const marker = block.getAttribute('data-marker')
+      if (marker && newBlock.tagName !== 'P') newBlock.setAttribute('data-marker', marker)
+      if (fragment.childNodes.length > 0) newBlock.appendChild(fragment)
+      else newBlock.innerHTML = '<br>'
+      block.insertAdjacentElement('afterend', newBlock)
+      // 光标落位：块首回车（原块剩余为空且有后继内容）留在原块，否则到新块行首
+      const restEmpty = !(block.textContent ?? '').replace(/\u200b/g, '').trim() && !block.querySelector('img')
+      const caretRange = document.createRange()
+      caretRange.selectNodeContents(restEmpty && trailingHasContent ? block : newBlock)
+      caretRange.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(caretRange)
+      // 交回 Vditor 输入链路：Spin 重渲染、撤销入栈、草稿同步
+      prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
+    }
+    container.addEventListener('keydown', onEnterKeydown, true)
+
     const syncDraft = (): void => {
       const state = useStore.getState()
       if (!ready || !editor || disposed || state.activeTabId !== tabId || state.activeProjectId !== projectId) return
@@ -976,6 +1090,10 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       container.removeEventListener('mouseout', onCodeOut)
       window.removeEventListener('scroll', onCodeScroll, true)
       window.removeEventListener('resize', onCodeScroll)
+      container.removeEventListener('mousedown', onTableMouseDown)
+      container.removeEventListener('mousemove', onTableHover)
+      container.removeEventListener('mouseleave', onTableLeave)
+      container.removeEventListener('keydown', onEnterKeydown, true)
       codeCopyPreRef.current = null
       setCodeCopy(null)
       setTextHighlight('ann-open', [])

@@ -198,7 +198,10 @@ export function DocumentOutline() {
   return <div className="document-outline"><TocView activeDoc={activeDoc} mode={mode} compact /></div>
 }
 
-export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: () => void; onResizeStart?: (e: React.MouseEvent<HTMLDivElement>) => void }) {
+/** 类型图标/文字统一拆分渲染（v0.6.4）：面板拖窄后容器查询隐藏文字，仅留图标，避免换行挤压 */
+const KIND_ICONS: Record<AnnotationKind, string> = { tag: '🏷', note: '📝', annotation: '✎' }
+
+export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e: React.MouseEvent<HTMLDivElement>) => void }) {
   const {
     annotations,
     composeQuote,
@@ -309,7 +312,6 @@ export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: 
       <div className="ap-head">
         <strong>批注 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
         <span className="ap-count">{open.length} 待处理 · {done.length} 已完成</span>
-        <button className="btn-ghost sm" onClick={onClose} title="收起正文批注">×</button>
       </div>
         <div className="ap-body">
           {annotations.length > 0 && (
@@ -329,8 +331,9 @@ export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: 
               </div>
               <div className="ap-kinds">
                 {(['tag', 'note', 'annotation'] as const).map((k) => (
-                  <button key={k} className={kind === k ? 'active' : ''} onClick={() => setKind(k)}>
-                    {ANNOTATION_KIND_LABELS[k]}
+                  <button key={k} className={kind === k ? 'active' : ''} onClick={() => setKind(k)} title={ANNOTATION_KIND_LABELS[k]}>
+                    <span className="ap-kind-ico" aria-hidden="true">{KIND_ICONS[k]}</span>
+                    <span className="ap-kind-text">{ANNOTATION_KIND_LABELS[k]}</span>
                   </button>
                 ))}
               </div>
@@ -395,9 +398,9 @@ export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: 
               <div className="ap-empty-title">还没有批注</div>
               <div className="ap-empty-desc">选中正文或源码中的文字，点击弹出的「🏷 添加标签」，即可创建：</div>
               <div className="ap-empty-kinds">
-                <span className="ap-kind tag">🏷 标签</span>
-                <span className="ap-kind note">📝 笔记</span>
-                <span className="ap-kind annotation">✎ 批注</span>
+                <span className="ap-kind tag"><span className="ap-kind-ico" aria-hidden="true">🏷</span><span className="ap-kind-text">标签</span></span>
+                <span className="ap-kind note"><span className="ap-kind-ico" aria-hidden="true">📝</span><span className="ap-kind-text">笔记</span></span>
+                <span className="ap-kind annotation"><span className="ap-kind-ico" aria-hidden="true">✎</span><span className="ap-kind-text">批注</span></span>
               </div>
               <div className="ap-empty-tip">批注保存在项目 .timber/annotations.json，可复制标注地址交给 agent 执行</div>
             </div>
@@ -441,7 +444,8 @@ export default function AnnotationPanel({ onClose, onResizeStart }: { onClose?: 
             )}
             <div className="ap-card-meta">
               <span className={`ap-kind ${kindOf(a)}`}>
-                {kindOf(a) === 'tag' ? '🏷 ' : kindOf(a) === 'note' ? '📝 ' : ''}{ANNOTATION_KIND_LABELS[kindOf(a)]}
+                <span className="ap-kind-ico" aria-hidden="true">{KIND_ICONS[kindOf(a)]}</span>
+                <span className="ap-kind-text">{ANNOTATION_KIND_LABELS[kindOf(a)]}</span>
               </span>
               <span className={`ap-status ${a.status}`}>{a.status === 'open' ? '待处理' : '已完成'}</span>
               <span className="ap-time">{fmtTime(a.updatedAt)}</span>

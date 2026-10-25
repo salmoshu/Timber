@@ -99,9 +99,11 @@
   background: var(--paper); color: var(--ink); border-color: var(--line);
 }
 
-.prose table {
-  border-collapse: collapse; width: 100%; margin: 16px 0;
-  font-size: var(--md-B3-font-size); line-height: 1.6; display: block; overflow-x: auto;
+/* 表格自适应铺满页面左右（v0.6.4）：display:table 让列分摊满宽（Vditor 默认
+   display:block 只会让内部匿名表格收缩到内容宽，右侧留大片空白） */
+.vditor-reset.prose table {
+  border-collapse: collapse; display: table; width: 100%; margin: 16px 0;
+  font-size: var(--md-B3-font-size); line-height: 1.6;
 }
 /* 表格 / 代码块横向滚动条：与全局同款窄滑块（半透明 Fills 级 thumb）；hover 加深提示可拖 */
 .prose table, .prose pre { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) transparent; }
@@ -125,9 +127,10 @@
 .vditor-reset.prose table tbody tr:nth-child(2n) {
   background-color: color-mix(in srgb, var(--Labels-Primary) 3%, transparent);
 }
-/* 列宽/行高（Typora 式平衡）：单元格允许换行，列的自动宽度以内容为上限封顶——
-   既不因超长内容把表格撑成横向长条，也不让单个单元格堆出太多行 */
-.vditor-reset.prose table { table-layout: auto; min-width: 50%; }
+/* 列宽/行高：表格自适应铺满页面左右（v0.6.4，display:table 让列分摊满宽），
+   单元格允许换行、列宽以内容为上限封顶——拖拽列宽后由 inline colgroup 接管 */
+.vditor-reset.prose table { table-layout: auto; }
+.vditor-reset.prose table.an-col-resized { table-layout: fixed; }
 .vditor-reset.prose table td {
   white-space: normal;
   word-break: break-word;
@@ -139,6 +142,9 @@
   word-break: break-word;
   max-width: 18em;
 }
+/* 拖拽调列宽时（v0.6.4）：固定布局下解除内容封顶，宽度完全交给 colgroup */
+.vditor-reset.prose table.an-col-resized td,
+.vditor-reset.prose table.an-col-resized th { max-width: none; }
 
 .prose img { max-width: 100%; border-radius: var(--radius-xl); }
 .prose hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }

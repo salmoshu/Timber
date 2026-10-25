@@ -473,26 +473,16 @@ input, textarea { user-select: text; }
 /* 引用块（> 摘要式分行）内的行内软换行：占位 span 里的 "\n" 渲染为真实换行 */
 .prose span[data-an-softbreak-br] { white-space: pre-wrap; }
 
-/* 块悬浮工具栏（上移/下移/删除）：从块内左上角移到行左侧空白区（参考 Awesome-Resume 行级操作）。
-   --prose-left 由 MarkdownView.refresh 写入（正文卡片相对编辑器左侧的偏移）；
-   划词弹层（第二个 panel）不左移。
-   默认对齐段落首行（26px 兜底偏移）；MarkdownView.centerBlockToolbar 找到目标块后
-   加 .an-vcenter 并改写 inline top，工具栏改为与整个块垂直居中。
-   含输入框的块弹层（标题 ID / 表格行列 / 代码块语言）较宽，左移会被左缘截断、
-   垂直居中会遮挡块内容（v0.5.6），由 centerBlockToolbar 定位到块上方/下方。 */
-.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type:not(:has(.vditor-input)) {
-  left: calc(var(--prose-left, 0px) + 78px) !important;
-  transform: translate(-100%, 26px);
-  opacity: 1;
-}
-.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type.an-vcenter:not(:has(.vditor-input)) {
-  transform: translate(-100%, 0);
+/* 块悬浮工具栏（上移/下移/删除）已移除（v0.6.4）：删除块改用选中整块后按退格，
+   正文编辑体验对齐 Typora/Word。仅含输入框的块弹层（标题 ID / 表格行列 / 代码块语言）
+   保留，由 MarkdownView.centerBlockToolbar 定位到块上方/下方。 */
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:has(button[data-type="remove"]):not(:has(.vditor-input)) {
+  display: none !important;
 }
 /* 含输入框的块弹层：位置由 JS 计算（块上方/下方），此处仅保证可见 */
 .markdown-editor .vditor-wysiwyg > div.vditor-panel--none:first-of-type:has(.vditor-input) {
   opacity: 1;
 }
-.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:not(:has(.vditor-input)) button,
 .markdown-editor .vditor-wysiwyg > div.vditor-panel--none:has(.vditor-input) button {
   padding: 4px 5px;
 }
@@ -670,16 +660,18 @@ input, textarea { user-select: text; }
 .ap-status.open { background: var(--Others-LightOrangeBg); color: var(--Colors-Orange); }
 .ap-status.done { background: var(--Others-LightGreenBg); color: var(--Colors-PositiveGreen); }
 /* 类型徽标：标签 / 笔记 / 批注（品牌蓝 / 中性 / 功能橙） */
-.ap-kind { font-size: 11px; padding: 1px 8px; border-radius: var(--radius-full); font-weight: 600; }
+.ap-kind { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 1px 8px; border-radius: var(--radius-full); font-weight: 600; }
 .ap-kind.tag { background: var(--Others-KMBlue10); color: var(--Colors-KMBlue); }
 .ap-kind.note { background: var(--Fills-F2); color: var(--Labels-Secondary); }
 .ap-kind.annotation { background: var(--Others-LightOrangeBg); color: var(--Colors-Orange); }
 /* 新建标注的类型选择 + 标签快选 */
 .ap-kinds { display: flex; gap: 2px; border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 2px; margin-bottom: 8px; }
 .ap-kinds button {
-  flex: 1; border: none; background: transparent; color: var(--ink2);
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+  border: none; background: transparent; color: var(--ink2);
   font-size: 12px; font-weight: 600; padding: 4px 0; border-radius: var(--radius-pill);
 }
+.ap-kind-ico { flex: none; }
 .ap-kinds button.active { background: var(--Others-KMBlue10); color: var(--accent); }
 .ap-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
 .ap-tag-chip {
@@ -2002,7 +1994,12 @@ select:focus-visible {
 .toc-compact .dep0 .toc-mark { height: 18px; }
 .toc-compact .dep2 .toc-mark { height: 10px; }
 .toc-compact .toc-label { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
-.toc-compact:is(:hover, :focus-within) .toc-mark { width: 4px; height: 18px; background: var(--Fills-F4); }
+/* 展开态标记收成短线段（v0.6.4）：层级信息改由文字缩进/字号承担，
+   线段仅作行首点缀——顶层略长、深层渐短，不再占据视觉高度 */
+.toc-compact:is(:hover, :focus-within) .toc-mark { width: 4px; background: var(--Fills-F4); }
+.toc-compact:is(:hover, :focus-within) .dep0 .toc-mark { height: 11px; }
+.toc-compact:is(:hover, :focus-within) .dep1 .toc-mark { height: 8px; }
+.toc-compact:is(:hover, :focus-within) .dep2 .toc-mark { height: 5px; }
 .toc-compact:is(:hover, :focus-within) .toc-label { display: block; flex: 1; }
 /* 展开态字号/字重随层级收敛（v0.6.3）：顶层加粗、深层渐小渐淡 */
 .toc-compact:is(:hover, :focus-within) .toc-item.dep0 { font-weight: var(--font-weight-semibold); color: var(--ink); font-size: 12.6px; }
@@ -2011,8 +2008,8 @@ select:focus-visible {
 .toc-compact .toc-item.active, .toc-compact .toc-item:hover { color: var(--accent); }
 .toc-compact .toc-item.active { font-weight: var(--font-weight-semibold); }
 .toc-compact .active .toc-mark, .toc-compact .toc-item:hover .toc-mark { background: var(--accent); }
-.document-margin { width: var(--document-ann-width, 208px); flex: none; padding: 26px 8px 20px 4px; min-height: 0; }
-.document-margin .document-annotations { width: 100%; height: 100%; border: 0; background: transparent; }
+.document-margin { width: var(--document-ann-width, 190px); flex: none; padding: 26px 8px 20px 4px; min-height: 0; }
+.document-margin .document-annotations { width: 100%; height: 100%; border: 0; background: transparent; container-type: inline-size; }
 .document-ann-resizer { position: absolute; top: 0; left: -3px; width: 6px; height: 100%; z-index: 35; cursor: col-resize; }
 .document-ann-resizer:hover { background: var(--accent-soft); }
 .document-annotations .ap-head { padding: 8px 4px 12px; display: flex; flex-wrap: wrap; gap: 5px; border: 0; }
@@ -2024,10 +2021,19 @@ select:focus-visible {
 .document-annotations .ap-batch-ops { flex-wrap: wrap; padding: 0 0 10px; }
 .document-annotations .ap-empty { font-size: 12px; padding: 18px 6px; line-height: 1.8; }
 .document-margin.hidden { display: none; }
+/* 面板拖窄后（面板内容宽低于三个类型标签的最小排列宽度 ~171px）：类型标签只留图标、
+   头部统计隐去，避免文字换行挤压（v0.6.4）。容器是 .document-annotations 本身，
+   阈值按面板内容宽计：默认 190px 边栏 = 面板宽 178px，仍显示文字 */
+@container (max-width: 170px) {
+  .document-annotations .ap-kind-text { display: none; }
+  .document-annotations .ap-kind-ico { margin: 0; }
+  .document-annotations .ap-kinds button { padding: 4px 0; gap: 0; }
+  .document-annotations .ap-count { display: none; }
+}
 @container (max-width: 820px) {
   .document-margin { width: 0; padding: 0; }
   .document-margin .document-annotations { display: none; }
-  .document-margin.expanded:not(.hidden) .document-annotations { display: flex; position: absolute; z-index: 30; right: 12px; top: 76px; bottom: 16px; height: auto; width: var(--document-ann-width, 208px); max-width: calc(100% - 64px); padding: 14px; border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-pop); }
+  .document-margin.expanded:not(.hidden) .document-annotations { display: flex; position: absolute; z-index: 30; right: 12px; top: 76px; bottom: 16px; height: auto; width: var(--document-ann-width, 190px); max-width: calc(100% - 64px); padding: 14px; border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-pop); }
   .document-workspace > .reader-body { padding-left: 4px; padding-right: 4px; }
   .document-workspace .prose, .document-workspace .markdown-editor .vditor-wysiwyg > .vditor-reset.prose { padding: 28px 18px !important; }
 }

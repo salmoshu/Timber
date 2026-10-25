@@ -33,7 +33,7 @@ export default function Reader() {
   const showAnnotations = useStore((s) => s.settings.annPanelDefaultOpen)
   const [marginExpanded, setMarginExpanded] = useState(showAnnotations)
   const [marginHidden, setMarginHidden] = useState(false)
-  const [marginWidth, setMarginWidth] = useState(208)
+  const [marginWidth, setMarginWidth] = useState(190)
   const composeQuote = useStore((s) => s.composeQuote)
   const annotationsOpen = !marginHidden && (showAnnotations || !!composeQuote)
   useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
@@ -64,7 +64,7 @@ export default function Reader() {
     e.preventDefault()
     const startX = e.clientX
     const startW = e.currentTarget.parentElement!.getBoundingClientRect().width
-    const onMove = (ev: MouseEvent): void => setMarginWidth(Math.min(420, Math.max(180, startW + startX - ev.clientX)))
+    const onMove = (ev: MouseEvent): void => setMarginWidth(Math.min(420, Math.max(150, startW + startX - ev.clientX)))
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
@@ -427,7 +427,6 @@ export default function Reader() {
       >
         <AnnotationPanel
           key={activeDoc.path}
-          onClose={() => { setMarginExpanded(false); setMarginHidden(true) }}
           onResizeStart={startMarginResize}
         />
       </div>
