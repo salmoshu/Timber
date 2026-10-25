@@ -166,17 +166,17 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
     return compact ? null : <div className="ap-empty">当前文档没有可用的标题目录。</div>
   }
 
-  // 层级按相对深度归一（v0.6.3）：文档从 h2/h3 起笔时顶层仍从零缩进起，
-  // 深度超过 2 层的并到同一档（dep2），避免窄面板里缩进吃掉标题宽度。
-  // 缩进量经 --toc-pad 变量传入：目录条收起时保持居中标记，展开才应用缩进。
+  // 层级按相对深度归一（v0.6.3）：文档从 h2/h3 起笔时顶层仍从零缩进起。
+  // dep 类输出真实深度（0-5，v0.6.4 不再封顶两层）；--toc-pad 为纯层级缩进量，
+  // 展开态只作用于标题文字（线段列固定在一条竖线上）。
   const minLv = Math.min(...toc.map((h) => h.level))
   return (
     <nav className={compact ? "toc-list toc-compact" : "toc-list"} aria-label="文档目录">
       {toc.map((h, i) => (
         <button
           key={i}
-          className={`toc-item dep${Math.min(h.level - minLv, 2)} ${activeIndex === i ? 'active' : ''}`}
-          style={{ '--toc-pad': `${6 + (h.level - minLv) * 12}px` } as React.CSSProperties}
+          className={`toc-item dep${Math.min(h.level - minLv, 5)} ${activeIndex === i ? 'active' : ''}`}
+          style={{ '--toc-pad': `${(h.level - minLv) * 12}px` } as React.CSSProperties}
           aria-label={h.text}
           aria-current={activeIndex === i ? 'location' : undefined}
           onClick={() => {

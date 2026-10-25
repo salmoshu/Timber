@@ -1988,23 +1988,26 @@ select:focus-visible {
 .toc-compact::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .toc-compact:hover, .toc-compact:focus-within { width: 248px; box-shadow: var(--shadow-pop); }
 .toc-compact .toc-item { display: flex; align-items: center; justify-content: center; gap: 0; min-height: 26px; padding: 3px 6px; width: 100%; white-space: nowrap; background: transparent; }
-/* 展开态按层级缩进（--toc-pad 由 TocView 按相对深度写入；收起态保持标记列居中） */
-.toc-compact:is(:hover, :focus-within) .toc-item { justify-content: flex-start; gap: 10px; padding-left: var(--toc-pad, 6px); }
+/* 展开态按层级缩进：线段列固定，缩进量只加在标题文字上（v0.6.4 调整） */
+.toc-compact:is(:hover, :focus-within) .toc-item { justify-content: flex-start; gap: 10px; padding-left: 6px; }
 .toc-compact .toc-mark { display: block; flex: none; width: 3px; height: 14px; background: var(--Fills-F2-hover); border-radius: var(--radius-full); transition: width var(--duration-default) var(--ease-out), height var(--duration-default) var(--ease-out), background-color var(--duration-default) var(--ease-out); }
 .toc-compact .dep0 .toc-mark { height: 18px; }
-.toc-compact .dep2 .toc-mark { height: 10px; }
+.toc-compact .dep2 .toc-mark { height: 11px; }
+.toc-compact .dep3 .toc-mark { height: 10px; }
+.toc-compact .dep4 .toc-mark { height: 9px; }
+.toc-compact .dep5 .toc-mark { height: 8px; }
 .toc-compact .toc-label { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
-/* 展开态标记收成短线段（v0.6.4）：层级信息改由文字缩进/字号承担，
-   线段仅作行首点缀——顶层略长、深层渐短，不再占据视觉高度 */
-.toc-compact:is(:hover, :focus-within) .toc-mark { width: 4px; background: var(--Fills-F4); }
-.toc-compact:is(:hover, :focus-within) .dep0 .toc-mark { height: 11px; }
-.toc-compact:is(:hover, :focus-within) .dep1 .toc-mark { height: 8px; }
-.toc-compact:is(:hover, :focus-within) .dep2 .toc-mark { height: 5px; }
-.toc-compact:is(:hover, :focus-within) .toc-label { display: block; flex: 1; }
-/* 展开态字号/字重随层级收敛（v0.6.3）：顶层加粗、深层渐小渐淡 */
+/* 展开态（v0.6.4 调整）：线段回到统一尺寸（4×18），并固定在同一条竖线上——
+   层级只由标题文字的缩进（--toc-pad 仅作用于 .toc-label）与字号字重表达 */
+.toc-compact:is(:hover, :focus-within) .toc-mark { width: 4px; height: 18px; background: var(--Fills-F4); }
+.toc-compact:is(:hover, :focus-within) .toc-label { display: block; flex: 1; margin-left: var(--toc-pad, 0px); }
+/* 展开态字号/字重随层级收敛（v0.6.4 全层级）：顶层加粗、深层渐小渐淡 */
 .toc-compact:is(:hover, :focus-within) .toc-item.dep0 { font-weight: var(--font-weight-semibold); color: var(--ink); font-size: 12.6px; }
-.toc-compact:is(:hover, :focus-within) .toc-item.dep1 { font-size: 12.2px; }
-.toc-compact:is(:hover, :focus-within) .toc-item.dep2 { font-size: 11.8px; color: var(--ink3); }
+.toc-compact:is(:hover, :focus-within) .toc-item.dep1 { font-size: 12.3px; }
+.toc-compact:is(:hover, :focus-within) .toc-item.dep2 { font-size: 12px; }
+.toc-compact:is(:hover, :focus-within) .toc-item.dep3 { font-size: 11.9px; color: var(--ink3); }
+.toc-compact:is(:hover, :focus-within) .toc-item.dep4 { font-size: 11.8px; color: var(--ink3); }
+.toc-compact:is(:hover, :focus-within) .toc-item.dep5 { font-size: 11.7px; color: var(--ink3); }
 .toc-compact .toc-item.active, .toc-compact .toc-item:hover { color: var(--accent); }
 .toc-compact .toc-item.active { font-weight: var(--font-weight-semibold); }
 .toc-compact .active .toc-mark, .toc-compact .toc-item:hover .toc-mark { background: var(--accent); }
