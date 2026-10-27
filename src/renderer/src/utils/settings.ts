@@ -18,7 +18,7 @@ export interface AppSettings {
   serifFont: boolean
   /** 打开文档的默认模式 */
   defaultMode: 'read' | 'source'
-  /** 打开文档时默认展开批注面板 */
+  /** 打开文档时默认展开批注面板（默认收起） */
   annPanelDefaultOpen: boolean
   /** 编辑器自动保存 */
   autoSave: boolean
@@ -37,7 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 16,
   serifFont: true,
   defaultMode: 'read',
-  annPanelDefaultOpen: true,
+  annPanelDefaultOpen: false,
   autoSave: false,
   autoSaveDelayMs: 2000,
   docFormats: ['md', 'html', 'txt'],
@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 }
 
 const SETTINGS_KEY = 'timber-settings'
+const ANN_DEFAULT_COLLAPSED_KEY = 'timber-ann-default-collapsed-v1'
 
 /** 清洗格式组勾选：剔除已下架的组（如 v0.4.5 移除的 json/yaml），清空则回默认 */
 function normalizeFormats(raw: unknown): string[] {
@@ -86,6 +87,8 @@ function normalizeAi(raw: unknown): AiSettings {
 
 export function loadSettings(): AppSettings {
   try {
+    const migrateAnnDefault = localStorage.getItem(ANN_DEFAULT_COLLAPSED_KEY) !== '1'
+    if (migrateAnnDefault) localStorage.setItem(ANN_DEFAULT_COLLAPSED_KEY, '1')
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (raw) {
       const saved = JSON.parse(raw) as Partial<Omit<AppSettings, 'defaultMode'>> & {
@@ -95,6 +98,7 @@ export function loadSettings(): AppSettings {
       return {
         ...DEFAULT_SETTINGS,
         ...saved,
+        annPanelDefaultOpen: migrateAnnDefault ? false : saved.annPanelDefaultOpen === true,
         theme: saved.theme === 'dark' || saved.theme === 'system' ? saved.theme : 'light',
         defaultMode: saved.defaultMode === 'source' || saved.defaultMode === 'edit' ? 'source' : 'read',
         docFormats: normalizeFormats(saved.docFormats),

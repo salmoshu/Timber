@@ -1,5 +1,5 @@
 import { askConfirm, askInput } from '../utils/dialogs'
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useStore } from '../store'
 import type { DocNode, Project, RemoteConfig } from '@shared/types'
 import Chevron from './Chevron'
@@ -7,7 +7,6 @@ import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
 import { HistoryList } from './HistoryView'
-import { CodeTree } from './CodeView'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
 import {
   blockPath,
@@ -66,6 +65,10 @@ function matchFilter(node: DocNode, f: string): boolean {
   return (node.children ?? []).some((c) => matchFilter(c, f))
 }
 
+type TreeEdit =
+  | { mode: 'create'; kind: 'file' | 'dir'; dir: string }
+  | { mode: 'rename'; node: DocNode }
+
 interface TreeCtx {
   projectId: string
   onMenu(e: ReactMouseEvent, node: DocNode, exactBlocked: boolean): void
@@ -78,6 +81,78 @@ interface TreeCtx {
   /** 「＋」新建的目标目录（点击目录行选中，null = 项目根） */
   selectedDir: string | null
   onSelectDir(target: string): void
+  edit: TreeEdit | null
+  editValue: string
+  onEditChange(value: string): void
+  onEditSubmit(): Promise<boolean>
+  onEditCancel(): void
+}
+
+function TreeNameInput({
+  value,
+  originalName,
+  selectStem,
+  onChange,
+  onSubmit,
+  onCancel
+}: {
+  value: string
+  originalName?: string
+  selectStem?: boolean
+  onChange(value: string): void
+  onSubmit(): Promise<boolean>
+  onCancel(): void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const cancelled = useRef(false)
+  const [pending, setPending] = useState(false)
+
+  useEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.focus()
+    const dot = selectStem && originalName ? originalName.lastIndexOf('.') : -1
+    input.setSelectionRange(0, dot > 0 ? dot : input.value.length)
+  }, [originalName, selectStem])
+
+  const submit = (): void => {
+    if (pending) return
+    setPending(true)
+    void onSubmit().then((ok) => {
+      if (!ok) {
+        setPending(false)
+        inputRef.current?.focus()
+      }
+    })
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className="tree-name-input"
+      value={value}
+      disabled={pending}
+      aria-label={originalName ? `重命名 ${originalName}` : '输入新名称'}
+      spellCheck={false}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        e.stopPropagation()
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          submit()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          cancelled.current = true
+          onCancel()
+        }
+      }}
+      onBlur={() => {
+        if (!cancelled.current) submit()
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+    />
+  )
 }
 
 function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: TreeCtx }) {
@@ -91,9 +166,25 @@ function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: Tre
   const blocked = isBlocked(ctx.projectId, node.path)
   const exactBlocked = isExactBlocked(ctx.projectId, node.path)
   const dragOver = ctx.dropTarget === node.path
+  const editing = ctx.edit?.mode === 'rename' && ctx.edit.node.path === node.path
 
   if (node.type === 'doc') {
     const active = activeDoc?.path === node.path
+    if (editing) {
+      return (
+        <div className={`tree-doc tree-editing ${active ? 'active' : ''}`} style={{ paddingLeft: 10 + depth * 14 }}>
+          <span className={`doc-icon ${extClass(node.ext)}`}>{extIcon(node.ext)}</span>
+          <TreeNameInput
+            value={ctx.editValue}
+            originalName={node.name}
+            selectStem
+            onChange={ctx.onEditChange}
+            onSubmit={ctx.onEditSubmit}
+            onCancel={ctx.onEditCancel}
+          />
+        </div>
+      )
+    }
     return (
       <button
         className={`tree-doc ${active ? 'active' : ''} ${blocked ? 'blocked' : ''}`}
@@ -127,45 +218,72 @@ function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: Tre
 
   return (
     <div>
-      <button
-        className={`tree-dir ${blocked ? 'blocked' : ''} ${dragOver ? 'drag-over' : ''} ${ctx.selectedDir === node.path ? 'sel' : ''}`}
-        style={{ paddingLeft: 10 + depth * 14 }}
-        draggable={!blocked}
-        onDragStart={(e) => {
-          dragNode = node
-          e.dataTransfer.effectAllowed = 'move'
-          e.dataTransfer.setData('text/plain', node.path)
-        }}
-        onDragEnd={() => {
-          dragNode = null
-          ctx.onDragLeaveDir()
-        }}
-        onDragOver={(e) => {
-          if (!dragNode || blocked) return
-          e.preventDefault()
-          e.dataTransfer.dropEffect = 'move'
-          ctx.onDragOverDir(node.path)
-        }}
-        onDragLeave={() => ctx.onDragLeaveDir()}
-        onDrop={(e) => {
-          e.preventDefault()
-          ctx.onDropInto(node.path)
-        }}
-        onClick={() => {
-          if (blocked) return
-          treeOpenState.set(node.path, !open)
-          ctx.onSelectDir(node.path)
-          force((v) => v + 1)
-        }}
-        onContextMenu={(e) => ctx.onMenu(e, node, exactBlocked)}
-      >
-        <Chevron open={open && !blocked} />
-        <span className="dir-name">{node.name}</span>
-        <span className="dir-count">{countDocs(node)}</span>
-      </button>
-      {open && !blocked && node.children?.map((c) => (
-        <TreeNode key={c.path} node={c} depth={depth + 1} ctx={ctx} />
-      ))}
+      {editing ? (
+        <div className="tree-dir tree-editing" style={{ paddingLeft: 10 + depth * 14 }}>
+          <Chevron open={open} />
+          <TreeNameInput
+            value={ctx.editValue}
+            originalName={node.name}
+            onChange={ctx.onEditChange}
+            onSubmit={ctx.onEditSubmit}
+            onCancel={ctx.onEditCancel}
+          />
+        </div>
+      ) : (
+        <button
+          className={`tree-dir ${blocked ? 'blocked' : ''} ${dragOver ? 'drag-over' : ''} ${ctx.selectedDir === node.path ? 'sel' : ''}`}
+          style={{ paddingLeft: 10 + depth * 14 }}
+          draggable={!blocked}
+          onDragStart={(e) => {
+            dragNode = node
+            e.dataTransfer.effectAllowed = 'move'
+            e.dataTransfer.setData('text/plain', node.path)
+          }}
+          onDragEnd={() => {
+            dragNode = null
+            ctx.onDragLeaveDir()
+          }}
+          onDragOver={(e) => {
+            if (!dragNode || blocked) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            ctx.onDragOverDir(node.path)
+          }}
+          onDragLeave={() => ctx.onDragLeaveDir()}
+          onDrop={(e) => {
+            e.preventDefault()
+            ctx.onDropInto(node.path)
+          }}
+          onClick={() => {
+            if (blocked) return
+            treeOpenState.set(node.path, !open)
+            ctx.onSelectDir(node.path)
+            force((v) => v + 1)
+          }}
+          onContextMenu={(e) => ctx.onMenu(e, node, exactBlocked)}
+        >
+          <Chevron open={open && !blocked} />
+          <span className="dir-name">{node.name}</span>
+          <span className="dir-count">{countDocs(node)}</span>
+        </button>
+      )}
+      {open && !blocked && (
+        <>
+          {ctx.edit?.mode === 'create' && ctx.edit.dir === node.path && (
+            <div className="tree-inline-row" style={{ paddingLeft: 10 + (depth + 1) * 14 }}>
+              <TreeNameInput
+                value={ctx.editValue}
+                onChange={ctx.onEditChange}
+                onSubmit={ctx.onEditSubmit}
+                onCancel={ctx.onEditCancel}
+              />
+            </div>
+          )}
+          {node.children?.map((c) => (
+            <TreeNode key={c.path} node={c} depth={depth + 1} ctx={ctx} />
+          ))}
+        </>
+      )}
     </div>
   )
 }
@@ -190,6 +308,8 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     rescan,
     tree,
     treeLoading,
+    codeTree,
+    codeTreeLoading,
     filter,
     setFilter,
     toast,
@@ -228,10 +348,14 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
   // 同一远程下的多个项目互不串扰（v0.5.7 修复点一个项目、全部转圈的问题）
   const [connecting, setConnecting] = useState<Set<string>>(new Set())
   const [dropTarget, setDropTarget] = useState<string | null>(null) // 拖拽放置目标（'' = 项目根）
-  // 新建文件/文件夹使用内联命名卡片。
-  const [namePrompt, setNamePrompt] = useState<{ kind: 'file' | 'dir'; dir: string } | null>(null)
+  const [treeEdit, setTreeEdit] = useState<TreeEdit | null>(null)
   const [nameValue, setNameValue] = useState('')
   const bump = () => setStoreRev((v) => v + 1)
+
+  useEffect(() => {
+    setTreeEdit(null)
+    setNameValue('')
+  }, [activeProjectId])
 
   const onReconnect = async (remoteId: string, projectId?: string) => {
     const key = projectId ? `${remoteId}:${projectId}` : remoteId
@@ -384,20 +508,9 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     })
   }
 
-  /** 重命名文件/目录（仅改最后一段名字，保持所在目录不变） */
-  const onRenameNode = async (node: DocNode) => {
-    const next = await askInput(`重命名「${node.name}」`, node.name)
-    if (next === null) return
-    const name = next.trim()
-    if (name === node.name) return
-    if (!validName(name)) {
-      toast('err', '名称不能为空，且不能包含 \\ / : * ? " < > | 或以 . 开头')
-      return
-    }
-    const parent = node.path.includes('/') ? node.path.slice(0, node.path.lastIndexOf('/')) : ''
-    if (await useStore.getState().fsOp('move', { from: node.path, to: joinPath(parent, name) })) {
-      toast('ok', `已重命名为「${name}」`)
-    }
+  const onRenameNode = (node: DocNode): void => {
+    setNameValue(node.name)
+    setTreeEdit({ mode: 'rename', node })
   }
 
   /** 复制副本：同名冲突时依次尝试「副本」「副本 2」…（最多 9） */
@@ -417,34 +530,46 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     toast('err', '未能创建副本（同名文件过多）')
   }
 
-  /** 打开新建命名输入卡（dir 为 '' 表示项目根） */
   const openNamePrompt = (kind: 'file' | 'dir', dir: string): void => {
+    if (dir !== '') treeOpenState.set(dir, true)
+    setSelectedDir(dir)
     setNameValue('')
-    setNamePrompt({ kind, dir })
+    setTreeEdit({ mode: 'create', kind, dir })
   }
 
-  /** 提交新建：文件无扩展名自动补 .md；重名/越界由 sidecar 报错（fsOp 失败已 toast，卡片保留便于改名重试） */
-  const submitNamePrompt = async (): Promise<void> => {
-    if (!namePrompt) return
+  const submitTreeEdit = async (): Promise<boolean> => {
+    if (!treeEdit) return true
     let name = nameValue.trim()
+    if (treeEdit.mode === 'rename' && name === treeEdit.node.name) {
+      setTreeEdit(null)
+      return true
+    }
     if (!validName(name)) {
       toast('err', '名称不能为空，且不能包含 \\ / : * ? " < > | 或以 . 开头')
-      return
+      return false
     }
-    if (namePrompt.dir !== '') treeOpenState.set(namePrompt.dir, true)
-    if (namePrompt.kind === 'file') {
+    if (treeEdit.mode === 'rename') {
+      const node = treeEdit.node
+      const parent = node.path.includes('/') ? node.path.slice(0, node.path.lastIndexOf('/')) : ''
+      if (!await useStore.getState().fsOp('move', { from: node.path, to: joinPath(parent, name) })) return false
+      setTreeEdit(null)
+      toast('ok', `已重命名为「${name}」`)
+      return true
+    }
+    if (treeEdit.kind === 'file') {
       if (!name.includes('.')) name = `${name}.md`
-      const to = joinPath(namePrompt.dir, name)
+      const to = joinPath(treeEdit.dir, name)
       const title = name.replace(/\.(md|markdown|txt)$/i, '')
-      if (await useStore.getState().fsOp('create', { to, content: `# ${title}\n\n` })) {
-        toast('ok', `已创建「${name}」`)
-        setNamePrompt(null)
-        void useStore.getState().openDoc(to)
-      }
-    } else if (await useStore.getState().fsOp('mkdir', { to: joinPath(namePrompt.dir, name) })) {
-      toast('ok', `已创建文件夹「${name}」`)
-      setNamePrompt(null)
+      if (!await useStore.getState().fsOp('create', { to, content: `# ${title}\n\n` })) return false
+      setTreeEdit(null)
+      toast('ok', `已创建「${name}」`)
+      void useStore.getState().openDoc(to)
+      return true
     }
+    if (!await useStore.getState().fsOp('mkdir', { to: joinPath(treeEdit.dir, name) })) return false
+    setTreeEdit(null)
+    toast('ok', `已创建文件夹「${name}」`)
+    return true
   }
 
   const onDeleteNode = async (node: DocNode) => {
@@ -488,12 +613,12 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
         label: '打开文档',
         onClick: () => void useStore.getState().openDoc(node.path)
       })
-      items.push({ key: 'rename', label: '重命名…', onClick: () => void onRenameNode(node) })
+      items.push({ key: 'rename', label: '重命名', onClick: () => onRenameNode(node) })
       items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
     } else {
-      items.push({ key: 'newdoc', label: '新建文件…', onClick: () => openNamePrompt('file', node.path) })
-      items.push({ key: 'newdir', label: '新建文件夹…', onClick: () => openNamePrompt('dir', node.path) })
-      items.push({ key: 'rename', label: '重命名…', separatorBefore: true, onClick: () => void onRenameNode(node) })
+      items.push({ key: 'newdoc', label: '新建文件', onClick: () => openNamePrompt('file', node.path) })
+      items.push({ key: 'newdir', label: '新建文件夹', onClick: () => openNamePrompt('dir', node.path) })
+      items.push({ key: 'rename', label: '重命名', separatorBefore: true, onClick: () => onRenameNode(node) })
       items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
     }
     items.push({
@@ -540,6 +665,9 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
 
   const visibleProjects = projects.filter((p) => showHidden || !hiddenIds.includes(p.id))
   const hiddenCount = projects.filter((p) => hiddenIds.includes(p.id)).length
+  const docsOnly = active ? filterDocsForProject(settings, active) : false
+  const shownTree = docsOnly ? tree : codeTree
+  const shownTreeLoading = docsOnly ? treeLoading : codeTreeLoading
   // 未连接的远程连接：重启后不自动重连，占位显示 + ⟳ 手动重连（zcode 式）；
   // v0.5.6 起分项目管理——连接在线但仅部分项目接入时，其余项目同样显示占位
   const disconnectedRemotes = remotes
@@ -698,8 +826,8 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                       x: e.clientX,
                       y: e.clientY,
                       items: [
-                        { key: 'newfile', label: '新建文件…', onClick: () => openNamePrompt('file', selectedDir ?? '') },
-                        { key: 'newdir', label: '新建文件夹…', onClick: () => openNamePrompt('dir', selectedDir ?? '') }
+                        { key: 'newfile', label: '新建文件', onClick: () => openNamePrompt('file', selectedDir ?? '') },
+                        { key: 'newdir', label: '新建文件夹', onClick: () => openNamePrompt('dir', selectedDir ?? '') }
                       ]
                     })
                   }
@@ -712,39 +840,6 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
               </div>
             </div>
           </div>
-
-          {namePrompt && (
-            <div className="sb-newfile-card">
-              <div className="sb-newfile-title">
-                {namePrompt.kind === 'file' ? '新建文件' : '新建文件夹'}
-                {namePrompt.dir ? `（${namePrompt.dir} 下）` : '（项目根）'}
-              </div>
-              <input
-                autoFocus
-                value={nameValue}
-                onChange={(e) => setNameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    void submitNamePrompt()
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault()
-                    setNamePrompt(null)
-                  }
-                }}
-                placeholder={namePrompt.kind === 'file' ? '文件名（无扩展名自动补 .md）' : '文件夹名'}
-                spellCheck={false}
-              />
-              <div className="sb-newfile-ops">
-                <button className="btn-primary sm" onClick={() => void submitNamePrompt()}>
-                  创建
-                </button>
-                <button className="btn-ghost sm" onClick={() => setNamePrompt(null)}>
-                  取消
-                </button>
-              </div>
-            </div>
-          )}
 
           <div className="sb-tabs">
             <button
@@ -766,44 +861,54 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
           </div>
 
           {tab === 'docs' ? (
-            // 项目级过滤：文档（默认记录为 true 时）或全部源码文件树（无记录/关）
-            filterDocsForProject(settings, active) ? (
             <>
               <div className="sb-filter">
                 <input
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  placeholder="过滤文档名…"
+                  placeholder={docsOnly ? '过滤文档名…' : '搜索文件…'}
                   spellCheck={false}
                 />
               </div>
               <div className="sb-tree">
-                {treeLoading && <div className="sb-empty">扫描中…</div>}
-                {!treeLoading && tree && (tree.children?.length ?? 0) === 0 && (
-                  <div className="sb-empty">未找到 Markdown / HTML / TXT 文档</div>
+                {shownTreeLoading && <div className="sb-empty">扫描中…</div>}
+                {!shownTreeLoading && shownTree && (shownTree.children?.length ?? 0) === 0 && (
+                  <div className="sb-empty">{docsOnly ? '未找到 Markdown / HTML / TXT 文档' : '无匹配文件'}</div>
                 )}
-                {tree?.children?.map((c) => (
-                    <TreeNode
-                      key={c.path}
-                      node={c}
-                      depth={0}
-                      ctx={{
-                        projectId: active.id,
-                        onMenu: treeMenu,
-                        dropTarget,
-                        onDropInto: (t) => void onDropInto(t),
-                        onDragOverDir: (t) => setDropTarget((cur) => (cur === t ? cur : t)),
-                        onDragLeaveDir: () => setDropTarget(null),
-                        selectedDir,
-                        onSelectDir: (t) => setSelectedDir(t)
-                      }}
+                {treeEdit?.mode === 'create' && treeEdit.dir === '' && (
+                  <div className="tree-inline-row" style={{ paddingLeft: 10 }}>
+                    <TreeNameInput
+                      value={nameValue}
+                      onChange={setNameValue}
+                      onSubmit={submitTreeEdit}
+                      onCancel={() => setTreeEdit(null)}
                     />
-                  ))}
+                  </div>
+                )}
+                {shownTree?.children?.map((c) => (
+                  <TreeNode
+                    key={c.path}
+                    node={c}
+                    depth={0}
+                    ctx={{
+                      projectId: active.id,
+                      onMenu: treeMenu,
+                      dropTarget,
+                      onDropInto: (t) => void onDropInto(t),
+                      onDragOverDir: (t) => setDropTarget((cur) => (cur === t ? cur : t)),
+                      onDragLeaveDir: () => setDropTarget(null),
+                      selectedDir,
+                      onSelectDir: (t) => setSelectedDir(t),
+                      edit: treeEdit,
+                      editValue: nameValue,
+                      onEditChange: setNameValue,
+                      onEditSubmit: submitTreeEdit,
+                      onEditCancel: () => setTreeEdit(null)
+                    }}
+                  />
+                ))}
               </div>
             </>
-            ) : (
-              <CodeTree />
-            )
           ) : tab === 'search' ? (
             <div className="sb-tree git-tree">
               <SearchPanel projectId={active.id} />

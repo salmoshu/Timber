@@ -241,19 +241,16 @@ input, textarea { user-select: text; }
 .sb-tabs button.icon-tab { flex: 0 0 auto; padding: 5px 12px; font-size: 13px; }
 .sb-tabs button.icon-tab.active { background: transparent; color: var(--accent); }
 
-/* 「＋」新建命名卡（v0.5.9） */
 .tree-dir.sel { background: var(--sb-hover); }
-.sb-newfile-card {
-  margin: 2px 12px 8px; padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px;
-  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg);
+.tree-inline-row { display: flex; align-items: center; padding-top: 3px; padding-bottom: 3px; padding-right: 8px; }
+.tree-editing { padding-right: 8px; cursor: text; }
+.tree-name-input {
+  flex: 1; min-width: 0; height: 22px; padding: 1px 5px;
+  border: 1px solid var(--accent); border-radius: var(--radius-sm); outline: none;
+  background: var(--bg); color: var(--ink); font: inherit;
+  box-shadow: 0 0 0 2px var(--Others-KMBlue10);
 }
-.sb-newfile-title { font-size: 12px; color: var(--ink3); }
-.sb-newfile-card input {
-  width: 100%; border: 1px solid var(--line); border-radius: var(--radius-input);
-  background: var(--bg); color: var(--ink); font-size: 13px; padding: 5px 8px; outline: none;
-}
-.sb-newfile-card input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--Others-KMBlue10); }
-.sb-newfile-ops { display: flex; gap: 8px; justify-content: flex-end; }
+.tree-name-input:disabled { opacity: 0.65; }
 
 /* ---- 右键菜单（毛玻璃浮层） ---- */
 .ctx-menu {

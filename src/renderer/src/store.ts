@@ -829,7 +829,7 @@ export const useStore = create<State>((set, get) => ({
   async init() {
     const settings = get().settings
     applyAppearance(settings)
-    set({ annPanelOpen: true })
+    set({ sidebarCollapsed: false, annPanelOpen: true })
     startActiveDocWatcher()
     try {
       const r = await api<{ projects: Project[] }>('GET', '/api/projects')
