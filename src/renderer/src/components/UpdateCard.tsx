@@ -33,7 +33,10 @@ export default function UpdateCard() {
         setSessionHidden(false)
         setManualDownloading(false)
       } else if (e.type === 'download-progress') {
-        setEvent(e)
+        setEvent((prev) => {
+          const percent = Math.max(prev?.percent ?? 0, e.percent ?? 0)
+          return { ...e, version: e.version ?? prev?.version, percent }
+        })
       } else if (e.type === 'update-downloaded') {
         setEvent(e)
         setSessionHidden(false)

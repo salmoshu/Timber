@@ -79,5 +79,5 @@ export function scrollToRange(range: Range): void {
   if (!body) return
   const rect = range.getBoundingClientRect()
   const top = rect.top - body.getBoundingClientRect().top + body.scrollTop
-  smoothScrollTo(body, Math.max(0, top - body.clientHeight / 2 + rect.height / 2))
+  smoothScrollTo(body, Math.max(0, top - body.clientHeight / 2 + rect.height / 2), 120)
 }

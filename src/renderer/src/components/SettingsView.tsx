@@ -64,11 +64,17 @@ export default function SettingsView() {
     setUpdaterPrefs(loadUpdaterPrefs())
     if (!bridge) return
     return bridge.onUpdateStatus((e) => {
-      setUpdaterState((prev) =>
-        e.type === 'download-progress' || e.type === 'update-downloaded'
-          ? { ...e, version: e.version ?? prev?.version }
-          : e
-      )
+      setUpdaterState((prev) => {
+        if (e.type === 'download-progress') {
+          return {
+            ...e,
+            version: e.version ?? prev?.version,
+            percent: Math.max(prev?.percent ?? 0, e.percent ?? 0)
+          }
+        }
+        if (e.type === 'update-downloaded') return { ...e, version: e.version ?? prev?.version, percent: 100 }
+        return e
+      })
       if (e.type === 'checking') {
         setChecking(true)
       } else {
@@ -253,16 +259,6 @@ export default function SettingsView() {
               </div>
             </div>
 
-            <div className="st-row">
-              <div className="st-label">默认显示正文批注</div>
-              <button
-                className={`switch ${settings.annPanelDefaultOpen ? 'on' : ''}`}
-                onClick={() => setSetting('annPanelDefaultOpen', !settings.annPanelDefaultOpen)}
-              >
-                <span className="switch-dot" />
-              </button>
-              <div className="st-hint">在正文右侧留白显示标签、笔记与批注</div>
-            </div>
           </div>
         )}
 

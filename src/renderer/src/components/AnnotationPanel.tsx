@@ -1,5 +1,5 @@
 import { askConfirm } from '../utils/dialogs'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { ANNOTATION_KIND_LABELS, type Annotation, type AnnotationKind, type DocContent } from '@shared/types'
 import { scrollToEl } from '../utils/scroll'
@@ -132,14 +132,19 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   }, [activeDoc?.path, activeDoc?.content, mode])
 
   useEffect(() => {
-    if (mode === 'source') setToc(buildTocFromSource(draft))
+    if (mode !== 'source') return
+    const timer = window.setTimeout(() => setToc(buildTocFromSource(draft)), 50)
+    return () => window.clearTimeout(timer)
   }, [mode, draft, activeDoc?.path])
 
   // 滚动时高亮当前所在章节（阅读模式取视口内最后一个标题；编辑模式按行号推算）
   useEffect(() => {
     const body = document.querySelector('.reader-body')
     if (!body || toc.length === 0) return
-    const onScroll = (): void => {
+    let raf = 0
+    const activeRef = { current: 0 }
+    const update = (): void => {
+      raf = 0
       if (mode === 'source') {
         const textarea = document.querySelector<HTMLTextAreaElement>('.editor-plain')
         if (!textarea) return
@@ -148,18 +153,21 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
         const cur = Math.floor((body.scrollTop + body.clientHeight / 2 - textTop) / lineHeight)
         let current = 0
         toc.forEach((h, index) => { if (h.line !== undefined && h.line <= cur) current = index })
-        setActiveIndex(current)
+        if (activeRef.current !== current) { activeRef.current = current; setActiveIndex(current) }
         return
       }
       const headings = document.querySelectorAll('.prose h1,.prose h2,.prose h3,.prose h4,.prose h5,.prose h6')
       const line = body.getBoundingClientRect().top + 80
       let current = 0
       headings.forEach((h, index) => { if (h.getBoundingClientRect().top <= line) current = index })
-      setActiveIndex(current)
+      if (activeRef.current !== current) { activeRef.current = current; setActiveIndex(current) }
+    }
+    const onScroll = (): void => {
+      if (!raf) raf = requestAnimationFrame(update)
     }
     body.addEventListener('scroll', onScroll, { passive: true })
-    onScroll()
-    return () => body.removeEventListener('scroll', onScroll)
+    update()
+    return () => { body.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf) }
   }, [toc, mode])
 
   if (toc.length === 0) {
@@ -202,20 +210,18 @@ export function DocumentOutline() {
 const KIND_ICONS: Record<AnnotationKind, string> = { tag: '🏷', note: '📝', annotation: '✎' }
 
 export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e: React.MouseEvent<HTMLDivElement>) => void }) {
-  const {
-    annotations,
-    composeQuote,
-    setComposeQuote,
-    createAnnotation,
-    setAnnStatus,
-    editAnnotation,
-    deleteAnnotation,
-    activeDoc,
-    projects,
-    activeProjectId,
-    toast,
-    mode
-  } = useStore()
+  const annotations = useStore((s) => s.annotations)
+  const composeQuote = useStore((s) => s.composeQuote)
+  const setComposeQuote = useStore((s) => s.setComposeQuote)
+  const createAnnotation = useStore((s) => s.createAnnotation)
+  const setAnnStatus = useStore((s) => s.setAnnStatus)
+  const editAnnotation = useStore((s) => s.editAnnotation)
+  const deleteAnnotation = useStore((s) => s.deleteAnnotation)
+  const activeDoc = useStore((s) => s.activeDoc)
+  const projects = useStore((s) => s.projects)
+  const activeProjectId = useStore((s) => s.activeProjectId)
+  const toast = useStore((s) => s.toast)
+  const mode = useStore((s) => s.mode)
   const [draft, setDraft] = useState('')
   const [kind, setKind] = useState<AnnotationKind>('annotation')
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)

@@ -30,30 +30,32 @@ function locateKeyword(keyword: string): boolean {
 }
 
 export default function Reader() {
-  const showAnnotations = useStore((s) => s.settings.annPanelDefaultOpen)
-  const [marginExpanded, setMarginExpanded] = useState(showAnnotations)
+  const [marginExpanded, setMarginExpanded] = useState(false)
   const [marginHidden, setMarginHidden] = useState(false)
   const [marginWidth, setMarginWidth] = useState(190)
   const composeQuote = useStore((s) => s.composeQuote)
-  const annotationsOpen = !marginHidden && (showAnnotations || !!composeQuote)
+  const activeDoc = useStore((s) => s.activeDoc)
+  const docLoading = useStore((s) => s.docLoading)
+  const docError = useStore((s) => s.docError)
+  const mode = useStore((s) => s.mode)
+  const setMode = useStore((s) => s.setMode)
+  const pendingLocate = useStore((s) => s.pendingLocate)
+  const dirty = useStore((s) => s.dirty)
+  const saving = useStore((s) => s.saving)
+  const saveDoc = useStore((s) => s.saveDoc)
+  const refreshActiveDoc = useStore((s) => s.refreshActiveDoc)
+  const annotations = useStore((s) => s.annotations)
+  const setComposeQuote = useStore((s) => s.setComposeQuote)
+  const activeProjectId = useStore((s) => s.activeProjectId)
+  const activeTabId = useStore((s) => s.activeTabId)
+  const closeTab = useStore((s) => s.closeTab)
+  const annotationsOpen = !marginHidden && marginExpanded
+  // 批注展开是当前文档的临时 UI 状态：打开新文档时始终回到收起状态。
+  useEffect(() => {
+    setMarginExpanded(false)
+    setMarginHidden(false)
+  }, [activeDoc?.path])
   useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
-  const {
-    activeDoc,
-    docLoading,
-    docError,
-    mode,
-    setMode,
-    pendingLocate,
-    dirty,
-    saving,
-    saveDoc,
-    refreshActiveDoc,
-    annotations,
-    setComposeQuote,
-    activeProjectId,
-    activeTabId,
-    closeTab
-  } = useStore()
 
   const proseWrapRef = useRef<HTMLDivElement>(null)
   const [pop, setPop] = useState<{ x: number; y: number; below?: boolean } | null>(null)
@@ -344,7 +346,6 @@ export default function Reader() {
               } else {
                 setMarginExpanded(true)
                 setMarginHidden(false)
-                if (!showAnnotations) useStore.getState().setSetting('annPanelDefaultOpen', true)
               }
             }}
           >
@@ -380,7 +381,6 @@ export default function Reader() {
             onSelectAnn={() => {
               setMarginExpanded(true)
               setMarginHidden(false)
-              if (!showAnnotations) useStore.getState().setSetting('annPanelDefaultOpen', true)
             }}
           />
         ) : isImage ? (

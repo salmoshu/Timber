@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Vditor from 'vditor'
 import hljs from 'highlight.js/lib/common'
@@ -484,7 +484,7 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
 }
 
 /** 阅读模式：保留渲染排版，正文始终可编辑，双击仅执行正常的文字选择。 */
-export default function MarkdownView({ annotations, onSelectAnn }: Props) {
+function MarkdownView({ annotations, onSelectAnn }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const themeSetting = useStore((state) => state.settings.theme)
   const [sysDark, setSysDark] = useState(systemPrefersDark())
@@ -546,7 +546,7 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
     let lastValue = ''
     let lastDraft = useStore.getState().draft
     let syncingFromEditor = false
-    let frame = 0
+    let refreshTimer = 0
     let unsubscribe: (() => void) | undefined
     let annotationRanges: { annotation: Annotation; range: Range }[] = []
     let popObserver: MutationObserver | undefined
@@ -697,22 +697,16 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       window.dispatchEvent(new Event('markdown-rendered'))
     }
     refreshRef.current = refresh
-    // rAF 在窗口被系统判定为隐藏/完全遮挡时（Windows 遮挡冻结、最小化）不再触发，
-    // 用 setTimeout 兜底，保证渲染补丁在任何窗口状态下最终都会执行；
-    // 可见时 rAF 先到（约一帧），兜底计时器被清除，不会重复执行
-    let refreshFallback = 0
+    // 输入时不要在每个 MutationRecord 上同步做完整 DOM 扫描。
+    // Vditor 自己负责即时更新编辑表面，Timber 的安全清洗/高亮等增强工作
+    // 在短暂空闲后合并执行，避免连续输入时抢占主线程。
     const scheduleRefresh = (): void => {
-      cancelAnimationFrame(frame)
-      clearTimeout(refreshFallback)
-      frame = requestAnimationFrame(() => {
-        clearTimeout(refreshFallback)
-        refresh()
-      })
-      refreshFallback = window.setTimeout(refresh, 160)
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(refresh, 90)
     }
     const observer = new MutationObserver(scheduleRefresh)
     // 侧栏/批注面板开合、窗口缩放都会改版式；--prose-left 需同步刷新
-    const resizeObserver = new ResizeObserver(() => refresh())
+    const resizeObserver = new ResizeObserver(scheduleRefresh)
     resizeObserver.observe(container)
 
     // ---- 代码块悬浮「复制」按钮：mouseover/mouseout 事件委托，不改动 Vditor 的 pre DOM ----
@@ -1079,8 +1073,7 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
       observer.disconnect()
       popObserver?.disconnect()
       resizeObserver.disconnect()
-      cancelAnimationFrame(frame)
-      clearTimeout(refreshFallback)
+      window.clearTimeout(refreshTimer)
       container.removeEventListener('input', onInput)
       container.removeEventListener('compositionend', syncDraft)
       container.removeEventListener('focusout', syncDraft)
@@ -1145,6 +1138,10 @@ export default function MarkdownView({ annotations, onSelectAnn }: Props) {
     </>
   )
 }
+
+// 草稿每个字符变化时，正文编辑器本身已经由 Vditor 维护；
+// 避免 Reader 的其他状态更新让这个重组件再次参与 React render。
+export default memo(MarkdownView)
 
 /** 计算选区在渲染全文中的 quote/prefix/suffix。 */
 export function selectionAnchor(container: HTMLElement): { quote: string; prefix: string; suffix: string } | null {

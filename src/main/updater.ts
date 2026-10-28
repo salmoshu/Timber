@@ -55,6 +55,13 @@ export class UpdateService {
   private wired = false
   private prefsReceived = false
   private autoCheckDone = false
+  /** electron-updater 可能在同一更新会话中重复发出较小的 percent；
+   *  保留单调进度，避免 UI 到 100% 后又回到 0%。 */
+  private downloadVersion: string | undefined
+  private downloadPercent = 0
+  private downloadStarted = false
+  private downloadComplete = false
+  private downloadPromise: Promise<void> | null = null
 
   attach(target: UpdateStatusTarget): void {
     this.target = target
@@ -86,7 +93,21 @@ export class UpdateService {
     if (!app.isPackaged) {
       throw new Error('当前为开发环境，更新需在打包版本中运行')
     }
-    await autoUpdater.downloadUpdate()
+    if (this.downloadComplete) return
+    if (this.downloadPromise) return this.downloadPromise
+    if (this.downloadStarted) return
+    this.downloadStarted = true
+    this.downloadPromise = autoUpdater
+      .downloadUpdate()
+      .then(() => undefined)
+      .catch((error) => {
+        this.downloadStarted = false
+        throw error
+      })
+      .finally(() => {
+        this.downloadPromise = null
+      })
+    return this.downloadPromise
   }
 
   /** 静默安装（/S）：沿用上次的安装目录与安装方式（NSIS 注册表记忆），跳过安装选项页；
@@ -101,6 +122,12 @@ export class UpdateService {
 
     autoUpdater.on('checking-for-update', () => this.send({ type: 'checking' }))
     autoUpdater.on('update-available', (info) => {
+      if (this.downloadVersion !== info.version) {
+        this.downloadVersion = info.version
+        this.downloadPercent = 0
+        this.downloadComplete = false
+        this.downloadStarted = this.prefs.autoDownload
+      }
       const notes = cleanReleaseNotes(info.releaseNotes)
       this.send({
         type: 'update-available',
@@ -108,16 +135,29 @@ export class UpdateService {
         releaseNotes: notes ? (extractReleaseNotesSection(notes, info.version) ?? notes) : undefined
       })
     })
-    autoUpdater.on('update-not-available', () => this.send({ type: 'update-not-available' }))
-    autoUpdater.on('download-progress', (progress) =>
-      this.send({ type: 'download-progress', percent: Math.floor(progress.percent) })
-    )
-    autoUpdater.on('update-downloaded', (info) =>
+    autoUpdater.on('update-not-available', () => {
+      this.resetDownloadState()
+      this.send({ type: 'update-not-available' })
+    })
+    autoUpdater.on('download-progress', (progress) => {
+      if (this.downloadComplete) return
+      const percent = Math.max(this.downloadPercent, Math.min(100, Math.floor(progress.percent)))
+      this.downloadStarted = true
+      if (percent === this.downloadPercent) return
+      this.downloadPercent = percent
+      this.send({ type: 'download-progress', percent })
+    })
+    autoUpdater.on('update-downloaded', (info) => {
+      this.downloadVersion = info.version
+      this.downloadPercent = 100
+      this.downloadStarted = true
+      this.downloadComplete = true
       this.send({ type: 'update-downloaded', version: info.version })
-    )
-    autoUpdater.on('error', (err) =>
+    })
+    autoUpdater.on('error', (err) => {
+      this.resetDownloadState()
       this.send({ type: 'error', message: err?.message ?? String(err) })
-    )
+    })
 
     autoUpdater.autoDownload = this.prefs.autoDownload
     autoUpdater.autoInstallOnAppQuit = true
@@ -136,5 +176,13 @@ export class UpdateService {
     if (this.target && !this.target.isDestroyed()) {
       this.target.send(UPDATE_STATUS_CHANNEL, payload)
     }
+  }
+
+  private resetDownloadState(): void {
+    this.downloadVersion = undefined
+    this.downloadPercent = 0
+    this.downloadStarted = false
+    this.downloadComplete = false
+    this.downloadPromise = null
   }
 }

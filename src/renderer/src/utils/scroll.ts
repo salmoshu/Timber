@@ -1,7 +1,7 @@
 // 平滑滚动工具：scrollIntoView({ behavior: 'smooth' }) 在部分嵌入环境（IAB）
 // 静默无效，统一改用 rAF 动画，效果一致且环境无关。
 
-export function smoothScrollTo(container: HTMLElement, targetTop: number, duration = 300): void {
+export function smoothScrollTo(container: HTMLElement, targetTop: number, duration = 120): void {
   const start = container.scrollTop
   const delta = targetTop - start
   if (Math.abs(delta) < 2 || duration <= 0) {
@@ -19,7 +19,7 @@ export function smoothScrollTo(container: HTMLElement, targetTop: number, durati
 }
 
 /** 滚动阅读区使元素可见：默认顶部对齐，center 时居中 */
-export function scrollToEl(el: Element, opts?: { center?: boolean }): void {
+export function scrollToEl(el: Element, opts?: { center?: boolean; duration?: number }): void {
   const container = el.closest('.reader-body') as HTMLElement | null
   if (!container) {
     el.scrollIntoView({ block: opts?.center ? 'center' : 'start' })
@@ -31,5 +31,5 @@ export function scrollToEl(el: Element, opts?: { center?: boolean }): void {
   const target = opts?.center
     ? current - container.clientHeight / 2 + elRect.height / 2
     : current - 12
-  smoothScrollTo(container, Math.max(0, target))
+  smoothScrollTo(container, Math.max(0, target), opts?.duration ?? 120)
 }
