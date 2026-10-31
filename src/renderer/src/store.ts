@@ -15,6 +15,7 @@ import {
   type LogLine
 } from './utils/remote'
 import { applyAppearance, loadSettings, saveSettings, type AppSettings } from './utils/settings'
+import { pruneRecentFiles, pushRecentFile, remapRecentFiles } from './utils/local-store'
 import { DOC_FORMAT_GROUPS } from '@shared/types'
 
 /** 当前设置选中的扩展名列表（拼到 tree/rescan/search 请求） */
@@ -1426,12 +1427,14 @@ export const useStore = create<State>((set, get) => ({
       }))
       const activeDocPath = s.activeDoc ? remap(s.activeDoc.path) : null
       set({ tabs, activeDoc: s.activeDoc ? { ...s.activeDoc, path: activeDocPath ?? s.activeDoc.path } : s.activeDoc })
+      remapRecentFiles(projectId, from, to)
       if (s.activeDoc && activeDocPath !== s.activeDoc.path) await get().loadAnnotations()
     }
 
     // 删除：关闭被删路径下的标签（含活动标签，关完落回首个标签）
     if (op === 'delete' && args.from) {
       const from = args.from
+      pruneRecentFiles(projectId, from)
       const under = (p: string): boolean => p === from || p.startsWith(from + '/')
       const tabs = s.tabs.filter((t) => !under(t.path))
       if (tabs.length !== s.tabs.length) {
@@ -1619,9 +1622,11 @@ async function loadTabInto(
     if (isImage) {
       set({ annotations: [] })
       cacheTabDoc(tab.id, cached, set, get)
+      pushRecentFile(projectId, tab.path)
       return
     }
     await get().loadAnnotations()
+    pushRecentFile(projectId, tab.path)
     restoreScroll(tab, get)
   }
 
@@ -1642,6 +1647,7 @@ async function loadTabInto(
       // 首载完成：呈现并恢复滚动位置
       const useDraft = fresh.dirty ? fresh.draft : doc.content
       set({ activeDoc: doc, draft: useDraft, dirty: fresh.dirty, docLoading: false })
+      pushRecentFile(projectId, tab.path)
       await get().loadAnnotations()
       restoreScroll(fresh, get)
     } else if (!fresh.dirty && (doc.mtime !== cached.mtime || doc.size !== cached.size)) {

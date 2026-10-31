@@ -5,10 +5,10 @@ import type { DocNode, Project, RemoteConfig } from '@shared/types'
 import Chevron from './Chevron'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
-import SearchPanel from './SearchPanel'
 import { HistoryList } from './HistoryView'
 import { exportActiveDocPdf } from '../utils/exportPdf'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
+import { clearRecentFiles, recentFiles } from '../utils/local-store'
 import {
   blockPath,
   hiddenProjectIds,
@@ -37,7 +37,7 @@ function joinPath(parent: string, name: string): string {
   return parent ? `${parent}/${name}` : name
 }
 
-type TreeTab = 'docs' | 'search' | 'git'
+type TreeTab = 'docs' | 'recent' | 'git'
 
 const EXT_ICONS: Record<string, string> = {
   '.md': 'MD', '.markdown': 'MD', '.mdown': 'MD', '.mkd': 'MD', '.mdx': 'MD',
@@ -303,6 +303,54 @@ function TreeNode({ node, depth, ctx }: { node: DocNode; depth: number; ctx: Tre
 function countDocs(node: DocNode): number {
   if (node.type === 'doc') return 1
   return (node.children ?? []).reduce((acc, c) => acc + countDocs(c), 0)
+}
+
+/** 最近打开文件面板（v0.6.8）：项目级最近记录，点击直接打开，可一键清空 */
+function RecentFilesPanel({ projectId }: { projectId: string }) {
+  const openDoc = useStore((s) => s.openDoc)
+  const activePath = useStore((s) => s.activeDoc?.path)
+  const [items, setItems] = useState<string[]>(() => recentFiles(projectId))
+  // 打开/切换文档会写入新记录（loadTabInto），随 activeDoc 变化刷新列表
+  useEffect(() => { setItems(recentFiles(projectId)) }, [projectId, activePath])
+  return (
+    <div className="rf-panel">
+      <div className="rf-head">
+        <span className="rf-title">最近打开</span>
+        {items.length > 0 && (
+          <button
+            className="rf-clear"
+            title="清空最近记录"
+            onClick={() => {
+              clearRecentFiles(projectId)
+              setItems([])
+            }}
+          >
+            清空
+          </button>
+        )}
+      </div>
+      <div className="rf-list">
+        {items.length === 0 && <div className="sb-empty">暂无记录；打开过的文件会按时间列在这里</div>}
+        {items.map((path) => {
+          const name = path.split('/').pop() ?? path
+          const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+          const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : undefined
+          return (
+            <button
+              key={path}
+              className={`rf-item ${activePath === path ? 'active' : ''}`}
+              title={path}
+              onClick={() => void openDoc(path)}
+            >
+              <span className={`doc-icon ${extClass(ext)}`}>{extIcon(ext)}</span>
+              <span className="rf-name">{name}</span>
+              {dir && <span className="rf-dir">{dir}</span>}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export default function Sidebar({ section = 'projects' }: { section?: 'projects' | 'files' | 'history' }) {
@@ -826,12 +874,14 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
             </div>
             <div className="sb-proj-head-right">
               <button
-                className={`pf-chip ${filterDocsForProject(settings, active) ? 'on' : ''}`}
+                className={`pf-chip pf-filter ${filterDocsForProject(settings, active) ? 'on' : ''}`}
                 title={
                   filterDocsForProject(settings, active)
                     ? '文件树：仅文档（点击显示全部文件）'
                     : '文件树：全部文件（点击仅显示文档）'
                 }
+                aria-label={filterDocsForProject(settings, active) ? '仅显示文档，点击显示全部' : '显示全部文件，点击仅显示文档'}
+                aria-pressed={filterDocsForProject(settings, active)}
                 onClick={() =>
                   setSetting('resourceFilterDocsByProject', {
                     ...settings.resourceFilterDocsByProject,
@@ -839,7 +889,10 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                   })
                 }
               >
-                {filterDocsForProject(settings, active) ? '文档' : '全部'}
+                {/* 过滤图标（v0.6.8）：激活=仅文档，空心=全部；无文字 */}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 5h18l-7 8.2V19l-4 2v-7.8L3 5Z" />
+                </svg>
               </button>
               <div className="sb-proj-ops">
                 <button
@@ -871,11 +924,11 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
               文件
             </button>
             <button
-              className={tab === 'search' ? 'active' : ''}
-              onClick={() => setTab('search')}
-              title="搜索项目文档内容"
+              className={tab === 'recent' ? 'active' : ''}
+              onClick={() => setTab('recent')}
+              title="最近打开的文件"
             >
-              搜索
+              最近
             </button>
             <button className={tab === 'git' ? 'active' : ''} onClick={() => setTab('git')}>
               Git
@@ -931,9 +984,9 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                 ))}
               </div>
             </>
-          ) : tab === 'search' ? (
+          ) : tab === 'recent' ? (
             <div className="sb-tree git-tree">
-              <SearchPanel projectId={active.id} />
+              <RecentFilesPanel projectId={active.id} />
             </div>
           ) : (
             <div className="sb-tree git-tree">

@@ -443,6 +443,25 @@ function parseMermaidSvg(svg: string): { w: number; h: number; html: string } | 
 
 const clampZoom = (v: number): number => Math.min(8, Math.max(0.1, v))
 
+/** 行首 Markdown 标记 → Md2VditorDOM 片段（v0.6.8）：
+ *  - * + → 无序列表；1. / 1) 等 → 有序列表；- [ ] / - [x] → 任务列表（ZWSP
+ *  占位让 Lute 生成 checkbox，序列化回 "- [ ]" 不残留占位符）；
+ *  # ~ ###### → 标题。引用（>）不转换：Lute 会丢弃空 blockquote，改走工具栏。
+ *  返回 null = 不是可转换标记。 */
+function markdownSnippetFor(marker: string): string | null {
+  if (/^[-*+]$/.test(marker)) return `${marker} \n`
+  if (/^\d{1,9}[.)]$/.test(marker)) return `${marker} \n`
+  if (/^- \[[ xX]\]$/.test(marker)) return `- [${/[xX]$/.test(marker) ? 'x' : ' '}] \u200b\n`
+  if (/^#{1,6}$/.test(marker)) return `${marker} \n`
+  return null
+}
+
+/** 列表项是否为“空项”（v0.6.8）：无文字内容、无图片/分隔线/子列表/嵌套块 */
+function isEmptyListItem(li: Element): boolean {
+  if (li.querySelector('img, hr, ul, ol, table, blockquote, pre, .vditor-wysiwyg__block')) return false
+  return !(li.textContent ?? '').replace(/[\u200b\n\r]/g, '').trim()
+}
+
 /** Mermaid 全屏查看浮层（v0.6.3，图片交互看齐正文图片 lightbox）：
  *  滚轮缩放（指向光标锚定）、拖拽平移、双击/底部按钮在「适应窗口」与 100% 间切换。 */
 function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void }) {
@@ -910,14 +929,83 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     container.addEventListener('mousemove', onTableHover)
     container.addEventListener('mouseleave', onTableLeave)
 
-    /** 回车接管（v0.6.4）：Chromium 对 contenteditable <pre> 根节点的回车默认行为
-     *  不可靠（实测在正文段末回车不产生新段，光标跳到下一块行首）。这里按
-     *  Typora/Word 语义手动拆块：光标后内容移入新块，光标落到拆分点后的行首；
-     *  块首回车产生上方空行，标题中段拆出同级标题、末尾拆出普通段落。
-     *  列表/表格/代码块/脚注等结构块仍交给 Vditor 原生处理。
+    /** 回车/空格接管（v0.6.4 引入，v0.6.8 扩展）：
+     *  - 空格：行首 Markdown 标记（- * + 1. # - [ ] 等）+ 空格即时转为对应块，
+     *    Typora/Obsidian 式“输入即预览”（引用因 Lute 丢弃空 blockquote 不做转换）；
+     *  - 回车：Chromium 对 contenteditable <pre> 根节点的默认行为不可靠（段末
+     *    回车不产生新段、空列表项回车跳回上一行末尾），按 Typora/Word 语义手动
+     *    拆块；空列表项回车去符号保留空行（嵌套时先升一级到父列表），继续回车
+     *    才真正新建空行；代码围栏/表格行/分隔线等源码片段交回 Vditor 原生转换；
+     *  列表内容回车新增项、表格/代码块内部等结构编辑仍交给 Vditor。
      *  走 capture 阶段拦截：先于 Vditor 挂在编辑器元素上的 keydown。 */
-    const onEnterKeydown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Enter' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    /** 空格分支：顶层段落内容恰为标记本身且光标在段末 → 转块（返回 false = 未处理） */
+    const convertMarkdownMarker = (event: KeyboardEvent): boolean => {
+      const prose = container.querySelector<HTMLElement>('.prose')
+      const selection = window.getSelection()
+      if (!prose || !selection || selection.rangeCount === 0) return false
+      const range = selection.getRangeAt(0)
+      if (!range.collapsed || !prose.contains(range.startContainer)) return false
+      const p = ((range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement
+        : range.startContainer) as HTMLElement | null)?.closest('p')
+      // 仅顶层空段落触发：列表/表格/代码块/引用内部不转换
+      if (!p || p.parentElement !== prose || p.getAttribute('data-block') !== '0') return false
+      if (p.querySelector('img, hr, .vditor-wysiwyg__block')) return false
+      const text = p.textContent ?? ''
+      // 光标必须在段末（段落全部内容 = 标记本身）
+      const before = range.cloneRange()
+      before.selectNodeContents(p)
+      before.setEnd(range.startContainer, range.startOffset)
+      if (!text || before.toString() !== text) return false
+      const snippet = markdownSnippetFor(text)
+      if (!snippet || !editor) return false
+      event.preventDefault()
+      event.stopPropagation()
+      const spun = editor.vditor.lute.Md2VditorDOM(snippet)
+      const anchor = document.createTextNode('')
+      p.before(anchor)
+      p.outerHTML = spun
+      const created = anchor.nextElementSibling as HTMLElement | null
+      anchor.remove()
+      // 光标落点：标题 → 标题内；列表 → 首个列表项（tight 列表项内无 p）；
+      // 任务项 → checkbox 之后（Lute 产出的 li 为 tight 形态）
+      let caret: HTMLElement | null = created?.matches('h1,h2,h3,h4,h5,h6')
+        ? created
+        : created?.querySelector('li') ?? created?.querySelector('p') ?? created
+      let afterInput = false
+      if (caret?.querySelector('input[type="checkbox"]')) afterInput = true
+      if (caret) {
+        const caretRange = document.createRange()
+        if (afterInput) caretRange.setStartAfter(caret.querySelector('input[type="checkbox"]')!)
+        else {
+          caretRange.selectNodeContents(caret)
+          caretRange.collapse(true)
+        }
+        caretRange.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(caretRange)
+      }
+      // 交回 Vditor 输入链路：Spin 重渲染、撤销入栈、草稿同步
+      prose.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }))
+      requestAnimationFrame(() => {
+        if (disposed || !caret?.isConnected) return
+        const after = document.createRange()
+        after.selectNodeContents(caret)
+        after.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(after)
+        caret.scrollIntoView({ block: 'nearest' })
+      })
+      return true
+    }
+
+    const onEditorKeydown = (event: KeyboardEvent): void => {
+      if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.key === ' ') {
+        if (!event.shiftKey) convertMarkdownMarker(event)
+        return
+      }
+      if (event.key !== 'Enter' || event.shiftKey) return
       if (!ready || !editor || disposed) return
       const hint = container.querySelector<HTMLElement>('.vditor-hint')
       if (hint && hint.style.display === 'block') return // 补全面板开着：回车用于选中候选
@@ -929,6 +1017,66 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       const anchorEl = (range.startContainer.nodeType === Node.TEXT_NODE
         ? range.startContainer.parentElement
         : range.startContainer) as HTMLElement | null
+
+      // ---- 空列表项回车（v0.6.8，Typora/Obsidian 语义）----
+      // 顶层：去掉列表符号转为空段落，光标停留在原位（此前会跳回上一行末尾）；
+      // 嵌套：先升一级成为父列表的同级项（呈现父级符号特性），再回车才退出列表。
+      // 退出后的空段落继续回车走下方通用拆块，即得到真正的多个空行。
+      const li = anchorEl?.closest('li') ?? null
+      if (
+        li && prose.contains(li) && isEmptyListItem(li) &&
+        !li.closest('.vditor-wysiwyg__block, [data-type="footnotes-block"], [data-type="link-ref-defs-block"]')
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
+        const list = li.parentElement as HTMLElement
+        const parentLi = list.parentElement?.closest('li') ?? null
+        let caretEl: HTMLElement
+        if (parentLi) {
+          // 嵌套：本项升级为父级列表项
+          parentLi.insertAdjacentElement('afterend', li)
+          if (!list.childElementCount) list.remove()
+          caretEl = li.querySelector('p') ?? li
+        } else {
+          // 顶层：符号去除转为空段落；列表中的后继项拆到新列表，保持顺序
+          const p = document.createElement('p')
+          p.setAttribute('data-block', '0')
+          p.innerHTML = '<br>'
+          if (li.nextElementSibling) {
+            const rest = list.cloneNode(false) as HTMLElement
+            let sibling: Element | null = li.nextElementSibling
+            while (sibling) {
+              const next: Element | null = sibling.nextElementSibling
+              rest.appendChild(sibling)
+              sibling = next
+            }
+            list.insertAdjacentElement('afterend', p)
+            p.insertAdjacentElement('afterend', rest)
+          } else {
+            list.insertAdjacentElement('afterend', p)
+          }
+          li.remove()
+          if (!list.childElementCount) list.remove()
+          caretEl = p
+        }
+        const caretRange = document.createRange()
+        caretRange.selectNodeContents(caretEl)
+        caretRange.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(caretRange)
+        prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
+        requestAnimationFrame(() => {
+          if (disposed || !caretEl.isConnected) return
+          const after = document.createRange()
+          after.selectNodeContents(caretEl)
+          after.collapse(true)
+          selection.removeAllRanges()
+          selection.addRange(after)
+          caretEl.scrollIntoView({ block: 'nearest' })
+        })
+        return
+      }
+
       let block = anchorEl?.closest('p, h1, h2, h3, h4, h5, h6')
       // 删除首个列表项后，Chromium 可能把光标表示为 prose 下、标题之后的块边界选区。
       // 此时视觉上光标就在标题右侧，应按标题末尾回车处理，而不是交还给失效的默认行为。
@@ -938,6 +1086,17 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       }
       if (!block || !prose.contains(block)) return
       if (block.closest('li, td, th, .vditor-wysiwyg__block, [data-type="footnotes-block"], [data-type="link-ref-defs-block"]')) return
+      // 源码片段回车不拦截（v0.6.8）：交回 Vditor 原生 Enter 转换。
+      // 代码围栏在输入 Spin 时即转代码块（此处仅兜底粘贴场景）；表格行走
+      // fixMarkdown 无位置条件；分隔线要求存在前块（与 fixMarkdown 的条件
+      // 一致），文首的 --- 不委派，避免落回浏览器默认回车行为。
+      if (block.tagName === 'P') {
+        const md = (block.textContent ?? '').replace(/\u200b/g, '').trim()
+        const fence = /^(`{3,}|~{3,})[^\s`]*$/.test(md)
+        const tableRow = md.startsWith('|') && md.endsWith('|') && md.split('|').length > 3
+        const hrLine = /^([-*_])( *?\1){2,} *$/.test(md)
+        if (fence || tableRow || (hrLine && block.previousElementSibling)) return
+      }
       // 引用块内空段回车 = 逐层跳出（Vditor 原生语义）
       const blockEmpty = !(block.textContent ?? '').replace(/\u200b/g, '').trim() && !block.querySelector('img')
       if (block.closest('blockquote') && blockEmpty) return
@@ -975,7 +1134,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         caretBlock.scrollIntoView({ block: 'nearest' })
       })
     }
-    container.addEventListener('keydown', onEnterKeydown, true)
+    container.addEventListener('keydown', onEditorKeydown, true)
 
     const syncDraft = (): void => {
       const state = useStore.getState()
@@ -1187,7 +1346,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       container.removeEventListener('mousedown', onTableMouseDown)
       container.removeEventListener('mousemove', onTableHover)
       container.removeEventListener('mouseleave', onTableLeave)
-      container.removeEventListener('keydown', onEnterKeydown, true)
+      container.removeEventListener('keydown', onEditorKeydown, true)
       codeCopyPreRef.current = null
       setCodeCopy(null)
       setTextHighlight('ann-open', [])

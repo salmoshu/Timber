@@ -101,3 +101,38 @@ export function archTheme(): 'light' | 'dark' | null {
 export function setArchTheme(t: 'light' | 'dark'): void {
   writeJSON(ARCH_THEME_KEY, t)
 }
+
+// ---- 最近打开的文件（项目级，v0.6.8；供右侧栏「最近」面板） ----
+
+const RECENT_PREFIX = 'timber-recent:'
+const RECENT_MAX = 20
+
+/** 最近打开记录（新→旧，最多 20 条） */
+export function recentFiles(projectId: string): string[] {
+  const v = readJSON<unknown[]>(RECENT_PREFIX + projectId, [])
+  return Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string' && p !== '').slice(0, RECENT_MAX) : []
+}
+
+/** 记录一次打开：去重后置顶，超限截断 */
+export function pushRecentFile(projectId: string, path: string): void {
+  if (!path) return
+  const list = [path, ...recentFiles(projectId).filter((p) => p !== path)].slice(0, RECENT_MAX)
+  writeJSON(RECENT_PREFIX + projectId, list)
+}
+
+/** 路径移动/重命名后同步最近记录（目录移动按前缀展开） */
+export function remapRecentFiles(projectId: string, from: string, to: string): void {
+  const remap = (p: string): string => (p === from ? to : p.startsWith(from + '/') ? to + p.slice(from.length) : p)
+  const list = recentFiles(projectId).map(remap)
+  writeJSON(RECENT_PREFIX + projectId, [...new Set(list)].slice(0, RECENT_MAX))
+}
+
+/** 删除文件/目录后清掉对应记录（含子路径） */
+export function pruneRecentFiles(projectId: string, from: string): void {
+  const under = (p: string): boolean => p === from || p.startsWith(from + '/')
+  writeJSON(RECENT_PREFIX + projectId, recentFiles(projectId).filter((p) => !under(p)))
+}
+
+export function clearRecentFiles(projectId: string): void {
+  localStorage.removeItem(RECENT_PREFIX + projectId)
+}
