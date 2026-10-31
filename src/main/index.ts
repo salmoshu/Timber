@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, nativeImage, net, session, shell } from 'electron'
 import { cpSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve, isAbsolute } from 'node:path'
@@ -178,6 +178,21 @@ ipcMain.handle('files:exists', (_e, path: string) => existsSync(path))
 
 ipcMain.handle('shell:reveal', (_e, p: string) => {
   shell.showItemInFolder(p)
+})
+
+ipcMain.handle('clipboard:write-image', async (_e, src: string) => {
+  let image
+  if (/^data:image\//i.test(src)) {
+    image = nativeImage.createFromDataURL(src)
+  } else if (/^https?:/i.test(src)) {
+    const response = await net.fetch(src)
+    if (!response.ok) throw new Error(`图片读取失败：HTTP ${response.status}`)
+    image = nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()))
+  } else {
+    throw new Error('仅支持 HTTP(S) 或 data URL 图片')
+  }
+  if (image.isEmpty()) throw new Error('无法识别该图片格式')
+  clipboard.writeImage(image)
 })
 
 // 浮层「用系统浏览器打开」；仅放行 http(s)

@@ -1,9 +1,10 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useStore, type DocTab } from '../store'
 import ContextMenu, { type MenuItem } from './ContextMenu'
+import { exportActiveDocPdf } from '../utils/exportPdf'
 
 /** 文档标签栏（VSCode 语义：斜体 = 预览标签，随单击复用；双击固定）；
- *  children 渲染为行右端操作区（全屏专注 / 阅读模式|编辑模式 / 保存等）。
+ *  children 渲染为行右端操作区（阅读模式|编辑模式 / 批注等）。
  *  多文档时仅 tab 区横向滚动（tab 先收缩到最小宽、再滚动），
  *  右端操作区固定在可视区，不被挤走；激活 tab 自动滚入可视范围。
  *  支持拖拽 tab 调整先后顺序（插入位置以强调色竖线提示）。
@@ -50,6 +51,17 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
         }
       }
     ]
+    if (window.timber && /\.(md|markdown|mdown|mkd)$/i.test(t.path)) {
+      items.push({
+        key: 'export-pdf',
+        label: '导出 PDF…',
+        separatorBefore: true,
+        onClick: () => void (async () => {
+          if (useStore.getState().activeTabId !== t.id) await activateTab(t.id)
+          if (useStore.getState().activeDoc?.path === t.path) await exportActiveDocPdf()
+        })()
+      })
+    }
     if (project && !project.remoteId) {
       items.push({
         key: 'reveal',

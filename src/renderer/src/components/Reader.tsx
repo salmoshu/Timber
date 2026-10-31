@@ -8,8 +8,7 @@ import TabsBar from './TabsBar'
 import FindBar from './FindBar'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { rawBaseFor, origProjectId } from '../store'
-import { IconAnnotation, IconExportPdf, IconSave } from './icons'
-import { exportActiveDocPdf } from '../utils/exportPdf'
+import { IconAnnotation } from './icons'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
 
@@ -40,10 +39,6 @@ export default function Reader() {
   const mode = useStore((s) => s.mode)
   const setMode = useStore((s) => s.setMode)
   const pendingLocate = useStore((s) => s.pendingLocate)
-  const dirty = useStore((s) => s.dirty)
-  const saving = useStore((s) => s.saving)
-  const saveDoc = useStore((s) => s.saveDoc)
-  const refreshActiveDoc = useStore((s) => s.refreshActiveDoc)
   const annotations = useStore((s) => s.annotations)
   const setComposeQuote = useStore((s) => s.setComposeQuote)
   const activeProjectId = useStore((s) => s.activeProjectId)
@@ -276,7 +271,6 @@ export default function Reader() {
   // 面包屑分段（VSCode 风格：目录 › 目录 › 文件）
   const crumbs = activeDoc.path.split('/')
   const hasModeTools = isMd || activeDoc.ext === 'txt' || isHtml
-  const hasFileTools = !isImage || dirty || saving || (isMd && !!window.timber)
 
   return (
     <div className="reader resource-reader">
@@ -305,34 +299,6 @@ export default function Reader() {
             </div>
           </div>
         )}
-        {hasFileTools && (
-          <>
-            {hasModeTools && <span className="rt-divider" aria-hidden="true" />}
-            <div className="rt-tool-group">
-              {!isImage && (
-                <button
-                  className="rt-btn"
-                  onClick={() => void refreshActiveDoc()}
-                  title="刷新：重新从磁盘读取文档 (F5)"
-                >
-                  ⟳
-                </button>
-              )}
-              {dirty && !saving && (
-                <button className="icon-save" onClick={() => void saveDoc()} title="保存 (Ctrl+S)">
-                  <IconSave />
-                </button>
-              )}
-              {saving && <span className="icon-saving" title="保存中…">…</span>}
-              {isMd && window.timber && (
-                <button className="rt-btn" onClick={() => void exportActiveDocPdf()} title="导出 PDF">
-                  <IconExportPdf />
-                </button>
-              )}
-            </div>
-          </>
-        )}
-        {(hasModeTools || hasFileTools) && <span className="rt-divider" aria-hidden="true" />}
         <div className="rt-tool-group">
           <button
             className={`rt-btn ${annotationsOpen ? 'active' : ''}`}

@@ -43,29 +43,6 @@ export function IconPanelRight({ size = 14 }: { size?: number }) {
   )
 }
 
-/** 保存：通用软盘图标（替代自定义的 ⌸ 字符） */
-export function IconSave({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-      <polyline points="17 21 17 13 7 13 7 21" />
-      <polyline points="7 3 7 8 15 8" />
-    </svg>
-  )
-}
-
-/** 导出 PDF：文档 + 向下箭头 */
-export function IconExportPdf({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="12" y1="11" x2="12" y2="17" />
-      <polyline points="9 14.5 12 17.5 15 14.5" />
-    </svg>
-  )
-}
-
 /** 正文批注：对话气泡 + 批注横线 */
 export function IconAnnotation({ size = 15 }: { size?: number }) {
   return (

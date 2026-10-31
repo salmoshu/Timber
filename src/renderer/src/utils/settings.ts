@@ -20,8 +20,6 @@ export interface AppSettings {
   defaultMode: 'read' | 'source'
   /** 打开文档时默认展开批注面板（默认收起） */
   annPanelDefaultOpen: boolean
-  /** 编辑器自动保存 */
-  autoSave: boolean
   /** 文件树/搜索支持的文档格式组（key 见 DOC_FORMAT_GROUPS） */
   docFormats: string[]
   /** 自动保存延迟（ms） */
@@ -38,7 +36,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   serifFont: true,
   defaultMode: 'read',
   annPanelDefaultOpen: false,
-  autoSave: false,
   autoSaveDelayMs: 2000,
   docFormats: ['md', 'html', 'txt'],
   resourceFilterDocsByProject: {},

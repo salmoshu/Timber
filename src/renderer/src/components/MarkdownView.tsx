@@ -11,6 +11,7 @@ import { useStore, rawBaseFor, origProjectId } from '../store'
 import { systemPrefersDark } from '../utils/settings'
 import { sanitizeRenderedHtml, upgradeInlineHtml } from '../utils/sanitizeHtml'
 import { collectText, findAnnotationRange, setTextHighlight } from '../utils/textRanges'
+import ContextMenu, { type MenuItem } from './ContextMenu'
 
 interface Props {
   annotations: Annotation[]
@@ -282,12 +283,14 @@ interface LightboxInfo {
   alt: string
 }
 
-/** 阅读模式图片点击放大浮层：点遮罩 / Esc / ✕ 关闭，再点图片在适应窗口与原始尺寸间切换 */
+/** 阅读模式图片点击放大浮层：点遮罩 / Esc / ✕ 关闭，再点图片在适应窗口与原始尺寸间切换。 */
 function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => void }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
   const [failed, setFailed] = useState(false)
   const [fit, setFit] = useState(true)
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const imgRef = useRef<HTMLImageElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
 
   // 打开期间：Esc 关闭、禁止背景滚动。Esc 在 capture 阶段拦截并 stopPropagation——
   // 浮层是最顶层，独占本次 Esc，避免 App.tsx 专注模式等 window 级处理同时触发
@@ -314,27 +317,109 @@ function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => v
     if (img?.complete && img.naturalWidth) setNatural({ w: img.naturalWidth, h: img.naturalHeight })
   }, [])
 
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage || fit) return
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.shiftKey) return
+      event.preventDefault()
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? stage.clientWidth : 1
+      stage.scrollLeft += (event.deltaX || event.deltaY) * unit
+    }
+    stage.addEventListener('wheel', onWheel, { passive: false })
+    return () => stage.removeEventListener('wheel', onWheel)
+  }, [fit])
+
+  useEffect(() => {
+    if (fit) return
+    const frame = requestAnimationFrame(() => {
+      const stage = stageRef.current
+      if (!stage) return
+      stage.scrollLeft = (stage.scrollWidth - stage.clientWidth) / 2
+      stage.scrollTop = (stage.scrollHeight - stage.clientHeight) / 2
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [fit, natural])
+
+  const openImageMenu = (event: React.MouseEvent<HTMLImageElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const state = useStore.getState()
+    const project = state.projects.find((p) => p.id === state.activeProjectId)
+    const sourcePath = state.activeDoc?.path
+    const resolved = sourcePath && info.origSrc
+      ? resolveDocLink(sourcePath, info.origSrc, project?.path)
+      : null
+    const absolute = project && resolved
+      ? `${project.path.replace(/[\\/]+$/, '')}/${resolved}`
+      : null
+    const copyText = (text: string, message: string): void => {
+      void navigator.clipboard.writeText(text).then(
+        () => state.toast('ok', message),
+        () => state.toast('err', '复制失败')
+      )
+    }
+    const items: MenuItem[] = [
+      {
+        key: 'copy-image',
+        label: '复制图片',
+        onClick: () => void (async () => {
+          try {
+            if (!window.timber) throw new Error('纯 Web 预览模式不支持复制图片')
+            await window.timber.copyImage(info.src)
+            state.toast('ok', '图片已复制')
+          } catch (error) {
+            state.toast('err', `复制图片失败：${error instanceof Error ? error.message : error}`)
+          }
+        })()
+      },
+      {
+        key: 'copy-path',
+        label: '复制图片路径',
+        separatorBefore: true,
+        onClick: () => copyText(resolved ?? info.origSrc, '图片路径已复制')
+      }
+    ]
+    if (absolute) {
+      items.push({ key: 'copy-absolute', label: '复制绝对路径', onClick: () => copyText(absolute, '绝对路径已复制') })
+      if (project && !project.remoteId) {
+        items.push({ key: 'reveal', label: '在文件管理器中显示', onClick: () => void window.timber?.revealPath(absolute) })
+      }
+    }
+    setMenu({ x: event.clientX, y: event.clientY, items })
+  }
+
   // 文档内引用路径常带 URL 编码（空格等），信息条展示时还原
   let label = info.origSrc
   try { label = decodeURIComponent(info.origSrc) } catch { /* 保留原值 */ }
 
   return (
-    <div className="img-lightbox" onClick={onClose}>
+    <div
+      className="img-lightbox"
+      onClick={(event) => {
+        if (!(event.target as Element).closest('.ctx-menu')) onClose()
+      }}
+    >
       <button className="img-lightbox-close" onClick={onClose} title="关闭 (Esc)">✕</button>
-      <div className={`img-lightbox-stage${fit ? '' : ' orig'}`}>
-        <img
-          ref={imgRef}
-          src={info.src}
-          alt={info.alt}
-          onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-          onError={() => setFailed(true)}
-          onClick={(e) => { e.stopPropagation(); setFit((v) => !v) }}
-        />
+      <div ref={stageRef} className={`img-lightbox-stage${fit ? '' : ' orig'}`}>
+        <div className={fit ? undefined : 'img-lightbox-canvas'}>
+          <img
+            ref={imgRef}
+            src={info.src}
+            alt={info.alt}
+            onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+            onError={() => setFailed(true)}
+            onClick={(e) => { e.stopPropagation(); setFit((v) => !v) }}
+            onContextMenu={openImageMenu}
+          />
+        </div>
       </div>
-      {/* 信息条随浮层即显：路径先出，自然尺寸等 onLoad 后补上；加载失败给出提示 */}
       <div className="img-lightbox-meta">
         {label}{failed ? ' · 图片加载失败' : natural ? ` · ${natural.w} × ${natural.h}` : ''}
       </div>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
     </div>
   )
 }
@@ -844,7 +929,13 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       const anchorEl = (range.startContainer.nodeType === Node.TEXT_NODE
         ? range.startContainer.parentElement
         : range.startContainer) as HTMLElement | null
-      const block = anchorEl?.closest('p, h1, h2, h3, h4, h5, h6')
+      let block = anchorEl?.closest('p, h1, h2, h3, h4, h5, h6')
+      // 删除首个列表项后，Chromium 可能把光标表示为 prose 下、标题之后的块边界选区。
+      // 此时视觉上光标就在标题右侧，应按标题末尾回车处理，而不是交还给失效的默认行为。
+      if (!block && range.startContainer === prose) {
+        const previous = prose.children[range.startOffset - 1]
+        if (previous?.matches('p, h1, h2, h3, h4, h5, h6')) block = previous
+      }
       if (!block || !prose.contains(block)) return
       if (block.closest('li, td, th, .vditor-wysiwyg__block, [data-type="footnotes-block"], [data-type="link-ref-defs-block"]')) return
       // 引用块内空段回车 = 逐层跳出（Vditor 原生语义）
@@ -866,13 +957,23 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       block.insertAdjacentElement('afterend', newBlock)
       // 光标落位：块首回车（原块剩余为空且有后继内容）留在原块，否则到新块行首
       const restEmpty = !(block.textContent ?? '').replace(/\u200b/g, '').trim() && !block.querySelector('img')
+      const caretBlock = restEmpty && trailingHasContent ? block : newBlock
       const caretRange = document.createRange()
-      caretRange.selectNodeContents(restEmpty && trailingHasContent ? block : newBlock)
+      caretRange.selectNodeContents(caretBlock)
       caretRange.collapse(true)
       selection.removeAllRanges()
       selection.addRange(caretRange)
       // 交回 Vditor 输入链路：Spin 重渲染、撤销入栈、草稿同步
       prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
+      requestAnimationFrame(() => {
+        if (disposed || !caretBlock.isConnected) return
+        const rangeAfterRender = document.createRange()
+        rangeAfterRender.selectNodeContents(caretBlock)
+        rangeAfterRender.collapse(true)
+        selection.removeAllRanges()
+        selection.addRange(rangeAfterRender)
+        caretBlock.scrollIntoView({ block: 'nearest' })
+      })
     }
     container.addEventListener('keydown', onEnterKeydown, true)
 

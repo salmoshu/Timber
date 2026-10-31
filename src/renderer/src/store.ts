@@ -30,10 +30,14 @@ function extsQuery(): string {
 
 /** 源码 + 文本扩展名（代码视图树请求参数；原在 CodeView，v0.5.6 收敛到 store 供侧栏复用） */
 export const CODE_EXTS = [
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.py', '.rs', '.java', '.kt',
-  '.vue', '.svelte', '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.swift',
-  '.scala', '.sh', '.ps1', '.css', '.scss', '.html',
-  '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.toml', '.xml', '.csv', '.log'
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.py', '.pyi', '.rs', '.java', '.kt', '.kts',
+  '.vue', '.svelte', '.astro', '.c', '.cc', '.cpp', '.h', '.hpp', '.hh', '.cs', '.rb', '.php', '.swift',
+  '.dart', '.scala', '.clj', '.ex', '.exs', '.lua', '.pl', '.r',
+  '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.css', '.scss', '.sass', '.less', '.html', '.htm',
+  '.md', '.markdown', '.mdown', '.mkd', '.mdx', '.rst', '.txt', '.json', '.jsonl', '.yaml', '.yml',
+  '.toml', '.ini', '.cfg', '.conf', '.env', '.xml', '.csv', '.tsv', '.log', '.sql', '.graphql', '.gql',
+  '.proto', '.properties', '.gitignore', '.gitattributes', '.editorconfig',
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'
 ]
 
 /** 资源视图中走 Reader（可编辑/阅读渲染）的扩展名；其余源码文件走 CodeReader（只读） */
@@ -70,8 +74,50 @@ export interface Toast {
   text: string
 }
 
-/** 项目工作区缓存：切换项目时保存/还原打开的文档标签状态（会话内有效） */
-const projectWorkspaces = new Map<string, { tabs: DocTab[]; activeTabId: string | null }>()
+interface ProjectWorkspace {
+  tabs: DocTab[]
+  activeTabId: string | null
+}
+
+const WORKSPACES_KEY = 'timber-project-workspaces-v1'
+const ACTIVE_PROJECT_KEY = 'timber-active-project'
+
+function loadProjectWorkspaces(): Map<string, ProjectWorkspace> {
+  const workspaces = new Map<string, ProjectWorkspace>()
+  try {
+    const raw = localStorage.getItem(WORKSPACES_KEY)
+    if (!raw) return workspaces
+    const saved = JSON.parse(raw) as Record<string, { tabs?: Partial<DocTab>[]; activeTabId?: string | null }>
+    Object.entries(saved).forEach(([projectId, workspace], workspaceIndex) => {
+      if (!Array.isArray(workspace.tabs)) return
+      const ids = new Set<string>()
+      const tabs = workspace.tabs.flatMap((tab, tabIndex) => {
+        if (!tab || typeof tab.path !== 'string' || !tab.path) return []
+        let id = typeof tab.id === 'string' && tab.id ? tab.id : `restored-${workspaceIndex}-${tabIndex}`
+        while (ids.has(id)) id += '-copy'
+        ids.add(id)
+        return [{
+          id,
+          path: tab.path,
+          pinned: tab.pinned === true,
+          mode: tab.mode === 'source' ? 'source' as const : 'read' as const,
+          draft: typeof tab.draft === 'string' ? tab.draft : '',
+          dirty: tab.dirty === true,
+          scrollTop: typeof tab.scrollTop === 'number' && Number.isFinite(tab.scrollTop) ? Math.max(0, tab.scrollTop) : 0
+        }]
+      })
+      if (tabs.length === 0) return
+      const activeTabId = tabs.some((tab) => tab.id === workspace.activeTabId) ? workspace.activeTabId! : tabs[0].id
+      workspaces.set(projectId, { tabs, activeTabId })
+    })
+  } catch {
+    /* 损坏或不可用的存储不影响启动 */
+  }
+  return workspaces
+}
+
+/** 每个项目的标签工作区同时保留在内存与本机，重启后按原顺序恢复。 */
+const projectWorkspaces = loadProjectWorkspaces()
 
 /** 提交历史分页大小 */
 const COMMIT_PAGE_SIZE = 100
@@ -128,37 +174,62 @@ function normalizeDocText(s: string): string {
   return stripBom(s).replace(/\r\n?/g, '\n')
 }
 
-/**
- * 活动文档外部变更轮询：标签打开期间磁盘原文被其它程序（agent / 编辑器）更新时，
- * 若本地没有未保存修改，自动重载内容——阅读模式经订阅整体重渲染，编辑模式刷新草稿。
- * 图片等二进制不校验；请求失败静默（远程项目网络抖动），下个周期再试。
- */
-let activeDocWatcherStarted = false
-function startActiveDocWatcher(): void {
-  if (activeDocWatcherStarted) return
-  activeDocWatcherStarted = true
-  setInterval(() => {
-    void (async () => {
-      const s = useStore.getState()
-      if (!s.activeDoc || !s.activeProjectId || !s.activeTabId || s.dirty || s.docLoading || s.docError) return
-      if (IMAGE_EXT_SET.has(s.activeDoc.ext)) return
-      try {
-        const doc = await apiFor<DocContent>(s.activeProjectId)(
-          'GET',
-          `/api/projects/${s.activeProjectId}/doc?path=${encodeURIComponent(s.activeDoc.path)}`
-        )
-        const cur = useStore.getState()
-        if (cur.activeTabId !== s.activeTabId || cur.dirty || cur.docLoading) return
-        if (doc.mtime !== s.activeDoc.mtime || doc.size !== s.activeDoc.size) {
-          const content = stripBom(doc.content)
-          cur.patchActiveTab({ doc: { ...doc, content } })
-          useStore.setState({ activeDoc: { ...doc, content }, draft: content, dirty: false })
-        }
-      } catch {
-        /* 静默重试 */
-      }
-    })()
-  }, 5000)
+/** 本地与远程项目共用的轻量同步：周期校验 + 窗口聚焦立即校验。
+ *  文件树按结构去重，展开状态由 Sidebar 按路径独立保存，不会因刷新折叠或闪烁。 */
+let resourceWatcherStarted = false
+let resourceSyncing = false
+
+async function syncResources(): Promise<void> {
+  const s = useStore.getState()
+  const projectId = s.activeProjectId
+  if (!projectId || resourceSyncing || document.hidden) return
+  resourceSyncing = true
+  const tabId = s.activeTabId
+  const docSnapshot = s.activeDoc
+  const shouldReadDoc = !!docSnapshot && !!tabId && !s.dirty && !s.saving && !s.docLoading && !s.docError && !IMAGE_EXT_SET.has(docSnapshot.ext)
+  try {
+    const treeRequest = s.treeLoading
+      ? Promise.resolve(null)
+      : apiFor<DocNode>(projectId)('GET', `/api/projects/${projectId}/tree?${extsQuery().slice(1)}`).catch(() => null)
+    const codeTreeRequest = s.codeTreeLoading
+      ? Promise.resolve(null)
+      : apiFor<DocNode>(projectId)('GET', `/api/projects/${projectId}/tree?exts=${encodeURIComponent(CODE_EXTS.join(','))}`).catch(() => null)
+    const docRequest = shouldReadDoc && docSnapshot
+      ? apiFor<DocContent>(projectId)('GET', `/api/projects/${projectId}/doc?path=${encodeURIComponent(docSnapshot.path)}`).catch(() => null)
+      : Promise.resolve(null)
+    const [tree, codeTree, doc] = await Promise.all([treeRequest, codeTreeRequest, docRequest])
+    const cur = useStore.getState()
+    if (cur.activeProjectId !== projectId) return
+    const activeDoc = cur.activeDoc
+    const patch: Partial<State> = {}
+    if (tree && JSON.stringify(tree) !== JSON.stringify(cur.tree)) patch.tree = tree
+    if (codeTree && JSON.stringify(codeTree) !== JSON.stringify(cur.codeTree)) patch.codeTree = codeTree
+    if (
+      doc && tabId && activeDoc && cur.activeTabId === tabId && activeDoc.path === docSnapshot?.path &&
+      !cur.dirty && !cur.saving && !cur.docLoading &&
+      (doc.mtime !== activeDoc.mtime || doc.size !== activeDoc.size)
+    ) {
+      const content = stripBom(doc.content)
+      const fresh = { ...doc, content }
+      patch.activeDoc = fresh
+      patch.draft = content
+      patch.dirty = false
+      patch.tabs = cur.tabs.map((tab) => tab.id === tabId ? { ...tab, doc: fresh, draft: content, dirty: false } : tab)
+    }
+    if (Object.keys(patch).length > 0) useStore.setState(patch)
+  } finally {
+    resourceSyncing = false
+  }
+}
+
+function startResourceWatcher(): void {
+  if (resourceWatcherStarted) return
+  resourceWatcherStarted = true
+  setInterval(() => void syncResources(), 1500)
+  window.addEventListener('focus', () => void syncResources())
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void syncResources()
+  })
 }
 
 /** 应用主视图：提交历史 / 架构图 / 资源（文档与代码合并，v0.5.9） */
@@ -269,8 +340,19 @@ let tabSeq = 1
 let toastSeq = 1
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 
+function scheduleAutoSave(): void {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = null
+  const s = useStore.getState()
+  if (!s.dirty || !s.activeDoc || !s.activeProjectId || s.saving) return
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null
+    void useStore.getState().saveDoc({ silent: true })
+  }, s.settings.autoSaveDelayMs)
+}
+
 function newTabId(): string {
-  return 'tab-' + tabSeq++
+  return `tab-${Date.now().toString(36)}-${tabSeq++}`
 }
 
 interface State {
@@ -403,7 +485,7 @@ interface State {
   setSelectedDir(p: string | null): void
   setMode(m: ViewMode): void
   setDraft(d: string): void
-  saveDoc(): Promise<void>
+  saveDoc(options?: { silent?: boolean }): Promise<void>
   /** 重新从磁盘读取当前文档（未保存修改将丢弃，需确认；图片不支持） */
   refreshActiveDoc(): Promise<void>
   /**
@@ -830,7 +912,7 @@ export const useStore = create<State>((set, get) => ({
     const settings = get().settings
     applyAppearance(settings)
     set({ sidebarCollapsed: false, annPanelOpen: true })
-    startActiveDocWatcher()
+    startResourceWatcher()
     try {
       const r = await api<{ projects: Project[] }>('GET', '/api/projects')
       const localProjects = r.projects ?? []
@@ -840,7 +922,10 @@ export const useStore = create<State>((set, get) => ({
       set({ fatalError: String(err), ready: true })
       return
     }
-    const first = get().projects[0]
+    const projects = get().projects
+    let lastProjectId: string | null = null
+    try { lastProjectId = localStorage.getItem(ACTIVE_PROJECT_KEY) } catch { /* 忽略不可用存储 */ }
+    const first = projects.find((project) => project.id === lastProjectId) ?? projects[0]
     if (first) await get().selectProject(first.id)
   },
 
@@ -930,6 +1015,7 @@ export const useStore = create<State>((set, get) => ({
       )
       saveRemotes(remotes)
       projectWorkspaces.delete(id)
+      persistProjectWorkspacesSoon()
       const activeId = get().activeProjectId
       set({ remotes, projects: get().projects.filter((x) => x.id !== id) })
       if (activeId === id) {
@@ -943,6 +1029,7 @@ export const useStore = create<State>((set, get) => ({
     try {
       await api('DELETE', `/api/projects/${id}`)
       projectWorkspaces.delete(id)
+      persistProjectWorkspacesSoon()
       // 本地过滤，省去整表重拉
       const localProjects = get().localProjects.filter((x) => x.id !== id)
       const { activeProjectId } = get()
@@ -958,6 +1045,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async selectProject(id) {
+    const before = get()
+    if (id === before.activeProjectId) return
+    if (before.dirty) await before.saveDoc({ silent: true })
     const s = get()
     if (id === s.activeProjectId) return
     // 保存当前项目的工作区（打开的标签 + 活动标签状态）
@@ -970,6 +1060,8 @@ export const useStore = create<State>((set, get) => ({
       )
       projectWorkspaces.set(s.activeProjectId, { tabs, activeTabId: s.activeTabId })
     }
+    persistProjectWorkspacesSoon()
+    try { localStorage.setItem(ACTIVE_PROJECT_KEY, id) } catch { /* 忽略不可用存储 */ }
     set({
       activeProjectId: id,
       tree: null,
@@ -1091,6 +1183,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async activateTab(id) {
+    const before = get()
+    if (!before.tabs.some((t) => t.id === id) || before.activeTabId === id) return
+    if (before.dirty) await before.saveDoc({ silent: true })
     const s = get()
     const target = s.tabs.find((t) => t.id === id)
     if (!target || s.activeTabId === id) return
@@ -1222,45 +1317,44 @@ export const useStore = create<State>((set, get) => ({
         ? { tabs: s.tabs.map((t) => (t.id === cur.id ? { ...t, draft: d, dirty } : t)), draft: d, dirty }
         : { draft: d, dirty }
     )
-    // 自动保存：每次变更重置计时器，静止 delay 后落盘
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer)
-      autoSaveTimer = null
-    }
-    const { settings } = get()
-    if (settings.autoSave && get().dirty) {
-      autoSaveTimer = setTimeout(() => {
-        autoSaveTimer = null
-        void get().saveDoc()
-      }, settings.autoSaveDelayMs)
-    }
+    scheduleAutoSave()
   },
 
-  async saveDoc() {
+  async saveDoc(options) {
     const s = get()
-    if (!s.activeDoc || !s.activeProjectId || !s.dirty) return
+    if (!s.activeDoc || !s.activeProjectId || !s.activeTabId || !s.dirty || s.saving) return
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer)
       autoSaveTimer = null
     }
+    const projectId = s.activeProjectId
+    const tabId = s.activeTabId
+    const path = s.activeDoc.path
+    const content = s.draft
+    const baseDoc = s.activeDoc
     set({ saving: true })
     try {
-      await apiFor(s.activeProjectId)('PUT', `/api/projects/${s.activeProjectId}/doc`, {
-        path: s.activeDoc.path,
-        content: s.draft
+      await apiFor(projectId)('PUT', `/api/projects/${projectId}/doc`, { path, content })
+      const cur = get()
+      const active = cur.activeProjectId === projectId && cur.activeTabId === tabId && cur.activeDoc?.path === path
+      const tabs = cur.tabs.map((tab) => {
+        if (tab.id !== tabId || tab.path !== path) return tab
+        const draft = active ? cur.draft : tab.draft
+        return {
+          ...tab,
+          draft,
+          dirty: normalizeDocText(draft) !== normalizeDocText(content),
+          doc: { ...(tab.doc ?? baseDoc), content }
+        }
       })
-      const cur = get().tabs.find((t) => t.id === get().activeTabId)
-      if (cur) {
-        set({ tabs: get().tabs.map((t) => (t.id === cur.id ? { ...t, draft: s.draft, dirty: false } : t)) })
-        // 同步标签内容缓存（保存后即最新）
-        cacheTabDoc(cur.id, { ...s.activeDoc, content: s.draft }, set, get)
-      }
       set({
-        activeDoc: { ...s.activeDoc, content: s.draft },
-        dirty: false,
+        tabs,
+        activeDoc: active && cur.activeDoc ? { ...cur.activeDoc, content } : cur.activeDoc,
+        dirty: active ? normalizeDocText(cur.draft) !== normalizeDocText(content) : cur.dirty,
         saving: false
       })
-      get().toast('ok', '已保存')
+      if (!options?.silent) get().toast('ok', '已保存')
+      if (active && get().dirty) scheduleAutoSave()
     } catch (err) {
       set({ saving: false })
       get().toast('err', `保存失败：${err}`)
@@ -1437,6 +1531,61 @@ export const useStore = create<State>((set, get) => ({
     await get().loadAnnotations()
   }
 }))
+
+let workspacePersistTimer: ReturnType<typeof setTimeout> | null = null
+
+function snapshotProjectWorkspace(s: State): void {
+  if (!s.activeProjectId || (s.treeLoading && s.tabs.length === 0)) return
+  const current = s.tabs.find((tab) => tab.id === s.activeTabId)
+  const scrollTop = s.view === 'resources'
+    ? document.querySelector('.reader-body')?.scrollTop ?? current?.scrollTop ?? 0
+    : current?.scrollTop ?? 0
+  const tabs = s.tabs.map((tab) => tab.id === s.activeTabId
+    ? { ...tab, mode: s.mode, draft: s.draft, dirty: s.dirty, scrollTop }
+    : tab)
+  projectWorkspaces.set(s.activeProjectId, { tabs, activeTabId: s.activeTabId })
+}
+
+function persistProjectWorkspacesNow(): void {
+  try {
+    const saved: Record<string, ProjectWorkspace> = {}
+    projectWorkspaces.forEach((workspace, projectId) => {
+      saved[projectId] = {
+        activeTabId: workspace.activeTabId,
+        tabs: workspace.tabs.map((tab) => ({
+          ...tab,
+          draft: tab.dirty ? tab.draft : '',
+          doc: undefined
+        }))
+      }
+    })
+    localStorage.setItem(WORKSPACES_KEY, JSON.stringify(saved))
+  } catch {
+    /* 存储已满或不可用时保留内存工作区 */
+  }
+}
+
+function persistProjectWorkspacesSoon(): void {
+  if (workspacePersistTimer) clearTimeout(workspacePersistTimer)
+  workspacePersistTimer = setTimeout(() => {
+    workspacePersistTimer = null
+    persistProjectWorkspacesNow()
+  }, 300)
+}
+
+useStore.subscribe((s, prev) => {
+  if (
+    s.tabs === prev.tabs && s.activeProjectId === prev.activeProjectId && s.activeTabId === prev.activeTabId &&
+    s.draft === prev.draft && s.dirty === prev.dirty && s.mode === prev.mode
+  ) return
+  snapshotProjectWorkspace(s)
+  persistProjectWorkspacesSoon()
+})
+
+window.addEventListener('beforeunload', () => {
+  snapshotProjectWorkspace(useStore.getState())
+  persistProjectWorkspacesNow()
+})
 
 /** 把 tab 对应文档加载为当前显示（内部）。
  *  有缓存：立即呈现（切换无白闪），随后后台拉取校验新鲜度；

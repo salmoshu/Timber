@@ -1,8 +1,8 @@
 // 资源视图代码阅读器：highlight.js 只读渲染（行号、等宽、主题跟随）。
 // 由 ResourceView 按活动标签文件类型分发挂载（key=tab.id，切文件整体重建，无需手动复位查找条）
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
-import { origProjectId, rawBaseFor, useStore } from '../store'
+import { useStore } from '../store'
 import FindBar from './FindBar'
 import TabsBar from './TabsBar'
 
@@ -21,13 +21,9 @@ const LANG_BY_EXT: Record<string, string> = {
 const MAX_BYTES = 512 * 1024
 
 export default function CodeReader({ path }: { path: string }) {
-  const activeProjectId = useStore((s) => s.activeProjectId)
-  const [content, setContent] = useState<string | null>(null)
-  const [truncated, setTruncated] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [refreshTick, setRefreshTick] = useState(0)
-  const codeRef = useRef<HTMLDivElement | null>(null)
+  const activeDoc = useStore((s) => s.activeDoc)
+  const docLoading = useStore((s) => s.docLoading)
+  const docError = useStore((s) => s.docError)
   const [findOpen, setFindOpen] = useState(false)
 
   // Ctrl+F 查找代码正文（组件仅在活动标签为代码文件时挂载，挂载即有效）
@@ -42,41 +38,13 @@ export default function CodeReader({ path }: { path: string }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // 经 /raw 拉取原文（远程项目走远端 base），滚到顶
-  useEffect(() => {
-    if (!activeProjectId) return
-    let disposed = false
-    setLoading(true)
-    setError(null)
-    void (async () => {
-      try {
-        const base = await rawBaseFor(activeProjectId)
-        const url = `${base}/raw/${origProjectId(activeProjectId)}/${path
-          .split('/')
-          .map(encodeURIComponent)
-          .join('/')}`
-        const r = await fetch(url)
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        let text = await r.text()
-        const over = text.length > MAX_BYTES
-        if (over) text = text.slice(0, MAX_BYTES)
-        if (!disposed) {
-          setContent(text)
-          setTruncated(over)
-          setLoading(false)
-          if (codeRef.current) codeRef.current.scrollTop = 0
-        }
-      } catch (err) {
-        if (!disposed) {
-          setError(String(err))
-          setLoading(false)
-        }
-      }
-    })()
-    return () => {
-      disposed = true
-    }
-  }, [activeProjectId, path, refreshTick])
+  const rawContent = activeDoc?.path === path ? activeDoc.content : null
+  const { content, truncated } = useMemo(() => ({
+    content: rawContent === null ? null : rawContent.slice(0, MAX_BYTES),
+    truncated: rawContent !== null && rawContent.length > MAX_BYTES
+  }), [rawContent])
+  const loading = docLoading && rawContent === null
+  const error = rawContent === null ? docError : null
 
   // 语法高亮（失败回退转义纯文本）
   const highlighted = useMemo(() => {
@@ -101,15 +69,7 @@ export default function CodeReader({ path }: { path: string }) {
 
   return (
     <div className="reader">
-      <TabsBar>
-        <button
-          className="rt-btn"
-          onClick={() => setRefreshTick((t) => t + 1)}
-          title="刷新：重新从磁盘读取文件"
-        >
-          ⟳
-        </button>
-      </TabsBar>
+      <TabsBar />
       <div className="rt-breadcrumb cv-head" title={path}>
         {path.split('/').map((c, i, arr) => (
           <span key={i} className="crumb">
@@ -122,7 +82,7 @@ export default function CodeReader({ path }: { path: string }) {
         </span>
       </div>
       {findOpen && <FindBar onClose={() => setFindOpen(false)} />}
-      <div className="cv-body reader-body" ref={codeRef}>
+      <div className="cv-body reader-body">
         {loading && <div className="hv-loading">加载中…</div>}
         {!loading && error && <div className="hv-empty">文件加载失败：{error}</div>}
         {!loading && !error && content !== null && (

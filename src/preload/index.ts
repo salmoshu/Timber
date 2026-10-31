@@ -6,6 +6,7 @@ const bridge: TimberBridge = {
   browseLocal: (path) => ipcRenderer.invoke('files:browse', path),
   pathExists: (path) => ipcRenderer.invoke('files:exists', path),
   revealPath: (p: string) => ipcRenderer.invoke('shell:reveal', p),
+  copyImage: (src: string) => ipcRenderer.invoke('clipboard:write-image', src),
   winMinimize: () => ipcRenderer.send('win:minimize'),
   winToggleMaximize: () => ipcRenderer.send('win:toggle-maximize'),
   winIsMaximized: () => ipcRenderer.invoke('win:is-maximized'),

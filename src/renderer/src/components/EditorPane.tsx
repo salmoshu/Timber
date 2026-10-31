@@ -10,8 +10,12 @@ export default function EditorPane() {
   const fitHeight = (): void => {
     const ta = taRef.current
     if (!ta) return
+    const body = ta.closest<HTMLElement>('.reader-body')
+    const scrollTop = body?.scrollTop ?? 0
+    const atBottom = body ? body.scrollHeight - body.scrollTop - body.clientHeight <= 8 : false
     ta.style.height = 'auto'
     ta.style.height = `${ta.scrollHeight}px`
+    if (body) body.scrollTop = atBottom ? body.scrollHeight : scrollTop
   }
 
   // 内容变化即量高；窗口缩放改变换行后重量

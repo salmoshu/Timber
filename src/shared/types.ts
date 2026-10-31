@@ -390,6 +390,8 @@ export interface TimberBridge {
   browseLocal(path?: string): Promise<{ path: string; parent: string; home: string; roots: string[]; folders: { name: string; path: string }[] }>
   pathExists(path: string): Promise<boolean>
   revealPath(p: string): Promise<void>
+  /** 将 HTTP(S) / data URL 图片复制到系统剪贴板 */
+  copyImage(src: string): Promise<void>
   winMinimize(): void
   winToggleMaximize(): void
   /** 查询窗口是否处于最大化（标题栏图标初始化） */

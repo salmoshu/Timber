@@ -115,7 +115,7 @@ export default function SearchPanel({ projectId }: { projectId: string }) {
         {result?.files.map((f) => (
           <div key={f.path} className="sp-file">
             <button className="sp-file-name" onClick={() => jump(f.path)} title={f.path}>
-              <span className="doc-icon ext-md">{f.ext === '.html' || f.ext === '.htm' ? '<>' : 'M↓'}</span>
+              <span className="doc-icon ext-md">{f.ext === '.html' || f.ext === '.htm' ? '<>' : 'MD'}</span>
               <span className="sp-file-text">{f.path.split('/').pop()}</span>
               <span className="sp-file-count">{f.count}</span>
             </button>

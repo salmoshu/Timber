@@ -268,27 +268,19 @@ export default function SettingsView() {
 
             <div className="st-row">
               <div className="st-label">自动保存</div>
-              <button
-                className={`switch ${settings.autoSave ? 'on' : ''}`}
-                onClick={() => setSetting('autoSave', !settings.autoSave)}
-              >
-                <span className="switch-dot" />
-              </button>
-              <div className="st-hint">停止输入后自动落盘；Ctrl+S 手动保存始终可用</div>
+              <div className="st-hint">始终开启，停止输入后自动落盘；Ctrl+S 仍可立即保存</div>
             </div>
 
-            {settings.autoSave && (
-              <div className="st-row">
-                <div className="st-label">自动保存延迟</div>
-                <div className="seg">
-                  {[1000, 2000, 3000].map((ms) => (
-                    <button key={ms} className={settings.autoSaveDelayMs === ms ? 'active' : ''} onClick={() => setSetting('autoSaveDelayMs', ms)}>
-                      {ms / 1000}s
-                    </button>
-                  ))}
-                </div>
+            <div className="st-row">
+              <div className="st-label">自动保存延迟</div>
+              <div className="seg">
+                {[1000, 2000, 3000].map((ms) => (
+                  <button key={ms} className={settings.autoSaveDelayMs === ms ? 'active' : ''} onClick={() => setSetting('autoSaveDelayMs', ms)}>
+                    {ms / 1000}s
+                  </button>
+                ))}
               </div>
-            )}
+            </div>
           </div>
         )}
 

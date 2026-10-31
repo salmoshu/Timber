@@ -7,6 +7,7 @@ import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
 import { HistoryList } from './HistoryView'
+import { exportActiveDocPdf } from '../utils/exportPdf'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
 import {
   blockPath,
@@ -38,25 +39,36 @@ function joinPath(parent: string, name: string): string {
 
 type TreeTab = 'docs' | 'search' | 'git'
 
+const EXT_ICONS: Record<string, string> = {
+  '.md': 'MD', '.markdown': 'MD', '.mdown': 'MD', '.mkd': 'MD', '.mdx': 'MD',
+  '.html': '<>', '.htm': '<>', '.xml': '<>', '.vue': 'V', '.svelte': 'S', '.astro': 'A',
+  '.js': 'JS', '.jsx': 'JS', '.mjs': 'JS', '.cjs': 'JS', '.ts': 'TS', '.tsx': 'TS',
+  '.py': 'Py', '.pyi': 'Py', '.go': 'Go', '.rs': 'Rs', '.java': 'J', '.kt': 'Kt', '.kts': 'Kt',
+  '.c': 'C', '.h': 'C', '.cc': 'C+', '.cpp': 'C+', '.hpp': 'C+', '.hh': 'C+', '.cs': 'C#',
+  '.rb': 'Rb', '.php': 'PHP', '.swift': 'Sw', '.dart': 'D', '.scala': 'Sc', '.clj': 'Cl',
+  '.ex': 'Ex', '.exs': 'Ex', '.lua': 'Lu', '.pl': 'Pl', '.r': 'R',
+  '.css': '#', '.scss': '#', '.sass': '#', '.less': '#',
+  '.json': '{}', '.jsonl': '{}', '.yaml': 'Y', '.yml': 'Y', '.toml': 'T',
+  '.ini': '≡', '.cfg': '≡', '.conf': '≡', '.env': '≡', '.properties': '≡',
+  '.csv': 'CSV', '.tsv': 'TSV', '.sql': 'DB', '.graphql': 'GQ', '.gql': 'GQ', '.proto': 'P',
+  '.sh': '>_', '.bash': '>_', '.zsh': '>_', '.ps1': '>_', '.bat': '>_', '.cmd': '>_',
+  '.png': '▧', '.jpg': '▧', '.jpeg': '▧', '.gif': '▧', '.svg': '▧', '.webp': '▧', '.bmp': '▧', '.ico': '▧',
+  '.gitignore': 'Git', '.gitattributes': 'Git', '.editorconfig': '≡'
+}
+
 function extIcon(ext?: string): string {
-  switch (ext) {
-    case '.md':
-    case '.markdown':
-    case '.mdown':
-    case '.mkd':
-      return 'M↓'
-    case '.html':
-    case '.htm':
-      return '<>'
-    default:
-      return '≡'
-  }
+  return (ext && EXT_ICONS[ext]) || '≡'
 }
 
 function extClass(ext?: string): string {
-  if (ext === '.md' || ext === '.markdown' || ext === '.mdown' || ext === '.mkd') return 'ext-md'
-  if (ext === '.html' || ext === '.htm') return 'ext-html'
-  return 'ext-txt'
+  if (!ext) return 'ext-txt'
+  if (['.md', '.markdown', '.mdown', '.mkd', '.mdx'].includes(ext)) return 'ext-md'
+  if (['.html', '.htm', '.xml', '.vue', '.svelte', '.astro'].includes(ext)) return 'ext-html'
+  if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'].includes(ext)) return 'ext-image'
+  if (['.json', '.jsonl', '.yaml', '.yml', '.toml', '.csv', '.tsv', '.sql'].includes(ext)) return 'ext-data'
+  if (['.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd'].includes(ext)) return 'ext-shell'
+  if (['.txt', '.log', '.ini', '.cfg', '.conf', '.env', '.properties', '.editorconfig'].includes(ext)) return 'ext-txt'
+  return 'ext-code'
 }
 
 function matchFilter(node: DocNode, f: string): boolean {
@@ -620,6 +632,16 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
       items.push({ key: 'newdir', label: '新建文件夹', onClick: () => openNamePrompt('dir', node.path) })
       items.push({ key: 'rename', label: '重命名', separatorBefore: true, onClick: () => onRenameNode(node) })
       items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
+    }
+    if (node.type === 'doc' && window.timber && /\.(md|markdown|mdown|mkd)$/i.test(node.path)) {
+      items.push({
+        key: 'export-pdf',
+        label: '导出 PDF…',
+        onClick: () => void (async () => {
+          await useStore.getState().openTab(node.path)
+          if (useStore.getState().activeDoc?.path === node.path) await exportActiveDocPdf()
+        })()
+      })
     }
     items.push({
       key: 'reldoc',
