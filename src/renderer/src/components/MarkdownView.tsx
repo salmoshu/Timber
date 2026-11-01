@@ -10,6 +10,7 @@ import type { Annotation } from '@shared/types'
 import { useStore, rawBaseFor, origProjectId } from '../store'
 import { systemPrefersDark } from '../utils/settings'
 import { sanitizeRenderedHtml, upgradeInlineHtml } from '../utils/sanitizeHtml'
+import { applyImageSizes, saveImageSize } from '../utils/imageSizes'
 import { collectText, findAnnotationRange, setTextHighlight } from '../utils/textRanges'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 
@@ -691,6 +692,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     }
 
     const rewriteImages = (): void => {
+      applyImageSizes(container, projectId, docPath)
       if (!rawBase) return
       container.querySelectorAll('img').forEach((image) => {
         const src = image.getAttribute('src') ?? ''
@@ -1157,6 +1159,80 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     const onInput = (event: Event): void => {
       if (!(event as InputEvent).isComposing) syncDraft()
     }
+
+    const imageResizeHandle = document.createElement('button')
+    imageResizeHandle.type = 'button'
+    imageResizeHandle.className = 'an-image-resize-handle'
+    imageResizeHandle.title = '拖拽调整图片宽度'
+    imageResizeHandle.setAttribute('aria-label', '拖拽调整图片宽度')
+    imageResizeHandle.style.display = 'none'
+    document.body.appendChild(imageResizeHandle)
+    let resizeHoverImage: HTMLImageElement | null = null
+    let resizingImage: HTMLImageElement | null = null
+    const positionImageResizeHandle = (): void => {
+      if (!resizeHoverImage?.isConnected) {
+        imageResizeHandle.style.display = 'none'
+        return
+      }
+      const rect = resizeHoverImage.getBoundingClientRect()
+      imageResizeHandle.style.left = `${Math.max(8, Math.min(rect.right - 9, window.innerWidth - 27))}px`
+      imageResizeHandle.style.top = `${Math.max(8, Math.min(rect.bottom - 9, window.innerHeight - 27))}px`
+      imageResizeHandle.style.display = 'block'
+    }
+    const hideImageResizeHandle = (): void => {
+      if (resizingImage) return
+      resizeHoverImage = null
+      imageResizeHandle.style.display = 'none'
+    }
+    const onImageOver = (event: MouseEvent): void => {
+      const image = (event.target as HTMLElement).closest<HTMLImageElement>('.prose img')
+      if (!image) return
+      resizeHoverImage = image
+      positionImageResizeHandle()
+    }
+    const onImageOut = (event: MouseEvent): void => {
+      const next = event.relatedTarget as Node | null
+      if (next && (imageResizeHandle.contains(next) || resizeHoverImage?.contains(next))) return
+      hideImageResizeHandle()
+    }
+    imageResizeHandle.addEventListener('mousedown', (event) => {
+      const image = resizeHoverImage
+      if (!image) return
+      event.preventDefault()
+      event.stopPropagation()
+      resizingImage = image
+      const startX = event.clientX
+      const startWidth = image.getBoundingClientRect().width
+      const maxWidth = Math.max(80, image.closest('.prose')?.clientWidth ?? 800)
+      const onMove = (moveEvent: MouseEvent): void => {
+        const width = Math.round(Math.min(maxWidth, Math.max(60, startWidth + moveEvent.clientX - startX)))
+        image.setAttribute('width', String(width))
+        image.removeAttribute('height')
+        image.style.height = 'auto'
+        positionImageResizeHandle()
+      }
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('image-resizing')
+        resizingImage = null
+        const images = image.closest('.prose')?.querySelectorAll('img')
+        const index = images ? [...images].indexOf(image) : -1
+        const width = Number(image.getAttribute('width'))
+        if (index >= 0 && width > 0) saveImageSize(projectId, docPath, index, image.dataset.anOrigSrc ?? image.getAttribute('src') ?? '', width)
+        syncDraft()
+        positionImageResizeHandle()
+      }
+      document.body.classList.add('image-resizing')
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    })
+    imageResizeHandle.addEventListener('mouseleave', hideImageResizeHandle)
+    container.addEventListener('mouseover', onImageOver)
+    container.addEventListener('mouseout', onImageOut)
+    window.addEventListener('scroll', positionImageResizeHandle, true)
+    window.addEventListener('resize', positionImageResizeHandle)
+
     const onClick = (event: MouseEvent): void => {
       const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('.prose a')
       if (link) {
@@ -1347,6 +1423,12 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       container.removeEventListener('mousemove', onTableHover)
       container.removeEventListener('mouseleave', onTableLeave)
       container.removeEventListener('keydown', onEditorKeydown, true)
+      container.removeEventListener('mouseover', onImageOver)
+      container.removeEventListener('mouseout', onImageOut)
+      window.removeEventListener('scroll', positionImageResizeHandle, true)
+      window.removeEventListener('resize', positionImageResizeHandle)
+      imageResizeHandle.remove()
+      document.body.classList.remove('image-resizing')
       codeCopyPreRef.current = null
       setCodeCopy(null)
       setTextHighlight('ann-open', [])

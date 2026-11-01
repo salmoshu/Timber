@@ -14,8 +14,8 @@ function fmtTime(s: string): string {
   }
 }
 
-function kindOf(a: Annotation): AnnotationKind {
-  return a.kind ?? 'annotation'
+function kindOf(a: Annotation): 'tag' | 'note' {
+  return a.kind === 'note' ? 'note' : 'tag'
 }
 
 export interface TocEntry {
@@ -100,7 +100,7 @@ export function scrollToSourceHeading(entry: TocEntry): boolean {
   return true
 }
 
-/** 编辑模式：在源码中定位批注引用文本，选中并滚动 */
+/** 编辑模式：在源码中定位标签引用文本，选中并滚动 */
 function locateInSource(quote: string): boolean {
   const textarea = document.querySelector<HTMLTextAreaElement>('.editor-plain')
   if (!textarea) return false
@@ -223,7 +223,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
   const toast = useStore((s) => s.toast)
   const mode = useStore((s) => s.mode)
   const [draft, setDraft] = useState('')
-  const [kind, setKind] = useState<AnnotationKind>('annotation')
+  const [kind, setKind] = useState<'tag' | 'note'>('tag')
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [locating, setLocating] = useState<string | null>(null)
   // 标签类型可直接从右侧侧边栏选择历史标签（当前文档用过的）
@@ -286,7 +286,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
   }
 
   const locate = (a: Annotation) => {
-    // 编辑模式：源码 textarea 内定位引用文本（目录/批注在原文模式同样可用）
+    // 编辑模式：源码 textarea 内定位引用文本（目录/标签在原文模式同样可用）
     if (mode === 'source') {
       if (locateInSource(a.quote)) {
         setLocating(a.id)
@@ -313,10 +313,10 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
   const done = annotations.filter((a) => a.status === 'done')
 
   return (
-    <aside className="ann-panel document-annotations" aria-label="正文批注">
-      {onResizeStart && <div className="document-ann-resizer" onMouseDown={onResizeStart} title="拖拽调整批注宽度" />}
+    <aside className="ann-panel document-annotations" aria-label="正文标签">
+      {onResizeStart && <div className="document-ann-resizer" onMouseDown={onResizeStart} title="拖拽调整标签宽度" />}
       <div className="ap-head">
-        <strong>批注 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
+        <strong>标签 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
         <span className="ap-count">{open.length} 待处理 · {done.length} 已完成</span>
       </div>
         <div className="ap-body">
@@ -336,7 +336,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                 “{composeQuote.quote.length > 90 ? composeQuote.quote.slice(0, 90) + '…' : composeQuote.quote}”
               </div>
               <div className="ap-kinds">
-                {(['tag', 'note', 'annotation'] as const).map((k) => (
+                {(['note', 'tag'] as const).map((k) => (
                   <button key={k} className={kind === k ? 'active' : ''} onClick={() => setKind(k)} title={ANNOTATION_KIND_LABELS[k]}>
                     <span className="ap-kind-ico" aria-hidden="true">{KIND_ICONS[k]}</span>
                     <span className="ap-kind-text">{ANNOTATION_KIND_LABELS[k]}</span>
@@ -364,13 +364,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                 autoFocus
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder={
-                  kind === 'tag'
-                    ? '标签名（可直接点上方历史标签）…'
-                    : kind === 'note'
-                      ? '笔记：记录你的思考与备忘…'
-                      : '批注内容：告诉 agent 要做什么修改…'
-                }
+                placeholder={kind === 'tag' ? '标签名（可直接点上方历史标签）…' : '笔记：记录你的思考与备忘…'}
                 rows={kind === 'tag' ? 1 : 3}
               />
               <div className="ap-compose-ops">
@@ -401,14 +395,13 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                 />
                 <path d="M16 17.5h16M16 24.5h9" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
               </svg>
-              <div className="ap-empty-title">还没有批注</div>
-              <div className="ap-empty-desc">选中正文或源码中的文字，点击弹出的「🏷 添加标签」，即可创建：</div>
+              <div className="ap-empty-title">还没有标签</div>
+              <div className="ap-empty-desc">选中正文或源码中的文字，点击弹出的「🏷 添加标签」，即可创建笔记或标签：</div>
               <div className="ap-empty-kinds">
-                <span className="ap-kind tag"><span className="ap-kind-ico" aria-hidden="true">🏷</span><span className="ap-kind-text">标签</span></span>
                 <span className="ap-kind note"><span className="ap-kind-ico" aria-hidden="true">📝</span><span className="ap-kind-text">笔记</span></span>
-                <span className="ap-kind annotation"><span className="ap-kind-ico" aria-hidden="true">✎</span><span className="ap-kind-text">批注</span></span>
+                <span className="ap-kind tag"><span className="ap-kind-ico" aria-hidden="true">🏷</span><span className="ap-kind-text">标签</span></span>
               </div>
-              <div className="ap-empty-tip">批注保存在项目 .timber/annotations.json，可复制标注地址交给 agent 执行</div>
+              <div className="ap-empty-tip">笔记与标签保存在项目 .timber/annotations.json，可复制标签地址交给 agent 执行</div>
             </div>
           )}
         {annotations.map((a) => (

@@ -31,6 +31,9 @@ type DocNode struct {
 	Ext      string     `json:"ext,omitempty"`
 	Size     int64      `json:"size,omitempty"`
 	Children []*DocNode `json:"children,omitempty"`
+	// Truncated 仅根节点携带：文件数达上限被截断时为 true（v0.6.9 修复
+	// 「过滤后内容反而更多」——此前 5000 上限静默截断，源码树不完整而文档树完整）
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 var docExts = map[string]bool{
@@ -44,6 +47,10 @@ var skipDirs = map[string]bool{
 	"build": true, "release": true, ".venv": true, "venv": true,
 	"__pycache__": true, ".next": true, "target": true,
 	".idea": true, ".vscode": true, ".toolchain": true,
+	// 生成物/工具缓存目录（量级大且无阅读价值；coverage 为 istanbul/nyc/jest
+	// 覆盖率报告标准目录，单目录可达上万文件并挤占扫描上限，v0.6.9）
+	"coverage": true, ".nyc_output": true, ".cache": true,
+	".pytest_cache": true, ".turbo": true, ".gradle": true, ".sass-cache": true,
 }
 
 // skipName 目录是否跳过：具名黑名单 + electron-builder 临时输出目录（release-v*）
@@ -218,10 +225,13 @@ func scanTreeExts(root string, exts map[string]bool) (*DocNode, error) {
 	return scanTree(root, exts)
 }
 
-// scanTree 构建文档树（目录在前、名字排序；上限 5000 篇防失控）。
+// scanTree 构建文档树（目录在前、名字排序）。
+// 上限 maxDocs 防失控（node_modules 等已跳过，正常项目难以触达）；触达时根节点
+// 带 truncated=true，前端提示「文件过多已省略」——不再静默截断（v0.6.9）。
 func scanTree(root string, exts map[string]bool) (*DocNode, error) {
-	const maxDocs = 5000
+	const maxDocs = 20000
 	count := 0
+	hitCap := false
 	var walk func(dir, rel string) *DocNode
 	walk = func(dir, rel string) *DocNode {
 		node := &DocNode{Name: filepath.Base(dir), Path: rel, Type: "dir"}
@@ -253,7 +263,11 @@ func scanTree(root string, exts map[string]bool) (*DocNode, error) {
 				continue
 			}
 			ext := strings.ToLower(filepath.Ext(name))
-			if !exts[ext] || count >= maxDocs {
+			if !exts[ext] {
+				continue
+			}
+			if count >= maxDocs {
+				hitCap = true
 				continue
 			}
 			info, _ := e.Info()
@@ -270,6 +284,7 @@ func scanTree(root string, exts map[string]bool) (*DocNode, error) {
 	}
 	rootNode := walk(root, "")
 	rootNode.Name = filepath.Base(root)
+	rootNode.Truncated = hitCap
 	return rootNode, nil
 }
 

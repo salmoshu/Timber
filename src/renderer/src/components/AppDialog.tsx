@@ -32,7 +32,7 @@ function Dialog({ request }: { request: NonNullable<ReturnType<typeof useDialog>
         }}>
         <h2 id="dialog-title">{request.title}</h2>
         <p id="dialog-description">{request.message}</p>
-        {request.pathKind ? <LocalPathPicker kind={request.pathKind} defaultName={request.value ?? ''} onFinish={finish} /> : <form onSubmit={(e) => { e.preventDefault(); finish(request.value === undefined ? true : value) }}>
+        {request.pathKind ? <LocalPathPicker kind={request.pathKind} defaultName={request.value ?? ''} extension={request.pathExtension} onFinish={finish} /> : <form onSubmit={(e) => { e.preventDefault(); finish(request.value === undefined ? true : value) }}>
           {request.value !== undefined && <input aria-label={request.message} value={value} onChange={(e) => setValue(e.target.value)} onFocus={(e) => e.target.select()} />}
           <div className="app-dialog-actions">
             <button type="button" data-cancel className="btn-ghost" onClick={() => finish(null)}>取消</button>

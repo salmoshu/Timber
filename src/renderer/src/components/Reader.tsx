@@ -6,9 +6,13 @@ import EditorPane from './EditorPane'
 import Logo from './Logo'
 import TabsBar from './TabsBar'
 import FindBar from './FindBar'
+import PagedPreview from './PagedPreview'
+import ExcelView from './ExcelView'
+import ContextMenu, { type MenuItem } from './ContextMenu'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { rawBaseFor, origProjectId } from '../store'
-import { IconAnnotation } from './icons'
+import { exportActiveDocument, type DocumentExportKind } from '../utils/documentExport'
+import { IconAnnotation, IconExport } from './icons'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
 
@@ -45,17 +49,26 @@ export default function Reader() {
   const activeTabId = useStore((s) => s.activeTabId)
   const closeTab = useStore((s) => s.closeTab)
   const annotationsOpen = !marginHidden && marginExpanded
-  // 批注展开是当前文档的临时 UI 状态：打开新文档时始终回到收起状态。
+  // 标签展开与分页预览是当前文档的临时 UI 状态：打开新文档时回到连续阅读。
   useEffect(() => {
     setMarginExpanded(false)
     setMarginHidden(false)
+    setPaged(false)
+    setExportMenu(null)
   }, [activeDoc?.path])
   useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
+  useEffect(() => {
+    const open = (): void => { setPaged(true); setMode('read') }
+    window.addEventListener('timber:paged-preview', open)
+    return () => window.removeEventListener('timber:paged-preview', open)
+  }, [setMode])
 
   const proseWrapRef = useRef<HTMLDivElement>(null)
   const [pop, setPop] = useState<{ x: number; y: number; below?: boolean } | null>(null)
   const [rawBase, setRawBase] = useState('')
   const [findOpen, setFindOpen] = useState(false)
+  const [paged, setPaged] = useState(false)
+  const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [htmlError, setHtmlError] = useState<string | null>(null)
   const startMarginResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -118,10 +131,11 @@ export default function Reader() {
   }, [activeDoc, mode, pendingLocate])
 
   const isImage = activeDoc && IMAGE_EXTS.includes(activeDoc.ext)
+  const isExcel = activeDoc && ['xlsx', 'xls'].includes(activeDoc.ext)
   const isMd = activeDoc && ['md', 'markdown', 'mdown', 'mkd'].includes(activeDoc.ext)
   const isHtml = activeDoc && ['html', 'htm'].includes(activeDoc.ext)
 
-  // HTML 文档 / 图片经 sidecar /raw 以真实 URL 加载（远程项目走远端 base）
+  // HTML、图片与 Excel 经 sidecar /raw 以真实 URL 加载（远程项目走远端 base）
   const rawUrl =
     activeDoc && rawBase
       ? `${rawBase}/raw/${origProjectId(activeProjectId ?? '')}/${activeDoc.path
@@ -271,6 +285,11 @@ export default function Reader() {
   // 面包屑分段（VSCode 风格：目录 › 目录 › 文件）
   const crumbs = activeDoc.path.split('/')
   const hasModeTools = isMd || activeDoc.ext === 'txt' || isHtml
+  const exportItems: MenuItem[] = (['pdf', 'word', 'image'] as DocumentExportKind[]).map((kind) => ({
+    key: kind,
+    label: kind === 'pdf' ? '导出 PDF（按分页预览）' : kind === 'word' ? '导出 Word (.docx)' : '导出长图 (.png)',
+    onClick: () => void exportActiveDocument(kind)
+  }))
 
   return (
     <div className="reader resource-reader">
@@ -279,45 +298,74 @@ export default function Reader() {
           <div className="rt-tool-group">
             <div className="seg icon-seg">
               <button
-                className={mode === 'read' ? 'active' : ''}
-                onClick={() => setMode('read')}
+                className={!paged && mode === 'read' ? 'active' : ''}
+                onClick={() => { setPaged(false); setMode('read') }}
                 title={isHtml ? '阅读模式（渲染网页）' : '阅读模式（可直接编辑）'}
                 aria-label="阅读模式"
-                aria-pressed={mode === 'read'}
+                aria-pressed={!paged && mode === 'read'}
               >
                 📖
               </button>
               <button
-                className={mode === 'source' ? 'active' : ''}
-                onClick={() => setMode('source')}
+                className={!paged && mode === 'source' ? 'active' : ''}
+                onClick={() => { setPaged(false); setMode('source') }}
                 title={isHtml ? '编辑模式（编辑 HTML 源码）' : '编辑模式（编辑源码）'}
                 aria-label="编辑模式"
-                aria-pressed={mode === 'source'}
+                aria-pressed={!paged && mode === 'source'}
               >
                 ✎
               </button>
+              {isMd && (
+                <button
+                  className={paged ? 'active' : ''}
+                  onClick={() => { setPaged(true); setMode('read') }}
+                  title="A4 分页预览（PDF 按此分页导出）"
+                  aria-label="分页预览"
+                  aria-pressed={paged}
+                >
+                  ▤
+                </button>
+              )}
             </div>
           </div>
         )}
-        <div className="rt-tool-group">
-          <button
-            className={`rt-btn ${annotationsOpen ? 'active' : ''}`}
-            title={annotationsOpen ? `收起批注（${annotations.length}）` : `展开批注（${annotations.length}）`}
-            aria-label={annotationsOpen ? '收起批注' : '展开批注'}
-            aria-expanded={annotationsOpen}
-            onClick={() => {
-              if (annotationsOpen) {
-                setMarginExpanded(false)
-                setMarginHidden(true)
-              } else {
-                setMarginExpanded(true)
-                setMarginHidden(false)
-              }
-            }}
-          >
-            <IconAnnotation />
-          </button>
-        </div>
+        {isMd && window.timber && (
+          <div className="rt-tool-group">
+            <button
+              className="rt-btn"
+              title="导出 PDF / Word / 长图"
+              aria-label="导出文档"
+              aria-expanded={!!exportMenu}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect()
+                setExportMenu({ x: rect.left, y: rect.bottom + 4 })
+              }}
+            >
+              <IconExport />
+            </button>
+          </div>
+        )}
+        {hasModeTools && (
+          <div className="rt-tool-group">
+            <button
+              className={`rt-btn ${annotationsOpen ? 'active' : ''}`}
+              title={annotationsOpen ? `收起标签（${annotations.length}）` : `展开标签（${annotations.length}）`}
+              aria-label={annotationsOpen ? '收起标签' : '展开标签'}
+              aria-expanded={annotationsOpen}
+              onClick={() => {
+                if (annotationsOpen) {
+                  setMarginExpanded(false)
+                  setMarginHidden(true)
+                } else {
+                  setMarginExpanded(true)
+                  setMarginHidden(false)
+                }
+              }}
+            >
+              <IconAnnotation />
+            </button>
+          </div>
+        )}
       </TabsBar>
 
       <div className="rt-breadcrumb" title={activeDoc.path}>
@@ -331,15 +379,17 @@ export default function Reader() {
 
       {findOpen && <FindBar onClose={() => setFindOpen(false)} />}
 
-      <div className={`document-workspace ${activeDoc.ext === 'md' || mode === 'source' ? 'with-outline' : ''}`}>
-      <DocumentOutline />
+      <div className={`document-workspace ${!paged && (activeDoc.ext === 'md' || mode === 'source') ? 'with-outline' : ''}`}>
+      {!paged && <DocumentOutline />}
       <div
         className="reader-body"
         ref={proseWrapRef}
         onMouseUp={onMouseUp}
         onInput={() => setPop(null)}
       >
-        {mode === 'source' ? (
+        {paged && isMd ? (
+          <PagedPreview docPath={activeDoc.path} projectId={activeProjectId ?? ''} />
+        ) : mode === 'source' ? (
           <EditorPane />
         ) : isMd ? (
           <MarkdownView
@@ -349,6 +399,8 @@ export default function Reader() {
               setMarginHidden(false)
             }}
           />
+        ) : isExcel ? (
+          <ExcelView url={rawUrl} title={activeDoc.path} />
         ) : isImage ? (
           <div className="img-view-wrap">
             <img className="img-view" src={rawUrl} alt={activeDoc.path} />
@@ -376,7 +428,7 @@ export default function Reader() {
           <pre className="txt-view">{activeDoc.content}</pre>
         )}
 
-        {pop && (mode === 'read' ? isMd : isMd || activeDoc.ext === 'txt' || isHtml) && (
+        {!paged && pop && (mode === 'read' ? isMd : isMd || activeDoc.ext === 'txt' || isHtml) && (
           <button
             className={`ann-pop ${pop.below ? 'below' : ''}`}
             style={{ left: pop.x, top: pop.y }}
@@ -397,6 +449,9 @@ export default function Reader() {
         />
       </div>
       </div>
+      {exportMenu && (
+        <ContextMenu x={exportMenu.x} y={exportMenu.y} items={exportItems} onClose={() => setExportMenu(null)} />
+      )}
     </div>
   )
 }

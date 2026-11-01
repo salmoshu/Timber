@@ -72,6 +72,8 @@ export interface DocNode {
   ext?: string
   size?: number
   children?: DocNode[]
+  /** 仅根节点携带：文件数达扫描上限被截断（前端据此提示） */
+  truncated?: boolean
 }
 
 export interface DocContent {
@@ -84,13 +86,13 @@ export interface DocContent {
 
 export type AnnotationStatus = 'open' | 'done'
 
-/** 标注类型：标签（快速归类）/ 笔记（记录思考与备忘）/ 批注（要求修改，可交给 agent） */
+/** 标注类型：标签（快速归类，兼容旧 annotation 数据）/ 笔记（记录思考与备忘） */
 export type AnnotationKind = 'tag' | 'note' | 'annotation'
 
 export const ANNOTATION_KIND_LABELS: Record<AnnotationKind, string> = {
   tag: '标签',
   note: '笔记',
-  annotation: '批注'
+  annotation: '标签'
 }
 
 export interface Annotation {
@@ -120,7 +122,7 @@ export const DOC_FORMAT_GROUPS: DocFormatGroup[] = [
   { key: 'md', label: 'Markdown', exts: ['.md', '.markdown', '.mdown', '.mkd'] },
   { key: 'html', label: 'HTML', exts: ['.html', '.htm'] },
   { key: 'txt', label: '纯文本', exts: ['.txt'] },
-  { key: 'xml', label: 'XML', exts: ['.xml'] },
+  { key: 'excel', label: 'Excel', exts: ['.xlsx', '.xls'] },
   { key: 'csv', label: 'CSV', exts: ['.csv'] },
   { key: 'log', label: '日志', exts: ['.log'] }
 ]
@@ -414,8 +416,12 @@ export interface TimberBridge {
   onExtPageStatus(cb: (e: { url: string; code: number }) => void): () => void
   /** 用系统浏览器打开（浮层右上角 ↗） */
   openInSystemBrowser(url: string): Promise<void>
-  /** 导出 PDF：渲染器产出独立文档 HTML，主进程隐藏窗口 printToPDF，保存到自定义选择器选定的位置 */
+  /** 导出 PDF：渲染器产出分页后的独立文档 HTML，主进程隐藏窗口 printToPDF */
   exportPdf(payload: { html: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  /** 导出连续版式长图：隐藏窗口量高并整页截图 */
+  exportImage(payload: { html: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; error?: string }>
+  /** 导出二进制文档（DOCX 等）：data 为 base64 */
+  exportBinary(payload: { data: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; error?: string }>
   /** 标签快捷键（主进程拦截 Ctrl+W / Ctrl+Tab 后转发） */
   onTabShortcut(cb: (kind: 'close' | 'next') => void): () => void
   /** sidecar 自动重启后新 base/token（更新渲染层缓存） */

@@ -212,17 +212,13 @@ ipcMain.on('win:close', () => mainWindow?.close())
 
 ipcMain.handle('app:version', () => app.getVersion())
 
-// 导出 PDF（v0.5.7）：渲染器把文档渲染成独立 HTML 字符串（浅色打印样式、图片已重写为
-// sidecar /raw 绝对 URL），这里写临时文件 → 隐藏窗口加载 → 等资源就绪 → printToPDF → 保存对话框。
-// 不能用主窗口 printToPDF：那会把整个应用 UI 打进去。
-ipcMain.handle('export:pdf', async (_e, payload: { html: string; path: string; overwrite: boolean }) => {
-  const tmpHtml = join(tmpdir(), `timber-export-${process.pid}-${Date.now()}.html`)
+async function withExportWindow<T>(html: string, task: (win: BrowserWindow) => Promise<T>): Promise<T> {
+  const tmpHtml = join(tmpdir(), `timber-export-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.html`)
   let win: BrowserWindow | null = null
   try {
-    writeFileSync(tmpHtml, payload.html, 'utf-8')
-    win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    writeFileSync(tmpHtml, html, 'utf-8')
+    win = new BrowserWindow({ show: false, width: 900, height: 1123, webPreferences: { sandbox: true, backgroundThrottling: false } })
     await win.loadFile(tmpHtml)
-    // 等字体与图片（sidecar /raw、外链图）加载完再打印，避免 PDF 里图片缺位
     await win.webContents.executeJavaScript(
       `(async () => {
         if (document.fonts?.ready) await document.fonts.ready
@@ -230,20 +226,81 @@ ipcMain.handle('export:pdf', async (_e, payload: { html: string; path: string; o
           i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = () => r(0) })))
       })()`
     )
-    if (!mainWindow) return { ok: false, error: '主窗口已关闭' }
+    if (!mainWindow) throw new Error('主窗口已关闭')
+    return await task(win)
+  } finally {
+    win?.destroy()
+    try { unlinkSync(tmpHtml) } catch { /* 临时文件清理失败可忽略 */ }
+  }
+}
+
+ipcMain.handle('export:pdf', async (_e, payload: { html: string; path: string; overwrite: boolean }) => {
+  try {
     if (!isAbsolute(payload.path) || !/\.pdf$/i.test(payload.path)) throw new Error('无效的 PDF 保存路径')
-    const pdf = await win.webContents.printToPDF({
+    const pdf = await withExportWindow(payload.html, (win) => win.webContents.printToPDF({
       printBackground: true,
       pageSize: 'A4',
-      margins: { marginType: 'custom', top: 0.55, bottom: 0.55, left: 0.6, right: 0.6 }
-    })
+      margins: { marginType: 'none' }
+    }))
     writeFileSync(payload.path, pdf, { flag: payload.overwrite ? 'w' : 'wx' })
     return { ok: true, path: payload.path }
   } catch (err) {
     return { ok: false, error: String(err instanceof Error ? err.message : err) }
-  } finally {
-    win?.destroy()
-    try { unlinkSync(tmpHtml) } catch { /* 临时文件清理失败可忽略 */ }
+  }
+})
+
+function withExportTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`导出操作超时（${Math.round(ms / 1000)}s）`)), ms)
+    promise.then((value) => { clearTimeout(timer); resolve(value) }, (error) => { clearTimeout(timer); reject(error) })
+  })
+}
+
+ipcMain.handle('export:image', async (_e, payload: { html: string; path: string; overwrite: boolean }) => {
+  try {
+    if (!isAbsolute(payload.path) || !/\.png$/i.test(payload.path)) throw new Error('无效的 PNG 保存路径')
+    const png = await withExportWindow(payload.html, async (win) => {
+      const fullHeight = await win.webContents.executeJavaScript(`Math.ceil(document.documentElement.scrollHeight)`) as number
+      const [width] = win.getContentSize()
+      const height = Math.max(1, fullHeight)
+      win.setContentSize(width, height)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const debugger_ = win.webContents.debugger
+      try {
+        if (!debugger_.isAttached()) debugger_.attach('1.3')
+        const shot = await withExportTimeout(debugger_.sendCommand('Page.captureScreenshot', {
+          format: 'png', captureBeyondViewport: true, optimizeForSpeed: true,
+          clip: { x: 0, y: 0, width, height, scale: 1 }
+        }) as Promise<{ data: string }>, 10_000)
+        const data = Buffer.from(shot.data, 'base64')
+        if (nativeImage.createFromBuffer(data).getSize().height >= height - 5) return data
+      } catch {
+        /* 下方 capturePage 兜底 */
+      } finally {
+        if (debugger_.isAttached()) debugger_.detach()
+      }
+      const image = await withExportTimeout(win.webContents.capturePage({ x: 0, y: 0, width, height }), 30_000)
+      if (nativeImage.createFromBuffer(image.toPNG()).getSize().height >= height - 5) return image.toPNG()
+      win.setPosition(-10000, -10000)
+      win.showInactive()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      const retry = await withExportTimeout(win.webContents.capturePage({ x: 0, y: 0, width, height }), 30_000)
+      return retry.toPNG()
+    })
+    writeFileSync(payload.path, png, { flag: payload.overwrite ? 'w' : 'wx' })
+    return { ok: true, path: payload.path }
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) }
+  }
+})
+
+ipcMain.handle('export:binary', async (_e, payload: { data: string; path: string; overwrite: boolean }) => {
+  try {
+    if (!isAbsolute(payload.path) || !/\.docx$/i.test(payload.path)) throw new Error('无效的 DOCX 保存路径')
+    writeFileSync(payload.path, Buffer.from(payload.data, 'base64'), { flag: payload.overwrite ? 'w' : 'wx' })
+    return { ok: true, path: payload.path }
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) }
   }
 })
 

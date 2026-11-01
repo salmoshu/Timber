@@ -24,13 +24,11 @@
    且 h4–h6 不再小于正文（v0.5.6 修复「子标题不像标题」） */
 .prose h1 {
   font-size: 1.75em; line-height: 1.4;
-  margin: 0 0 20px; padding-bottom: 14px;
-  border-bottom: 1px solid var(--line); letter-spacing: 0.3px;
+  margin: 0 0 20px; padding-bottom: 14px; letter-spacing: 0.3px;
 }
 .prose h2 {
   font-size: 1.45em; line-height: 1.4;
   margin: 36px 0 12px; padding-top: 12px;
-  border-top: 1px solid var(--line);
 }
 .prose h2::before { content: "§ "; color: var(--accent); font-weight: 400; }
 .prose h3 { font-size: 1.25em; margin: 28px 0 8px; }

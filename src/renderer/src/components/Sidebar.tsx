@@ -6,7 +6,7 @@ import Chevron from './Chevron'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import { HistoryList } from './HistoryView'
-import { exportActiveDocPdf } from '../utils/exportPdf'
+import { exportActiveDocument } from '../utils/documentExport'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
 import { clearRecentFiles, recentFiles } from '../utils/local-store'
 import {
@@ -687,7 +687,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
         label: '导出 PDF…',
         onClick: () => void (async () => {
           await useStore.getState().openTab(node.path)
-          if (useStore.getState().activeDoc?.path === node.path) await exportActiveDocPdf()
+          if (useStore.getState().activeDoc?.path === node.path) await exportActiveDocument('pdf')
         })()
       })
     }
@@ -982,6 +982,11 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                     }}
                   />
                 ))}
+                {shownTree?.truncated && (
+                  <div className="tree-truncated" title="项目文件数超过扫描上限，超出部分未显示；可屏蔽大目录后重新扫描">
+                    文件过多，仅显示前 2 万个
+                  </div>
+                )}
               </div>
             </>
           ) : tab === 'recent' ? (

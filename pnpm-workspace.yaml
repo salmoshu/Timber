@@ -4,5 +4,6 @@ ignoredBuiltDependencies:
   - electron
 allowBuilds:
   electron: false
+  es5-ext: false
   esbuild: true
 verifyDepsBeforeRun: false

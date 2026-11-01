@@ -36,13 +36,13 @@ export const CODE_EXTS = [
   '.dart', '.scala', '.clj', '.ex', '.exs', '.lua', '.pl', '.r',
   '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.css', '.scss', '.sass', '.less', '.html', '.htm',
   '.md', '.markdown', '.mdown', '.mkd', '.mdx', '.rst', '.txt', '.json', '.jsonl', '.yaml', '.yml',
-  '.toml', '.ini', '.cfg', '.conf', '.env', '.xml', '.csv', '.tsv', '.log', '.sql', '.graphql', '.gql',
+  '.toml', '.ini', '.cfg', '.conf', '.env', '.csv', '.tsv', '.log', '.sql', '.graphql', '.gql',
   '.proto', '.properties', '.gitignore', '.gitattributes', '.editorconfig',
-  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.xlsx', '.xls'
 ]
 
 /** 资源视图中走 Reader（可编辑/阅读渲染）的扩展名；其余源码文件走 CodeReader（只读） */
-const READER_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
+const READER_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'xlsx', 'xls'])
 
 export function isReaderPath(path: string): boolean {
   return READER_EXTS.has((path.split('.').pop() ?? '').toLowerCase())
@@ -160,6 +160,7 @@ function formatImpactSummary(receipt: ArchDeltaReceipt): string {
 }
 
 const IMAGE_EXT_SET = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
+const BINARY_EXT_SET = new Set([...IMAGE_EXT_SET, 'xlsx', 'xls'])
 
 /** UTF-8 BOM（\uFEFF）是编码标记而非内容：所有加载入口统一剥离（v0.5.7 首载剥离，
  *  v0.6.3 补齐外部重载/手动刷新两条路径），否则 BOM 会让首行 `# 标题` 不解析，
@@ -187,7 +188,7 @@ async function syncResources(): Promise<void> {
   resourceSyncing = true
   const tabId = s.activeTabId
   const docSnapshot = s.activeDoc
-  const shouldReadDoc = !!docSnapshot && !!tabId && !s.dirty && !s.saving && !s.docLoading && !s.docError && !IMAGE_EXT_SET.has(docSnapshot.ext)
+  const shouldReadDoc = !!docSnapshot && !!tabId && !s.dirty && !s.saving && !s.docLoading && !s.docError && !BINARY_EXT_SET.has(docSnapshot.ext)
   try {
     const treeRequest = s.treeLoading
       ? Promise.resolve(null)
@@ -1366,8 +1367,8 @@ export const useStore = create<State>((set, get) => ({
     const s = get()
     const tabId = s.activeTabId
     if (!s.activeDoc || !s.activeProjectId || !tabId) return
-    // 图片经 /raw 直读文件，无文本内容可刷新（与外部变更轮询一致跳过）
-    if (IMAGE_EXT_SET.has(s.activeDoc.ext)) return
+    // 图片与 Excel 经 /raw 直读文件，无文本内容可刷新（与外部变更轮询一致跳过）
+    if (BINARY_EXT_SET.has(s.activeDoc.ext)) return
     if (s.dirty && !await askConfirm('当前有未保存的修改，刷新将丢弃。继续？')) return
     if (get().activeProjectId !== s.activeProjectId || get().activeTabId !== tabId || get().draft !== s.draft) return
     try {
@@ -1491,7 +1492,7 @@ export const useStore = create<State>((set, get) => ({
       })
       set({ composeQuote: null })
       await get().loadAnnotations()
-      get().toast('ok', kind === 'tag' ? '标签已保存' : kind === 'note' ? '笔记已保存' : '批注已保存')
+      get().toast('ok', kind === 'note' ? '笔记已保存' : '标签已保存')
     } catch (err) {
       get().toast('err', `保存失败：${err}`)
     }
@@ -1518,9 +1519,9 @@ export const useStore = create<State>((set, get) => ({
         text
       })
       await get().loadAnnotations()
-      get().toast('ok', '批注已更新')
+      get().toast('ok', '标签已更新')
     } catch (err) {
-      get().toast('err', `批注更新失败：${err}`)
+      get().toast('err', `标签更新失败：${err}`)
     }
   },
 
@@ -1601,8 +1602,8 @@ async function loadTabInto(
   const projectId = get().activeProjectId
   if (!projectId) return
   const ext = (tab.path.split('.').pop() ?? '').toLowerCase()
-  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)
-  const cached = isImage
+  const isBinary = BINARY_EXT_SET.has(ext)
+  const cached = isBinary
     ? ({ path: tab.path, ext, content: '', size: 0, mtime: '' } as DocContent)
     : tab.doc
 
@@ -1618,8 +1619,8 @@ async function loadTabInto(
   })
 
   if (cached) {
-    // 图片：不拉内容也不校验
-    if (isImage) {
+    // 图片与 Excel：不拉文本内容也不校验
+    if (isBinary) {
       set({ annotations: [] })
       cacheTabDoc(tab.id, cached, set, get)
       pushRecentFile(projectId, tab.path)

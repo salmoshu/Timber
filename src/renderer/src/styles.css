@@ -230,6 +230,14 @@ input, textarea { user-select: text; }
   color: var(--sidebar-ink2); font-size: 11px; text-align: right;
 }
 
+/* 文件树截断提示（v0.6.9）：文件数达扫描上限时树底提示，不再静默丢内容 */
+.tree-truncated {
+  margin-top: 6px; padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--Others-LightOrangeBg); color: var(--Colors-Orange);
+  font-size: 11px; line-height: 1.6; text-align: center;
+}
+
 .sb-tree { flex: 1; overflow-y: auto; padding: 2px 8px 20px; }
 .sb-tree.git-tree { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
 .sb-tree::-webkit-scrollbar { width: 8px; }
@@ -2143,3 +2151,34 @@ select:focus-visible {
   .project-sidebar { max-width: 220px; }
   .resource-sidebar { max-width: 260px; }
 }
+
+.paged-preview { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 42px; background: var(--arch-bg); }
+.paged-preview-meta {
+  position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; gap: 16px;
+  padding: 12px 4px; background: var(--arch-bg); color: var(--ink2); font-size: 12px;
+}
+.paged-preview-meta span { color: var(--ink3); }
+.paged-preview-zoom, .paged-preview-pages { width: 794px; margin: 0 auto; }
+.paged-preview-pages { min-height: 240px; }
+
+.excel-view { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--paper); }
+.excel-toolbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.excel-sheets { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
+.excel-sheets button { flex: none; padding: 5px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ink2); }
+.excel-sheets button.active { background: var(--accent-soft); color: var(--accent); }
+.excel-meta { margin-left: auto; flex: none; color: var(--ink3); font-size: 12px; }
+.excel-table-wrap { flex: 1; min-height: 0; overflow: auto; }
+.excel-table { border-collapse: collapse; min-width: 100%; font-size: 12.5px; line-height: 1.6; }
+.excel-table td, .excel-table th { padding: 6px 10px; border: 1px solid var(--line); color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.excel-table tr:first-child td { background: var(--Fills-F1); font-weight: 600; }
+.excel-table .excel-row-number { position: sticky; left: 0; min-width: 42px; background: var(--Bg-Secondary); color: var(--ink3); text-align: center; font-weight: 400; }
+.excel-truncated { padding: 12px; color: var(--Colors-Orange); font-size: 12px; text-align: center; }
+
+.an-image-resize-handle {
+  position: fixed; z-index: 9000; width: 18px; height: 18px; padding: 0;
+  border: 2px solid #fff; border-radius: 5px; background: var(--accent);
+  box-shadow: 0 1px 6px #0004; cursor: nwse-resize;
+}
+.an-image-resize-handle::after { content: ''; position: absolute; right: 2px; bottom: 2px; width: 6px; height: 6px; border-right: 2px solid #fff; border-bottom: 2px solid #fff; }
+body.image-resizing { cursor: nwse-resize; user-select: none; }
+body.image-resizing iframe, body.image-resizing webview { pointer-events: none; }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TimberBridge } from '@shared/types'
 
-export default function LocalPathPicker({ kind, defaultName, onFinish }: { kind: 'folder' | 'save'; defaultName: string; onFinish: (path: string | null) => void }) {
+export default function LocalPathPicker({ kind, defaultName, extension = '.pdf', onFinish }: { kind: 'folder' | 'save'; defaultName: string; extension?: string; onFinish: (path: string | null) => void }) {
   const [listing, setListing] = useState<Awaited<ReturnType<TimberBridge['browseLocal']>> | null>(null)
   const [directory, setDirectory] = useState('')
   const [name, setName] = useState(defaultName)
@@ -25,8 +25,8 @@ export default function LocalPathPicker({ kind, defaultName, onFinish }: { kind:
       const result = await window.timber!.browseLocal(directory)
       if (kind === 'folder') { onFinish(result.path); return }
       const filename = name.trim()
-      if (!filename || /[\\/:*?"<>|]/.test(filename) || /[. ]$/.test(filename) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(filename)) throw new Error('请输入有效的 PDF 文件名')
-      onFinish(`${result.path}${result.path.endsWith('\\') || result.path.endsWith('/') ? '' : '/'}${/\.pdf$/i.test(filename) ? filename : filename + '.pdf'}`)
+      if (!filename || /[\\/:*?"<>|]/.test(filename) || /[. ]$/.test(filename) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(filename)) throw new Error(`请输入有效的 ${extension.slice(1).toUpperCase()} 文件名`)
+      onFinish(`${result.path}${result.path.endsWith('\\') || result.path.endsWith('/') ? '' : '/'}${filename.toLowerCase().endsWith(extension) ? filename : filename + extension}`)
     } catch (e) { setError(String(e instanceof Error ? e.message : e)); setBusy(false) }
   }
   return <div className="local-path-picker">

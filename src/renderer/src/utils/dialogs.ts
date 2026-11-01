@@ -8,6 +8,7 @@ export interface DialogRequest {
   confirmLabel: string
   danger?: boolean
   pathKind?: 'folder' | 'save'
+  pathExtension?: string
   resolve: (value: string | boolean | null) => void
 }
 
@@ -39,7 +40,7 @@ export async function askInput(message: string, value = '', title = '输入内�
   const result = await request({ title, message, value, confirmLabel: '确定' })
   return typeof result === 'string' ? result : null
 }
-export async function askPath(kind: 'folder' | 'save', defaultName = ''): Promise<string | null> {
-  const result = await request({ title: kind === 'folder' ? '选择项目目录' : '导出 PDF', message: kind === 'folder' ? '选择要添加的项目文件夹' : '选择保存位置', pathKind: kind, value: defaultName, confirmLabel: kind === 'folder' ? '选择此目录' : '保存' })
+export async function askPath(kind: 'folder' | 'save', defaultName = '', extension = '.pdf'): Promise<string | null> {
+  const result = await request({ title: kind === 'folder' ? '选择项目目录' : `导出 ${extension.slice(1).toUpperCase()}`, message: kind === 'folder' ? '选择要添加的项目文件夹' : '选择保存位置', pathKind: kind, pathExtension: extension, value: defaultName, confirmLabel: kind === 'folder' ? '选择此目录' : '保存' })
   return typeof result === 'string' ? result : null
 }
