@@ -10,7 +10,8 @@ import type { Annotation } from '@shared/types'
 import { useStore, rawBaseFor, origProjectId } from '../store'
 import { systemPrefersDark } from '../utils/settings'
 import { sanitizeRenderedHtml, upgradeInlineHtml } from '../utils/sanitizeHtml'
-import { applyImageSizes, saveImageSize } from '../utils/imageSizes'
+import { applyImageMetas, effectiveAlign, imageKey, mermaidKey, saveImageMeta, type ImageAlign } from '../utils/imageSizes'
+import { styleMermaidSvgs } from '../utils/mermaid'
 import { collectText, findAnnotationRange, setTextHighlight } from '../utils/textRanges'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 
@@ -692,7 +693,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     }
 
     const rewriteImages = (): void => {
-      applyImageSizes(container, projectId, docPath)
+      applyImageMetas(container, projectId, docPath)
       if (!rawBase) return
       container.querySelectorAll('img').forEach((image) => {
         const src = image.getAttribute('src') ?? ''
@@ -709,63 +710,9 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         image.dataset.anDisplaySrc = image.getAttribute('src')!
       })
     }
-    // Mermaid 外观重刷（v0.6.3，GitHub 风格）：白底卡片节点 + 石板灰边线 +
-    // 系统字体 + 轻投影，深色模式镜像。只改颜色/圆角/投影不动布局；
-    // pie/甘特等按颜色表意的图形不覆盖填充色，仅统一文字。
-    const styleMermaidDiagrams = (prose: HTMLElement): void => {
-      const c = theme === 'dark'
-        ? {
-            node: '#1c2635', nodeStroke: '#4a6488', edge: '#8199b4', ink: '#e6edf3',
-            paper: '#141b24', cluster: '#111823', clusterStroke: '#33445a', labelBg: '#141b24',
-            note: '#3d3213', noteStroke: '#a08420', actor: '#132a44', actorStroke: '#3f7fc2',
-            shadow: 'drop-shadow(0 2px 6px rgba(0,0,0,.5))'
-          }
-        : {
-            node: '#ffffff', nodeStroke: '#8296b0', edge: '#71809a', ink: '#1f2b3d',
-            paper: '#ffffff', cluster: '#f4f6f9', clusterStroke: '#d5dde6', labelBg: '#ffffff',
-            note: '#fdf6d8', noteStroke: '#d6a72c', actor: '#e8f3ff', actorStroke: '#54a3ff',
-            shadow: 'drop-shadow(0 2px 6px rgba(31,43,61,.16))'
-          }
-      const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
-      prose.querySelectorAll<SVGElement>('.language-mermaid svg').forEach((svg) => {
-        const paint = (selector: string, styles: Record<string, string>): void => {
-          svg.querySelectorAll<SVGElement | HTMLElement>(selector).forEach((el) => {
-            Object.entries(styles).forEach(([property, value]) => el.style.setProperty(property, value, 'important'))
-          })
-        }
-        // 节点形状（流程图 / 状态图 / 类图 / ER / 旅程 / 思维导图）
-        paint(
-          '.node rect, .node circle, .node ellipse, .node polygon, .node path, g.classGroup rect, g.stateGroup rect, g.stateGroup circle, g.entityBox rect, rect.actor, g.actor rect',
-          { fill: c.node, stroke: c.nodeStroke, 'stroke-width': '1.3px', filter: c.shadow }
-        )
-        // 时序图参与者与激活条：淡蓝底区分
-        paint('rect.actor, g.actor rect, rect.activation0, rect.activation1, rect.activation2', { fill: c.actor, stroke: c.actorStroke, 'stroke-width': '1.2px' })
-        // 分组框：浅灰底弱边
-        paint('.cluster rect, g.cluster rect', { fill: c.cluster, stroke: c.clusterStroke, 'stroke-width': '1.2px' })
-        // 边线 / 生命线 / 消息线 / 循环框 / 类图分隔线 / 思维导图连线
-        paint(
-          '.edgePath path, path.flowchart-link, .actor-line, .signal, .messageLine0, .messageLine1, .loopLine, g.classGroup line, .er.relationshipLine, .transition path, .mindmap-edges path',
-          { stroke: c.edge, 'stroke-width': '1.5px' }
-        )
-        paint('marker path, marker polygon, .arrowheadPath, .arrowMarkerPath', { fill: c.edge, stroke: c.edge })
-        // 边标签：与画布同底，避免文字压线
-        paint('.edgeLabel rect, g.edgeLabel rect', { fill: c.labelBg, stroke: 'none' })
-        paint('.edgeLabel, span.edgeLabel', { 'background-color': c.labelBg, color: c.ink, 'font-family': font })
-        // 注释便签
-        paint('.note, rect.note, g.note rect', { fill: c.note, stroke: c.noteStroke, 'stroke-width': '1.2px' })
-        // 文字统一（含标题 / 图例 / 甘特分区）
-        paint(
-          'text, .nodeLabel, .edgeLabel, .label, .messageText, .noteText, .loopText, .cluster-label, .pieTitle, .legend, .sectionTitle, .taskText, .titleText',
-          { color: c.ink, fill: c.ink, 'font-family': font }
-        )
-        // 圆角：矩形节点与分组框
-        svg.querySelectorAll<SVGElement>('.node rect, g.classGroup rect, g.stateGroup rect, rect.actor, g.actor rect, .cluster rect, g.cluster rect, rect.note, g.note rect').forEach((el) => {
-          el.setAttribute('rx', '8')
-          el.setAttribute('ry', '8')
-        })
-        svg.style.setProperty('background', c.paper, 'important')
-      })
-    }
+    // Mermaid 外观重刷（v0.6.3 引入；v0.6.10 迁至 utils/mermaid，与导出/分页
+    // 预览管线共用同一套 GitHub 风格配色与选择器）
+    const styleMermaidDiagrams = (prose: HTMLElement): void => styleMermaidSvgs(prose, theme === 'dark')
     const refresh = (): void => {
       const prose = container.querySelector<HTMLElement>('.prose')
       if (!prose || disposed) return
@@ -1160,78 +1107,180 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       if (!(event as InputEvent).isComposing) syncDraft()
     }
 
-    const imageResizeHandle = document.createElement('button')
-    imageResizeHandle.type = 'button'
-    imageResizeHandle.className = 'an-image-resize-handle'
-    imageResizeHandle.title = '拖拽调整图片宽度'
-    imageResizeHandle.setAttribute('aria-label', '拖拽调整图片宽度')
-    imageResizeHandle.style.display = 'none'
-    document.body.appendChild(imageResizeHandle)
-    let resizeHoverImage: HTMLImageElement | null = null
-    let resizingImage: HTMLImageElement | null = null
-    const positionImageResizeHandle = (): void => {
-      if (!resizeHoverImage?.isConnected) {
-        imageResizeHandle.style.display = 'none'
+    // ---- 图片 / Mermaid 图工具条（v0.6.9 调宽；v0.6.10 扩展对齐与 Mermaid）----
+    // 悬停正文图片或 Mermaid 图时浮现：对齐三键（居左/居中/居右）+ 右端拖宽把手。
+    // 宽度与对齐按「项目:文档 → 元素键」记忆（utils/imageSizes），不改写源码；
+    // 图片对齐落在所在段落 text-align，Mermaid 对齐落在 svg margin。
+    const ALIGN_ICON = {
+      left: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg>',
+      center: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M6 18h12"/></svg>',
+      right: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M10 12h10M7 18h13"/></svg>'
+    } as const
+    const ALIGN_LABEL = { left: '居左', center: '居中', right: '居右' } as const
+    const imageTools = document.createElement('div')
+    imageTools.className = 'an-image-tools'
+    imageTools.style.display = 'none'
+    imageTools.innerHTML =
+      (['left', 'center', 'right'] as const)
+        .map((a) => `<button type="button" data-align="${a}" title="${ALIGN_LABEL[a]}" aria-label="图片${ALIGN_LABEL[a]}">${ALIGN_ICON[a]}</button>`)
+        .join('') +
+      '<button type="button" class="an-image-grip" title="拖拽调整宽度" aria-label="拖拽调整宽度"></button>'
+    document.body.appendChild(imageTools)
+    /** 当前悬停目标：正文图片或 Mermaid svg */
+    let hoverTarget: HTMLImageElement | SVGElement | null = null
+    let resizing = false
+    /** 目标的元素键（图片按 序号:src；Mermaid 按 m:序号:文字指纹） */
+    const targetKey = (target: HTMLImageElement | SVGElement): string | null => {
+      const prose = target.closest('.prose')
+      if (!prose) return null
+      if (target instanceof SVGElement) {
+        const index = [...prose.querySelectorAll('.language-mermaid svg')].indexOf(target)
+        return index >= 0 ? mermaidKey(index, target) : null
+      }
+      const index = [...prose.querySelectorAll('img')].indexOf(target)
+      return index >= 0 ? imageKey(index, target.dataset.anOrigSrc ?? target.getAttribute('src') ?? '') : null
+    }
+    /** 对齐写入目标元素并记忆 */
+    const applyAlign = (target: HTMLImageElement | SVGElement, align: ImageAlign): void => {
+      if (target instanceof SVGElement) {
+        target.style.marginLeft = align === 'left' ? '0' : 'auto'
+        target.style.marginRight = align === 'right' ? '0' : 'auto'
+      } else {
+        const block = target.closest('p') ?? target.parentElement
+        if (block) block.style.textAlign = align === 'left' ? '' : align
+      }
+      const key = targetKey(target)
+      if (key) saveImageMeta(projectId, docPath, key, { align })
+    }
+    const refreshAlignButtons = (): void => {
+      if (!hoverTarget) return
+      const current = effectiveAlign(hoverTarget)
+      imageTools.querySelectorAll<HTMLButtonElement>('button[data-align]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.align === current)
+      })
+    }
+    const positionImageTools = (): void => {
+      // 拖宽时图片底边会持续移动，工具条必须保持原位，否则抓手会逃离鼠标。
+      if (resizing) return
+      if (!hoverTarget?.isConnected) {
+        imageTools.style.display = 'none'
         return
       }
-      const rect = resizeHoverImage.getBoundingClientRect()
-      imageResizeHandle.style.left = `${Math.max(8, Math.min(rect.right - 9, window.innerWidth - 27))}px`
-      imageResizeHandle.style.top = `${Math.max(8, Math.min(rect.bottom - 9, window.innerHeight - 27))}px`
-      imageResizeHandle.style.display = 'block'
+      const rect = hoverTarget.getBoundingClientRect()
+      // 代码块编辑态的隐藏副本 rect 为 0：不呈现工具条
+      if (rect.width === 0) {
+        imageTools.style.display = 'none'
+        return
+      }
+      cancelHideImageTools()
+      const barWidth = imageTools.offsetWidth || 116
+      imageTools.style.left = `${Math.max(8, Math.min(rect.right - barWidth, window.innerWidth - barWidth - 8))}px`
+      imageTools.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 36))}px`
+      imageTools.style.display = 'flex'
+      refreshAlignButtons()
     }
-    const hideImageResizeHandle = (): void => {
-      if (resizingImage) return
-      resizeHoverImage = null
-      imageResizeHandle.style.display = 'none'
+    // 延迟隐藏（v0.6.10）：图片与工具条之间有间隙，鼠标穿越间隙时 mouseout 的
+    // relatedTarget 是段落/卡片而非工具条——立即隐藏会让工具条永远点不到。
+    // 离开目标改为 260ms 后隐藏，期间移入工具条（mouseenter）取消。
+    let hideToolsTimer = 0
+    const hideImageTools = (): void => {
+      if (resizing) return
+      window.clearTimeout(hideToolsTimer)
+      hideToolsTimer = window.setTimeout(() => {
+        if (resizing) return
+        hoverTarget = null
+        imageTools.style.display = 'none'
+      }, 260)
+    }
+    const cancelHideImageTools = (): void => {
+      window.clearTimeout(hideToolsTimer)
+    }
+    const hitTarget = (event: MouseEvent): HTMLImageElement | SVGElement | null => {
+      const el = event.target as Element
+      const image = el.closest?.('.prose img')
+      if (image) return image as HTMLImageElement
+      const svg = el.closest?.('svg')
+      return svg && svg.closest('.language-mermaid') && svg.closest('.prose') ? (svg as SVGElement) : null
     }
     const onImageOver = (event: MouseEvent): void => {
-      const image = (event.target as HTMLElement).closest<HTMLImageElement>('.prose img')
-      if (!image) return
-      resizeHoverImage = image
-      positionImageResizeHandle()
+      if (resizing) return
+      const target = hitTarget(event)
+      if (!target) return
+      hoverTarget = target
+      positionImageTools()
     }
     const onImageOut = (event: MouseEvent): void => {
       const next = event.relatedTarget as Node | null
-      if (next && (imageResizeHandle.contains(next) || resizeHoverImage?.contains(next))) return
-      hideImageResizeHandle()
+      if (next && (imageTools.contains(next) || hoverTarget?.contains(next))) return
+      hideImageTools()
     }
-    imageResizeHandle.addEventListener('mousedown', (event) => {
-      const image = resizeHoverImage
-      if (!image) return
+    imageTools.querySelectorAll<HTMLButtonElement>('button[data-align]').forEach((btn) => {
+      // mousedown 不落焦到按钮，避免点击对齐时触发图片失焦/选择
+      btn.addEventListener('mousedown', (e) => e.preventDefault())
+      btn.addEventListener('click', () => {
+        if (!hoverTarget) return
+        applyAlign(hoverTarget, btn.dataset.align as ImageAlign)
+        refreshAlignButtons()
+      })
+    })
+    let stopResize: (() => void) | null = null
+    imageTools.querySelector<HTMLElement>('.an-image-grip')!.addEventListener('mousedown', (event) => {
+      const target = hoverTarget
+      if (!target) return
       event.preventDefault()
       event.stopPropagation()
-      resizingImage = image
+      stopResize?.()
+      hoverTarget = target
+      resizing = true
       const startX = event.clientX
-      const startWidth = image.getBoundingClientRect().width
-      const maxWidth = Math.max(80, image.closest('.prose')?.clientWidth ?? 800)
+      const startWidth = target.getBoundingClientRect().width
+      const maxWidth = Math.max(80, target.closest('.prose')?.clientWidth ?? 800)
+      let pendingX = startX
+      let frame = 0
+      const setWidth = (width: number): void => {
+        const next = `${width}px`
+        if (target instanceof SVGElement) {
+          if (target.style.width !== next) target.style.width = next
+          target.style.maxWidth = 'none'
+        } else if (target.getAttribute('width') !== String(width)) {
+          target.setAttribute('width', String(width))
+          target.removeAttribute('height')
+        }
+        if (target.style.height !== 'auto') target.style.height = 'auto'
+      }
+      const flushWidth = (): void => {
+        frame = 0
+        setWidth(Math.round(Math.min(maxWidth, Math.max(60, startWidth + pendingX - startX))))
+      }
       const onMove = (moveEvent: MouseEvent): void => {
-        const width = Math.round(Math.min(maxWidth, Math.max(60, startWidth + moveEvent.clientX - startX)))
-        image.setAttribute('width', String(width))
-        image.removeAttribute('height')
-        image.style.height = 'auto'
-        positionImageResizeHandle()
+        pendingX = moveEvent.clientX
+        if (!frame) frame = requestAnimationFrame(flushWidth)
       }
       const onUp = (): void => {
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
+        if (frame) cancelAnimationFrame(frame)
+        flushWidth()
+        stopResize = null
         document.body.classList.remove('image-resizing')
-        resizingImage = null
-        const images = image.closest('.prose')?.querySelectorAll('img')
-        const index = images ? [...images].indexOf(image) : -1
-        const width = Number(image.getAttribute('width'))
-        if (index >= 0 && width > 0) saveImageSize(projectId, docPath, index, image.dataset.anOrigSrc ?? image.getAttribute('src') ?? '', width)
+        resizing = false
+        const key = targetKey(target)
+        const width = Math.round(target.getBoundingClientRect().width)
+        if (key && width > 0) saveImageMeta(projectId, docPath, key, { width })
         syncDraft()
-        positionImageResizeHandle()
+        positionImageTools()
       }
+      stopResize = onUp
       document.body.classList.add('image-resizing')
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     })
-    imageResizeHandle.addEventListener('mouseleave', hideImageResizeHandle)
+    imageTools.addEventListener('mouseenter', cancelHideImageTools)
+    imageTools.addEventListener('mouseleave', hideImageTools)
     container.addEventListener('mouseover', onImageOver)
     container.addEventListener('mouseout', onImageOut)
-    window.addEventListener('scroll', positionImageResizeHandle, true)
-    window.addEventListener('resize', positionImageResizeHandle)
+    window.addEventListener('scroll', positionImageTools, true)
+    window.addEventListener('resize', positionImageTools)
 
     const onClick = (event: MouseEvent): void => {
       const link = (event.target as HTMLElement).closest<HTMLAnchorElement>('.prose a')
@@ -1425,9 +1474,11 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       container.removeEventListener('keydown', onEditorKeydown, true)
       container.removeEventListener('mouseover', onImageOver)
       container.removeEventListener('mouseout', onImageOut)
-      window.removeEventListener('scroll', positionImageResizeHandle, true)
-      window.removeEventListener('resize', positionImageResizeHandle)
-      imageResizeHandle.remove()
+      window.removeEventListener('scroll', positionImageTools, true)
+      window.removeEventListener('resize', positionImageTools)
+      stopResize?.()
+      window.clearTimeout(hideToolsTimer)
+      imageTools.remove()
       document.body.classList.remove('image-resizing')
       codeCopyPreRef.current = null
       setCodeCopy(null)

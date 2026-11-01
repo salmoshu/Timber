@@ -2174,11 +2174,27 @@ select:focus-visible {
 .excel-table .excel-row-number { position: sticky; left: 0; min-width: 42px; background: var(--Bg-Secondary); color: var(--ink3); text-align: center; font-weight: 400; }
 .excel-truncated { padding: 12px; color: var(--Colors-Orange); font-size: 12px; text-align: center; }
 
-.an-image-resize-handle {
-  position: fixed; z-index: 9000; width: 18px; height: 18px; padding: 0;
-  border: 2px solid #fff; border-radius: 5px; background: var(--accent);
-  box-shadow: 0 1px 6px #0004; cursor: nwse-resize;
+/* 图片 / Mermaid 图工具条（v0.6.9 调宽把手；v0.6.10 扩展对齐三键 + Mermaid 支持） */
+.an-image-tools {
+  position: fixed; z-index: 9000; display: flex; gap: 2px; padding: 3px;
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-pop);
 }
-.an-image-resize-handle::after { content: ''; position: absolute; right: 2px; bottom: 2px; width: 6px; height: 6px; border-right: 2px solid #fff; border-bottom: 2px solid #fff; }
+.an-image-tools button {
+  width: 24px; height: 24px; padding: 0; border: none; border-radius: 6px;
+  background: transparent; color: var(--ink2);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.an-image-tools button:hover { background: var(--Fills-F2); color: var(--ink); }
+.an-image-tools button.active { background: var(--Others-KMBlue10); color: var(--accent); }
+.an-image-tools .an-image-grip {
+  width: 18px; height: 18px; border: 2px solid #fff; border-radius: 5px;
+  background: var(--accent); box-shadow: 0 1px 6px #0004; cursor: nwse-resize;
+  position: relative; align-self: center;
+}
+.an-image-tools .an-image-grip::after {
+  content: ''; position: absolute; right: 2px; bottom: 2px; width: 6px; height: 6px;
+  border-right: 2px solid #fff; border-bottom: 2px solid #fff;
+}
 body.image-resizing { cursor: nwse-resize; user-select: none; }
 body.image-resizing iframe, body.image-resizing webview { pointer-events: none; }

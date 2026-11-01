@@ -3,7 +3,8 @@ import hljs from 'highlight.js/lib/common'
 import { origProjectId, rawBaseFor, useStore } from '../store'
 import { resolveDocLink, wrapSoftBreaks } from '../components/MarkdownView'
 import { sanitizeRenderedHtml, upgradeInlineHtml } from './sanitizeHtml'
-import { applyImageSizes } from './imageSizes'
+import { applyImageMetas } from './imageSizes'
+import { renderMermaidBlocks } from './mermaid'
 import { askConfirm, askPath } from './dialogs'
 import { htmlToDocxBase64 } from './docxExport'
 
@@ -34,6 +35,11 @@ export const EXPORT_PAGE_CSS = `
   .prose img { max-width: 100%; height: auto; border-radius: 8px; }
   .prose hr { border: none; border-top: 1px solid #bbb; margin: 28px 0; }
   .prose pre, .prose blockquote, .prose table, .prose img { break-inside: avoid; }
+  /* Mermaid 图卡（v0.6.10：导出管线客户端渲染为 SVG）：去掉代码块底色居中呈现 */
+  .prose pre.mermaid-doc { background: #ffffff; border: none; padding: 6px 0; text-align: center; white-space: normal; }
+  .prose pre.mermaid-doc > code { background: none; color: inherit; display: block; }
+  .prose pre.mermaid-doc svg { max-width: 100%; height: auto; }
+  .prose code[data-mermaid-error] { color: #b83a32; }
   .prose span[data-an-softbreak] { display: none; }
   .prose span[data-an-softbreak-br] { white-space: pre-wrap; }
   .page-break { break-before: page !important; page-break-before: always !important; }
@@ -80,7 +86,10 @@ export async function renderMarkdownForExport(markdown: string, docPath: string,
   template.innerHTML = body
   sanitizeRenderedHtml(template.content)
   upgradeInlineHtml(template.content)
-  applyImageSizes(template.content, projectId, docPath)
+  // Mermaid 块渲染为 SVG（v0.6.10：md2html 只产出静态源码，此前分页预览/导出
+  // 不渲染图）；先渲染，宽度/对齐元数据随后才能命中 svg
+  await renderMermaidBlocks(template.content)
+  applyImageMetas(template.content, projectId, docPath)
   template.content.querySelectorAll<HTMLElement>('pre code').forEach((code) => {
     const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9)
     try {
