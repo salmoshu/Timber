@@ -76,14 +76,13 @@
 }
 .prose pre.vditor-wysiwyg__pre > code.language-mermaid {
   display: block; margin: 0; padding: 0;
-  background: transparent; color: var(--ink);
-  font-family: var(--system-fonts); white-space: normal;
+  background: transparent; color: var(--ink); white-space: normal;
+  font-family: sans-serif;
 }
 .prose code.language-mermaid > svg {
   display: block; max-width: 100%; height: auto; margin: 0 auto;
   border-radius: 10px; cursor: zoom-in;
 }
-.prose pre.vditor-wysiwyg__pre svg .nodeLabel { font-weight: var(--font-weight-medium); }
 
 /* 进入代码块 / HTML 块编辑时，Vditor 会同时显示可编辑源码 pre 与渲染预览 pre，
    两块等高堆叠在纸张正文里表现为一块多余的同高空白区。编辑态（源码 pre 带

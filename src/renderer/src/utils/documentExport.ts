@@ -35,11 +35,11 @@ export const EXPORT_PAGE_CSS = `
   .prose img { max-width: 100%; height: auto; border-radius: 8px; }
   .prose hr { border: none; border-top: 1px solid #bbb; margin: 28px 0; }
   .prose pre, .prose blockquote, .prose table, .prose img { break-inside: avoid; }
-  /* Mermaid 图卡（v0.6.10：导出管线客户端渲染为 SVG）：去掉代码块底色居中呈现 */
-  .prose pre.mermaid-doc { background: #ffffff; border: none; padding: 6px 0; text-align: center; white-space: normal; }
-  .prose pre.mermaid-doc > code { background: none; color: inherit; display: block; }
-  .prose pre.mermaid-doc svg { max-width: 100%; height: auto; }
-  .prose code[data-mermaid-error] { color: #b83a32; }
+  /* Mermaid 静态导出可位于 div 或 pre > code 中，统一按图卡排版。 */
+  .prose .mermaid-doc { display: block; background: #ffffff; border: none; padding: 6px 0; text-align: center; white-space: normal; }
+  .prose .mermaid-doc > code { background: none; color: inherit; display: block; }
+  .prose .mermaid-doc svg { max-width: 100%; height: auto; }
+  .prose [data-mermaid-error] { color: #b83a32; }
   .prose span[data-an-softbreak] { display: none; }
   .prose span[data-an-softbreak-br] { white-space: pre-wrap; }
   .page-break { break-before: page !important; page-break-before: always !important; }

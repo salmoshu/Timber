@@ -1794,7 +1794,7 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
   display: flex; align-items: center; justify-content: center;
 }
 .img-lightbox-stage {
-  max-width: 92vw; max-height: 88vh;
+  width: 92vw; height: 88vh; flex: none; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
 }
 .img-lightbox-stage img {

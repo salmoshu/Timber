@@ -46,18 +46,19 @@ let seq = 0
 /** 同源码的渲染结果缓存（分页预览随草稿高频重建，避免重复渲染） */
 const svgCache = new Map<string, string>()
 
-/** 渲染容器内全部 mermaid 代码块（code.language-mermaid）：
- *  成功 → 块内替换为 SVG 并做外观重刷；失败 → 保留源码文本并标记错误态。
- *  脚本加载失败静默保留源码（离线异常场景不阻塞导出）。 */
+/** 渲染容器内全部 Mermaid 块。Lute 静态导出使用 div.language-mermaid，
+ *  编辑器预览使用 code.language-mermaid，两种结构都必须支持。 */
 export async function renderMermaidBlocks(root: ParentNode, dark = false): Promise<void> {
-  const blocks = [...root.querySelectorAll<HTMLElement>('code.language-mermaid')].filter(
-    (el) => el.getAttribute('data-processed') !== 'true'
+  const blocks = [...root.querySelectorAll<HTMLElement>('.language-mermaid')].filter(
+    (el) => !el.querySelector('svg') && !!(el.textContent ?? '').trim()
   )
   if (blocks.length === 0) return
   let mermaid: MermaidGlobal
   try {
     mermaid = await loadMermaid()
-  } catch {
+  } catch (error) {
+    console.error('[mermaid] 脚本加载失败', error)
+    blocks.forEach((el) => el.setAttribute('data-mermaid-error', 'true'))
     return
   }
   // 初始化参数与 Vditor mermaidRender 对齐（securityLevel/family/时序图序号等）
@@ -74,7 +75,6 @@ export async function renderMermaidBlocks(root: ParentNode, dark = false): Promi
   mermaid.initialize(config)
   for (const el of blocks) {
     const code = el.textContent ?? ''
-    if (!code.trim()) continue
     el.setAttribute('data-processed', 'true')
     try {
       let svg = svgCache.get(code)
@@ -91,14 +91,47 @@ export async function renderMermaidBlocks(root: ParentNode, dark = false): Promi
         }
       }
       el.innerHTML = svg
-      // 图卡容器：去掉代码块底色，居中呈现
-      el.parentElement?.classList.add('mermaid-doc')
+      el.classList.add('mermaid-doc')
+      if (el.parentElement?.tagName === 'PRE') el.parentElement.classList.add('mermaid-doc')
       styleMermaidSvgs(el, dark)
-    } catch {
+    } catch (error) {
+      console.error('[mermaid] 图形渲染失败', error)
       el.removeAttribute('data-processed')
       el.setAttribute('data-mermaid-error', 'true')
     }
   }
+}
+
+/** HTML 标签的实际字体宽度可能与 Mermaid 预估值不同。只缩小异常标签，
+ *  不扩张节点或改变图布局，避免文字裁切和相邻节点遮挡。 */
+function fitMermaidLabels(svg: SVGElement): void {
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d')
+  if (!context) return
+  const textProbe = document.createElement('div')
+  svg.querySelectorAll<HTMLElement>('.nodeLabel, .edgeLabel').forEach((label) => {
+    const frame = label.closest('foreignObject')
+    if (!frame) return
+    const availableWidth = Number(frame.getAttribute('width'))
+    const availableHeight = Number(frame.getAttribute('height'))
+    if (!Number.isFinite(availableWidth) || availableWidth <= 0) return
+    frame.style.overflow = 'visible'
+    label.style.overflow = 'visible'
+    const style = getComputedStyle(label)
+    const fontSize = Number.parseFloat(style.fontSize) || 16
+    context.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily || 'sans-serif'}`
+    textProbe.innerHTML = label.innerHTML.replace(/<br\s*\/?>/gi, '\n')
+    const lines = (textProbe.textContent ?? '').split('\n')
+    const measuredWidth = Math.max(0, ...lines.map((line) => context.measureText(line).width))
+    const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.2
+    const widthRatio = measuredWidth > availableWidth + 0.5 ? availableWidth / measuredWidth : 1
+    const heightRatio = availableHeight > 0 && lines.length * lineHeight > availableHeight + 0.5
+      ? availableHeight / (lines.length * lineHeight)
+      : 1
+    const ratio = Math.min(1, widthRatio, heightRatio)
+    if (ratio >= 1) return
+    label.style.fontSize = `${Math.max(10, fontSize * ratio)}px`
+  })
 }
 
 /** Mermaid 外观重刷（GitHub 风格）：白底卡片节点 + 石板灰边线 + 系统字体 +
@@ -118,7 +151,6 @@ export function styleMermaidSvgs(root: ParentNode, dark: boolean): void {
         note: '#fdf6d8', noteStroke: '#d6a72c', actor: '#e8f3ff', actorStroke: '#54a3ff',
         shadow: 'drop-shadow(0 2px 6px rgba(31,43,61,.16))'
       }
-  const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
   root.querySelectorAll<SVGElement>('.language-mermaid svg').forEach((svg) => {
     const paint = (selector: string, styles: Record<string, string>): void => {
       svg.querySelectorAll<SVGElement | HTMLElement>(selector).forEach((el) => {
@@ -142,19 +174,20 @@ export function styleMermaidSvgs(root: ParentNode, dark: boolean): void {
     paint('marker path, marker polygon, .arrowheadPath, .arrowMarkerPath', { fill: c.edge, stroke: c.edge })
     // 边标签：与画布同底，避免文字压线
     paint('.edgeLabel rect, g.edgeLabel rect', { fill: c.labelBg, stroke: 'none' })
-    paint('.edgeLabel, span.edgeLabel', { 'background-color': c.labelBg, color: c.ink, 'font-family': font })
+    paint('.edgeLabel, span.edgeLabel', { 'background-color': c.labelBg, color: c.ink })
     // 注释便签
     paint('.note, rect.note, g.note rect', { fill: c.note, stroke: c.noteStroke, 'stroke-width': '1.2px' })
-    // 文字统一（含标题 / 图例 / 甘特分区）
+    // 字体与字重保持 Mermaid 测量节点尺寸时的取值，避免混排标签生成后溢出。
     paint(
       'text, .nodeLabel, .edgeLabel, .label, .messageText, .noteText, .loopText, .cluster-label, .pieTitle, .legend, .sectionTitle, .taskText, .titleText',
-      { color: c.ink, fill: c.ink, 'font-family': font }
+      { color: c.ink, fill: c.ink }
     )
     // 圆角：矩形节点与分组框
     svg.querySelectorAll<SVGElement>('.node rect, g.classGroup rect, g.stateGroup rect, rect.actor, g.actor rect, .cluster rect, g.cluster rect, rect.note, g.note rect').forEach((el) => {
       el.setAttribute('rx', '8')
       el.setAttribute('ry', '8')
     })
+    fitMermaidLabels(svg)
     svg.style.setProperty('background', c.paper, 'important')
   })
 }

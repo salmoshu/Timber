@@ -288,6 +288,7 @@ interface LightboxInfo {
 /** 阅读模式图片点击放大浮层：点遮罩 / Esc / ✕ 关闭，再点图片在适应窗口与原始尺寸间切换。 */
 function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => void }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
+  const [stageSize, setStageSize] = useState({ w: 0, h: 0 })
   const [failed, setFailed] = useState(false)
   const [fit, setFit] = useState(true)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
@@ -317,6 +318,20 @@ function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => v
   useEffect(() => {
     const img = imgRef.current
     if (img?.complete && img.naturalWidth) setNatural({ w: img.naturalWidth, h: img.naturalHeight })
+  }, [])
+
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const measure = (): void => setStageSize({ w: stage.clientWidth, h: stage.clientHeight })
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(stage)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measure)
+    }
   }, [])
 
   useEffect(() => {
@@ -396,6 +411,9 @@ function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => v
   // 文档内引用路径常带 URL 编码（空格等），信息条展示时还原
   let label = info.origSrc
   try { label = decodeURIComponent(info.origSrc) } catch { /* 保留原值 */ }
+  const fitByWidth = natural && stageSize.w > 0 && stageSize.h > 0
+    ? natural.w / natural.h > stageSize.w / stageSize.h
+    : true
 
   return (
     <div
@@ -411,6 +429,12 @@ function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => v
             ref={imgRef}
             src={info.src}
             alt={info.alt}
+            style={fit && natural ? {
+              width: fitByWidth ? '92vw' : 'auto',
+              height: fitByWidth ? 'auto' : '88vh',
+              maxWidth: 'none',
+              maxHeight: 'none'
+            } : undefined}
             onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
             onError={() => setFailed(true)}
             onClick={(e) => { e.stopPropagation(); setFit((v) => !v) }}
@@ -714,6 +738,8 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     // 预览管线共用同一套 GitHub 风格配色与选择器）
     const styleMermaidDiagrams = (prose: HTMLElement): void => styleMermaidSvgs(prose, theme === 'dark')
     const refresh = (): void => {
+      // 拖宽期间禁止后台补丁重放旧尺寸；释放后由 onUp 统一持久化并刷新。
+      if (resizing) return
       const prose = container.querySelector<HTMLElement>('.prose')
       if (!prose || disposed) return
       // 块悬浮工具栏（上移/下移/删除）左移到正文左侧空白区所需的位置变量
@@ -1060,28 +1086,43 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       newBlock.setAttribute('data-block', '0')
       const marker = block.getAttribute('data-marker')
       if (marker && newBlock.tagName !== 'P') newBlock.setAttribute('data-marker', marker)
-      if (fragment.childNodes.length > 0) newBlock.appendChild(fragment)
+      if (trailingHasContent) newBlock.appendChild(fragment)
       else newBlock.innerHTML = '<br>'
       block.insertAdjacentElement('afterend', newBlock)
       // 光标落位：块首回车（原块剩余为空且有后继内容）留在原块，否则到新块行首
       const restEmpty = !(block.textContent ?? '').replace(/\u200b/g, '').trim() && !block.querySelector('img')
-      const caretBlock = restEmpty && trailingHasContent ? block : newBlock
+      const caretBlock = (restEmpty && trailingHasContent ? block : newBlock) as HTMLElement
       const caretRange = document.createRange()
       caretRange.selectNodeContents(caretBlock)
       caretRange.collapse(true)
       selection.removeAllRanges()
       selection.addRange(caretRange)
+      const caretParent = caretBlock.parentElement
+      const caretPrevious = caretBlock.previousElementSibling
+      const caretIndex = caretParent ? [...caretParent.children].indexOf(caretBlock) : -1
       // 交回 Vditor 输入链路：Spin 重渲染、撤销入栈、草稿同步
       prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
-      requestAnimationFrame(() => {
-        if (disposed || !caretBlock.isConnected) return
+      const restoreCaret = (): void => {
+        let target: HTMLElement | null = caretBlock
+        if (!target?.isConnected && caretPrevious?.isConnected) {
+          target = caretPrevious.nextElementSibling as HTMLElement | null
+        }
+        if (!target?.isConnected && caretParent?.isConnected && caretIndex >= 0) {
+          target = caretParent.children[caretIndex] as HTMLElement | null
+        }
+        if (disposed || !target?.isConnected) return
+        // Vditor 可能在 Spin 时移除空段落的 <br>，需恢复占位后光标才能真正落进新段落。
+        if (!(target.textContent ?? '').replace(/[\u200b\n\r]/g, '').trim() && !target.querySelector('img')) target.innerHTML = '<br>'
         const rangeAfterRender = document.createRange()
-        rangeAfterRender.selectNodeContents(caretBlock)
+        rangeAfterRender.selectNodeContents(target)
         rangeAfterRender.collapse(true)
         selection.removeAllRanges()
         selection.addRange(rangeAfterRender)
-        caretBlock.scrollIntoView({ block: 'nearest' })
-      })
+        target.scrollIntoView({ block: 'nearest' })
+      }
+      restoreCaret()
+      requestAnimationFrame(restoreCaret)
+      window.setTimeout(restoreCaret, 50)
     }
     container.addEventListener('keydown', onEditorKeydown, true)
 
@@ -1237,6 +1278,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       const maxWidth = Math.max(80, target.closest('.prose')?.clientWidth ?? 800)
       let pendingX = startX
       let frame = 0
+      let flushTimer = 0
       const setWidth = (width: number): void => {
         const next = `${width}px`
         if (target instanceof SVGElement) {
@@ -1249,17 +1291,22 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         if (target.style.height !== 'auto') target.style.height = 'auto'
       }
       const flushWidth = (): void => {
+        if (frame) cancelAnimationFrame(frame)
         frame = 0
+        window.clearTimeout(flushTimer)
+        flushTimer = 0
         setWidth(Math.round(Math.min(maxWidth, Math.max(60, startWidth + pendingX - startX))))
       }
       const onMove = (moveEvent: MouseEvent): void => {
         pendingX = moveEvent.clientX
-        if (!frame) frame = requestAnimationFrame(flushWidth)
+        if (!frame) {
+          frame = requestAnimationFrame(flushWidth)
+          flushTimer = window.setTimeout(flushWidth, 16)
+        }
       }
       const onUp = (): void => {
         window.removeEventListener('mousemove', onMove)
         window.removeEventListener('mouseup', onUp)
-        if (frame) cancelAnimationFrame(frame)
         flushWidth()
         stopResize = null
         document.body.classList.remove('image-resizing')
@@ -1268,6 +1315,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         const width = Math.round(target.getBoundingClientRect().width)
         if (key && width > 0) saveImageMeta(projectId, docPath, key, { width })
         syncDraft()
+        scheduleRefresh()
         positionImageTools()
       }
       stopResize = onUp
