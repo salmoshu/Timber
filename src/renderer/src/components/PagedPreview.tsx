@@ -4,7 +4,15 @@ import { EXPORT_PAGE_CSS, PAGED_SCREEN_CSS, renderMarkdownForExport, waitForHtml
 
 const A4_WIDTH = 794
 
-export default function PagedPreview({ docPath, projectId }: { docPath: string; projectId: string }) {
+interface Props {
+  docPath: string
+  projectId: string
+  /** 对照编辑：左侧显示所见即所得编辑器，编辑实时重新分页（Reader 布局） */
+  editOn?: boolean
+  onToggleEdit?: () => void
+}
+
+export default function PagedPreview({ docPath, projectId, editOn = false, onToggleEdit }: Props) {
   const markdown = useStore((s) => s.draft)
   const hostRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -24,6 +32,9 @@ export default function PagedPreview({ docPath, projectId }: { docPath: string; 
 
   useEffect(() => {
     let cancelled = false
+    // 草稿变化后立即作废旧页：导出等待逻辑不能在新分页完成前读到上一版结果。
+    setPages(0)
+    // 对照编辑时每次击键静止后都会整篇重新分页，防抖稍长以减少重排闪烁
     const timer = window.setTimeout(async () => {
       const root = hostRef.current
       if (!root) return
@@ -43,16 +54,24 @@ export default function PagedPreview({ docPath, projectId }: { docPath: string; 
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
       }
-    }, 250)
+    }, editOn ? 500 : 250)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [markdown, docPath, projectId])
+  }, [markdown, docPath, projectId, editOn])
 
   return (
     <div className="paged-preview" ref={scrollRef}>
-      <div className="paged-preview-meta">A4 分页预览{pages > 0 ? ` · 共 ${pages} 页` : ' · 正在分页…'}<span>PDF 将严格按此分页导出</span></div>
+      <div className="paged-preview-meta">
+        <span className="paged-preview-count">A4 分页预览{pages > 0 ? ` · 共 ${pages} 页` : ' · 正在分页…'}</span>
+        <span className="paged-preview-hint">PDF 将严格按此分页导出</span>
+        {onToggleEdit && (
+          <button className={`paged-edit-toggle ${editOn ? 'active' : ''}`} onClick={onToggleEdit} aria-pressed={editOn}>
+            {editOn ? '✎ 对照编辑中' : '✎ 对照编辑'}
+          </button>
+        )}
+      </div>
       {error ? (
         <div className="re-error">
           <div className="re-error-icon">⚠</div>

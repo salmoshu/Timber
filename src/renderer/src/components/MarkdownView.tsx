@@ -783,7 +783,19 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       window.clearTimeout(refreshTimer)
       refreshTimer = window.setTimeout(refresh, 90)
     }
-    const observer = new MutationObserver(scheduleRefresh)
+    const observer = new MutationObserver((records) => {
+      // MutationObserver 在浏览器绘制前执行：新 SVG 立即套用主题，避免先显示
+      // Mermaid 默认底色、90ms 完整刷新后才变成 Timber 配色的可见闪烁。
+      const mermaidAdded = records.some((record) => [...record.addedNodes].some((node) =>
+        node instanceof Element &&
+        (node.matches('.language-mermaid svg') || !!node.querySelector('.language-mermaid svg'))
+      ))
+      if (mermaidAdded && !disposed) {
+        const prose = container.querySelector<HTMLElement>('.prose')
+        if (prose) styleMermaidDiagrams(prose)
+      }
+      scheduleRefresh()
+    })
     // 侧栏/批注面板开合、窗口缩放都会改版式；--prose-left 需同步刷新
     const resizeObserver = new ResizeObserver(scheduleRefresh)
     resizeObserver.observe(container)

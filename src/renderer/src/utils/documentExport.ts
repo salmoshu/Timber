@@ -8,6 +8,9 @@ import { renderMermaidBlocks } from './mermaid'
 import { askConfirm, askPath } from './dialogs'
 import { htmlToDocxBase64 } from './docxExport'
 
+export const A4_CONTENT_WIDTH = 680
+const A4_MERMAID_MAX_HEIGHT = 900
+
 export const EXPORT_PAGE_CSS = `
   @page { size: A4; margin: 16mm 15mm; }
   * { box-sizing: border-box; }
@@ -34,7 +37,7 @@ export const EXPORT_PAGE_CSS = `
   .prose th { background: #f2f2f2; font-weight: 600; }
   .prose img { max-width: 100%; height: auto; border-radius: 8px; }
   .prose hr { border: none; border-top: 1px solid #bbb; margin: 28px 0; }
-  .prose pre, .prose blockquote, .prose table, .prose img { break-inside: avoid; }
+  .prose pre, .prose blockquote, .prose table, .prose img, .prose .mermaid-doc { break-inside: avoid; }
   /* Mermaid 静态导出可位于 div 或 pre > code 中，统一按图卡排版。 */
   .prose .mermaid-doc { display: block; background: #ffffff; border: none; padding: 6px 0; text-align: center; white-space: normal; }
   .prose .mermaid-doc > code { background: none; color: inherit; display: block; }
@@ -53,11 +56,33 @@ export const EXPORT_PAGE_CSS = `
   .hljs-strong { font-weight: 700; }
 `
 
+/** 分页预览（屏幕呈现）样式：纸面阴影等。超高 Mermaid 图按页内容高度限高、
+ *  等比缩小到完整落进一页——否则 pagedjs 会把图块拆到多页、每份都被页缘裁掉
+ *  （v0.6.11 修复分页渲染缺损）；导出 PDF 的打印样式里同步一份。 */
 export const PAGED_SCREEN_CSS = `
   .pagedjs_pages { width: 794px; margin: 0 auto; padding: 0; background: transparent; }
   .pagedjs_page { background: #fff; box-shadow: 0 8px 30px #00000018; border-radius: 4px; margin: 0 auto 22px; }
   .pagedjs_page:last-child { margin-bottom: 0; }
+  .pagedjs_page .mermaid-doc svg { max-height: ${A4_MERMAID_MAX_HEIGHT}px; }
+  .prose .mermaid-page-break { break-before: page !important; page-break-before: always !important; }
 `
+
+/** PagedJS 会把超高的 SVG 连同前页剩余空间一起复制，单用 break-inside:avoid
+ *  仍会在两页各出现一份。只让缩放后仍超页高的图从新页开始；普通图保持连续排版。 */
+function markTallMermaidPageBreaks(root: ParentNode): void {
+  root.querySelectorAll<SVGElement>('.mermaid-doc svg').forEach((svg) => {
+    const viewBox = (svg.getAttribute('viewBox') ?? '').split(/[\s,]+/).map(Number)
+    const [, , naturalWidth, naturalHeight] = viewBox
+    if (!(naturalWidth > 0 && naturalHeight > 0)) return
+    const customWidth = Number.parseFloat(svg.style.width)
+    const width = Number.isFinite(customWidth) && customWidth > 0
+      ? customWidth
+      : Math.min(naturalWidth, A4_CONTENT_WIDTH)
+    if (naturalHeight * (width / naturalWidth) <= A4_MERMAID_MAX_HEIGHT) return
+    const block = svg.closest('pre.mermaid-doc') ?? svg.closest('.mermaid-doc')
+    block?.classList.add('mermaid-page-break')
+  })
+}
 
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -87,9 +112,11 @@ export async function renderMarkdownForExport(markdown: string, docPath: string,
   sanitizeRenderedHtml(template.content)
   upgradeInlineHtml(template.content)
   // Mermaid 块渲染为 SVG（v0.6.10：md2html 只产出静态源码，此前分页预览/导出
-  // 不渲染图）；先渲染，宽度/对齐元数据随后才能命中 svg
-  await renderMermaidBlocks(template.content)
+  // 不渲染图）；先渲染，宽度/对齐元数据随后才能命中 svg。
+  // 测量宽度固定为 A4 内容宽：gantt 等按可用宽排版的图才与分页尺寸一致
+  await renderMermaidBlocks(template.content, false, A4_CONTENT_WIDTH)
   applyImageMetas(template.content, projectId, docPath)
+  markTallMermaidPageBreaks(template.content)
   template.content.querySelectorAll<HTMLElement>('pre code').forEach((code) => {
     const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9)
     try {
@@ -133,6 +160,8 @@ function staticPagedDocument(pagesHtml: string, title: string): string {
     .pagedjs_pages { display: block !important; width: auto !important; height: auto !important; overflow: visible !important; transform: none !important; }
     .pagedjs_page { break-after: page; page-break-after: always; margin: 0 !important; box-shadow: none !important; }
     .pagedjs_page:last-child { break-after: auto; page-break-after: auto; }
+    .pagedjs_page .mermaid-doc svg { max-height: 900px; }
+    .pagedjs_page .mermaid-page-break { break-before: auto !important; page-break-before: auto !important; }
   `
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${generatedCss}\n${printCss}</style></head><body>${pagesHtml}</body></html>`
 }

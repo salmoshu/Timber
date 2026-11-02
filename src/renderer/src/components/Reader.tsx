@@ -54,6 +54,7 @@ export default function Reader() {
     setMarginExpanded(false)
     setMarginHidden(false)
     setPaged(false)
+    setPagedEdit(false)
     setExportMenu(null)
   }, [activeDoc?.path])
   useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
@@ -68,6 +69,7 @@ export default function Reader() {
   const [rawBase, setRawBase] = useState('')
   const [findOpen, setFindOpen] = useState(false)
   const [paged, setPaged] = useState(false)
+  const [pagedEdit, setPagedEdit] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [htmlError, setHtmlError] = useState<string | null>(null)
   const startMarginResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -388,7 +390,35 @@ export default function Reader() {
         onInput={() => setPop(null)}
       >
         {paged && isMd ? (
-          <PagedPreview docPath={activeDoc.path} projectId={activeProjectId ?? ''} />
+          pagedEdit ? (
+            // 对照编辑（v0.6.11）：左侧所见即所得编辑，右侧 A4 分页实时重排
+            <div className="paged-split">
+              <div className="paged-editor-col">
+                <MarkdownView
+                  annotations={annotations}
+                  onSelectAnn={() => {
+                    setMarginExpanded(true)
+                    setMarginHidden(false)
+                  }}
+                />
+              </div>
+              <div className="paged-preview-col">
+                <PagedPreview
+                  docPath={activeDoc.path}
+                  projectId={activeProjectId ?? ''}
+                  editOn
+                  onToggleEdit={() => setPagedEdit(false)}
+                />
+              </div>
+            </div>
+          ) : (
+            <PagedPreview
+              docPath={activeDoc.path}
+              projectId={activeProjectId ?? ''}
+              editOn={false}
+              onToggleEdit={() => setPagedEdit(true)}
+            />
+          )
         ) : mode === 'source' ? (
           <EditorPane />
         ) : isMd ? (

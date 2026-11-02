@@ -82,6 +82,8 @@
 .prose code.language-mermaid > svg {
   display: block; max-width: 100%; height: auto; margin: 0 auto;
   border-radius: 10px; cursor: zoom-in;
+  /* 首帧即使用当前主题纸色；SVG 内联样式随后由 styleMermaidSvgs 同步。 */
+  background: var(--paper) !important;
 }
 
 /* 进入代码块 / HTML 块编辑时，Vditor 会同时显示可编辑源码 pre 与渲染预览 pre，

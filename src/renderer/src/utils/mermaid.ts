@@ -47,8 +47,12 @@ let seq = 0
 const svgCache = new Map<string, string>()
 
 /** 渲染容器内全部 Mermaid 块。Lute 静态导出使用 div.language-mermaid，
- *  编辑器预览使用 code.language-mermaid，两种结构都必须支持。 */
-export async function renderMermaidBlocks(root: ParentNode, dark = false): Promise<void> {
+ *  编辑器预览使用 code.language-mermaid，两种结构都必须支持。
+ *  width：测量宽度（px）。gantt 等按可用宽度排版的图（useMaxWidth）在渲染时
+ *  直接读临时容器父级的 offsetWidth（即视口宽）作为自然宽，导致同一张图在
+ *  编辑器、分页预览里尺寸各不相同——分页 / 导出管线传入 A4 内容宽（680），
+ *  gantt 走 useWidth 固定排版宽度，与页面同宽（v0.6.11 修复尺寸不一致）。 */
+export async function renderMermaidBlocks(root: ParentNode, dark = false, width?: number): Promise<void> {
   const blocks = [...root.querySelectorAll<HTMLElement>('.language-mermaid')].filter(
     (el) => !el.querySelector('svg') && !!(el.textContent ?? '').trim()
   )
@@ -62,6 +66,8 @@ export async function renderMermaidBlocks(root: ParentNode, dark = false): Promi
     return
   }
   // 初始化参数与 Vditor mermaidRender 对齐（securityLevel/family/时序图序号等）
+  const gantt: Record<string, unknown> = { leftPadding: 75, rightPadding: 20 }
+  if (width !== undefined) gantt.useWidth = Math.round(width)
   const config: Record<string, unknown> = {
     securityLevel: 'loose',
     altFontFamily: 'sans-serif',
@@ -69,19 +75,20 @@ export async function renderMermaidBlocks(root: ParentNode, dark = false): Promi
     startOnLoad: false,
     flowchart: { htmlLabels: true, useMaxWidth: true },
     sequence: { useMaxWidth: true, diagramMarginX: 8, diagramMarginY: 8, boxMarginY: 8, boxMargin: 8, showSequenceNumbers: true },
-    gantt: { leftPadding: 75, rightPadding: 20 }
+    gantt
   }
   if (dark) config.theme = 'dark'
   mermaid.initialize(config)
   for (const el of blocks) {
     const code = el.textContent ?? ''
+    const cacheKey = `${dark ? 'd' : 'l'}|${width ?? ''}|${code}`
     el.setAttribute('data-processed', 'true')
     try {
-      let svg = svgCache.get(code)
+      let svg = svgCache.get(cacheKey)
       if (!svg) {
         svg = (await mermaid.render(`an-mermaid-${seq++}`, code)).svg
         if (svgCache.size > 40) svgCache.clear()
-        svgCache.set(code, svg)
+        svgCache.set(cacheKey, svg)
       } else {
         // 缓存命中：svg 内部 <style> 按 id 作用域，重用需整体换新 id 防重复冲突
         const oldId = /id="(an-mermaid-\d+)"/.exec(svg)?.[1]
@@ -131,6 +138,76 @@ function fitMermaidLabels(svg: SVGElement): void {
     const ratio = Math.min(1, widthRatio, heightRatio)
     if (ratio >= 1) return
     label.style.fontSize = `${Math.max(10, fontSize * ratio)}px`
+  })
+}
+
+function translatedOffset(element: Element, svg: SVGElement): { x: number; y: number } {
+  let x = 0
+  let y = 0
+  let current: Element | null = element
+  while (current && current !== svg) {
+    const match = /translate\(\s*([-\d.eE]+)(?:[,\s]+([-\d.eE]+))?\s*\)/.exec(current.getAttribute('transform') ?? '')
+    if (match) {
+      x += Number(match[1])
+      y += Number(match[2] ?? 0)
+    }
+    current = current.parentElement
+  }
+  return { x, y }
+}
+
+/** Mermaid 的子图标题与首个节点可能占用同一垂直空间。把标题向上移到节点之外，
+ *  并用不透明底衬隔离穿过的连线；不移动节点，也不改变图的水平布局。 */
+function avoidClusterLabelOverlap(svg: SVGElement, background: string): void {
+  svg.querySelectorAll<SVGGElement>('g.cluster').forEach((cluster) => {
+    const label = cluster.querySelector<SVGGElement>(':scope > g.cluster-label')
+    const frame = label?.querySelector<SVGElement>('foreignObject')
+    if (!label || !frame) return
+    const labelOffset = translatedOffset(frame, svg)
+    const labelWidth = Number(frame.getAttribute('width'))
+    const labelHeight = Number(frame.getAttribute('height'))
+    if (labelWidth <= 0 || labelHeight <= 0) return
+    const labelBox = {
+      left: labelOffset.x,
+      right: labelOffset.x + labelWidth,
+      top: labelOffset.y,
+      bottom: labelOffset.y + labelHeight
+    }
+    const clusterShape = cluster.querySelector<SVGRectElement>(':scope > rect')
+    if (!clusterShape) return
+    const clusterOffset = translatedOffset(clusterShape, svg)
+    const clusterLeft = clusterOffset.x + Number(clusterShape.getAttribute('x') ?? 0)
+    const clusterTop = clusterOffset.y + Number(clusterShape.getAttribute('y') ?? 0)
+    const clusterRight = clusterLeft + Number(clusterShape.getAttribute('width'))
+    const clusterBottom = clusterTop + Number(clusterShape.getAttribute('height'))
+    let shift = 0
+    svg.querySelectorAll<SVGGElement>('g.node').forEach((node) => {
+      const shape = node.querySelector('rect')
+      if (!shape) return
+      const offset = translatedOffset(shape, svg)
+      const left = offset.x + Number(shape.getAttribute('x') ?? 0)
+      const top = offset.y + Number(shape.getAttribute('y') ?? 0)
+      const right = left + Number(shape.getAttribute('width'))
+      const bottom = top + Number(shape.getAttribute('height'))
+      const centerX = (left + right) / 2
+      const centerY = (top + bottom) / 2
+      if (centerX < clusterLeft || centerX > clusterRight || centerY < clusterTop || centerY > clusterBottom) return
+      const overlaps = labelBox.left < right && labelBox.right > left && labelBox.top < bottom && labelBox.bottom > top
+      if (overlaps) shift = Math.max(shift, labelBox.bottom - top + 4)
+    })
+    frame.style.setProperty('background', background)
+    if (shift <= 0) return
+    const match = /translate\(\s*([-\d.eE]+)(?:[,\s]+([-\d.eE]+))?\s*\)/.exec(label.getAttribute('transform') ?? '')
+    if (!match) return
+    const nextY = Number(match[2] ?? 0) - shift
+    label.setAttribute('transform', `translate(${Number(match[1])}, ${nextY})`)
+    const viewBox = (svg.getAttribute('viewBox') ?? '').split(/[\s,]+/).map(Number)
+    if (viewBox.length === 4 && viewBox.every(Number.isFinite) && nextY < viewBox[1]) {
+      const extra = viewBox[1] - nextY
+      viewBox[1] -= extra
+      viewBox[3] += extra
+      svg.setAttribute('viewBox', viewBox.join(' '))
+    }
   })
 }
 
@@ -188,6 +265,7 @@ export function styleMermaidSvgs(root: ParentNode, dark: boolean): void {
       el.setAttribute('ry', '8')
     })
     fitMermaidLabels(svg)
+    avoidClusterLabelOverlap(svg, c.paper)
     svg.style.setProperty('background', c.paper, 'important')
   })
 }

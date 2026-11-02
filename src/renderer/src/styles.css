@@ -2152,12 +2152,27 @@ select:focus-visible {
   .resource-sidebar { max-width: 260px; }
 }
 
+.document-workspace > .reader-body:has(> .paged-split) { padding: 0; overflow: hidden; }
+.paged-split {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 1fr);
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+}
+.paged-editor-col, .paged-preview-col { min-width: 0; min-height: 0; overflow: auto; }
+.paged-editor-col { background: var(--paper); border-right: 1px solid var(--line); }
+.paged-preview-col { display: flex; overflow: hidden; background: var(--arch-bg); }
+.paged-preview-col > .paged-preview { width: 100%; }
 .paged-preview { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 42px; background: var(--arch-bg); }
 .paged-preview-meta {
-  position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; gap: 16px;
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px;
   padding: 12px 4px; background: var(--arch-bg); color: var(--ink2); font-size: 12px;
 }
 .paged-preview-meta span { color: var(--ink3); }
+.paged-preview-hint { margin-left: auto; }
+.paged-edit-toggle {
+  flex: none; white-space: nowrap; padding: 4px 9px; border: 1px solid var(--line);
+  border-radius: var(--radius-button); background: var(--paper); color: var(--ink2); font-size: 12px;
+}
+.paged-edit-toggle:hover, .paged-edit-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .paged-preview-zoom, .paged-preview-pages { width: 794px; margin: 0 auto; }
 .paged-preview-pages { min-height: 240px; }
 
