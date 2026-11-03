@@ -677,6 +677,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     let lastDraft = useStore.getState().draft
     let syncingFromEditor = false
     let refreshTimer = 0
+    let draftSyncTimer = 0
     let unsubscribe: (() => void) | undefined
     let annotationRanges: { annotation: Annotation; range: Range }[] = []
     let popObserver: MutationObserver | undefined
@@ -922,9 +923,47 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
      *  - 回车：Chromium 对 contenteditable <pre> 根节点的默认行为不可靠（段末
      *    回车不产生新段、空列表项回车跳回上一行末尾），按 Typora/Word 语义手动
      *    拆块；空列表项回车去符号保留空行（嵌套时先升一级到父列表），继续回车
-     *    才真正新建空行；代码围栏/表格行/分隔线等源码片段交回 Vditor 原生转换；
-     *  列表内容回车新增项、表格/代码块内部等结构编辑仍交给 Vditor。
+     *    才真正新建空行；代码围栏/表格行交回 Vditor 原生转换，分隔线后显式新建段落；
+     *  普通列表按光标拆项，表格/代码块内部等结构编辑仍交给 Vditor。
      *  走 capture 阶段拦截：先于 Vditor 挂在编辑器元素上的 keydown。 */
+    /** Vditor 的 Spin 可能替换目标节点或移除空块占位。立即、下一帧和短延时三次
+     *  恢复目标及光标，覆盖空列表退出、标题末尾回车、分隔线和空标题转换。 */
+    const stabilizeCaret = (caretEl: HTMLElement, placeholder: 'br' | 'zwsp' = 'br'): void => {
+      const selection = window.getSelection()
+      const prose = caretEl.closest('.prose') ?? container.querySelector<HTMLElement>('.prose')
+      const path: number[] = []
+      let current: HTMLElement | null = caretEl
+      while (current && current !== prose) {
+        const parent: HTMLElement | null = current.parentElement
+        if (!parent) break
+        path.unshift([...parent.children].indexOf(current))
+        current = parent
+      }
+      const restore = (): void => {
+        let target: HTMLElement | null = caretEl
+        if (!target.isConnected && prose) {
+          let next: Element | null = prose
+          for (const index of path) next = next?.children[index] ?? null
+          target = next as HTMLElement | null
+        }
+        if (disposed || !target?.isConnected) return
+        const empty = !(target.textContent ?? '').replace(/[\u200b\n\r]/g, '').trim() && !target.querySelector('img')
+        if (empty && placeholder === 'zwsp') target.textContent = '\u200b'
+        else if (empty) target.innerHTML = '<br>'
+        if (selection) {
+          const range = document.createRange()
+          range.selectNodeContents(target)
+          range.collapse(true)
+          selection.removeAllRanges()
+          selection.addRange(range)
+        }
+        target.scrollIntoView({ block: 'nearest' })
+      }
+      restore()
+      requestAnimationFrame(restore)
+      window.setTimeout(restore, 50)
+    }
+
     /** 空格分支：顶层段落内容恰为标记本身且光标在段末 → 转块（返回 false = 未处理） */
     const convertMarkdownMarker = (event: KeyboardEvent): boolean => {
       const prose = container.querySelector<HTMLElement>('.prose')
@@ -956,11 +995,15 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       anchor.remove()
       // 光标落点：标题 → 标题内；列表 → 首个列表项（tight 列表项内无 p）；
       // 任务项 → checkbox 之后（Lute 产出的 li 为 tight 形态）
-      let caret: HTMLElement | null = created?.matches('h1,h2,h3,h4,h5,h6')
+      const caret: HTMLElement | null = created?.matches('h1,h2,h3,h4,h5,h6')
         ? created
         : created?.querySelector('li') ?? created?.querySelector('p') ?? created
-      let afterInput = false
-      if (caret?.querySelector('input[type="checkbox"]')) afterInput = true
+      const headingCaret = caret?.matches('h1,h2,h3,h4,h5,h6') ?? false
+      const afterInput = !!caret?.querySelector('input[type="checkbox"]')
+      if (headingCaret && caret && !(caret.textContent ?? '').replace(/\u200b/g, '').trim()) {
+        // Vditor 会删除 textContent 为空的标题，保留零宽占位让新标题先存活下来。
+        caret.textContent = '\u200b'
+      }
       if (caret) {
         const caretRange = document.createRange()
         if (afterInput) caretRange.setStartAfter(caret.querySelector('input[type="checkbox"]')!)
@@ -972,17 +1015,9 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         selection.removeAllRanges()
         selection.addRange(caretRange)
       }
+      if (caret && !afterInput) stabilizeCaret(caret, headingCaret ? 'zwsp' : 'br')
       // 交回 Vditor 输入链路：Spin 重渲染、撤销入栈、草稿同步
       prose.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }))
-      requestAnimationFrame(() => {
-        if (disposed || !caret?.isConnected) return
-        const after = document.createRange()
-        after.selectNodeContents(caret)
-        after.collapse(true)
-        selection.removeAllRanges()
-        selection.addRange(after)
-        caret.scrollIntoView({ block: 'nearest' })
-      })
       return true
     }
 
@@ -1051,16 +1086,32 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         caretRange.collapse(true)
         selection.removeAllRanges()
         selection.addRange(caretRange)
+        stabilizeCaret(caretEl)
         prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
-        requestAnimationFrame(() => {
-          if (disposed || !caretEl.isConnected) return
-          const after = document.createRange()
-          after.selectNodeContents(caretEl)
-          after.collapse(true)
-          selection.removeAllRanges()
-          selection.addRange(after)
-          caretEl.scrollIntoView({ block: 'nearest' })
-        })
+        return
+      }
+
+      // 普通列表项回车：Chromium 在 contenteditable <pre> 中不一定创建新项，
+      // 按光标位置拆分当前项，末尾则生成同级空项。
+      if (
+        li && prose.contains(li) && !isEmptyListItem(li) &&
+        !li.closest('.vditor-task, .vditor-wysiwyg__block, [data-type="footnotes-block"], [data-type="link-ref-defs-block"]') &&
+        !anchorEl?.closest('td, th')
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
+        const trailing = range.cloneRange()
+        trailing.setEnd(li, li.childNodes.length)
+        const fragment = trailing.extractContents()
+        const hasContent = !!(fragment.textContent ?? '').trim() || !!fragment.querySelector('img, input, ul, ol, table')
+        const nextLi = document.createElement('li')
+        const marker = li.getAttribute('data-marker')
+        if (marker) nextLi.setAttribute('data-marker', marker)
+        if (hasContent) nextLi.appendChild(fragment)
+        else nextLi.innerHTML = '<br>'
+        li.insertAdjacentElement('afterend', nextLi)
+        stabilizeCaret(nextLi)
+        prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
         return
       }
 
@@ -1073,16 +1124,28 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       }
       if (!block || !prose.contains(block)) return
       if (block.closest('li, td, th, .vditor-wysiwyg__block, [data-type="footnotes-block"], [data-type="link-ref-defs-block"]')) return
-      // 源码片段回车不拦截（v0.6.8）：交回 Vditor 原生 Enter 转换。
-      // 代码围栏在输入 Spin 时即转代码块（此处仅兜底粘贴场景）；表格行走
-      // fixMarkdown 无位置条件；分隔线要求存在前块（与 fixMarkdown 的条件
-      // 一致），文首的 --- 不委派，避免落回浏览器默认回车行为。
+      // 代码围栏与表格行交回 Vditor 原生转换；分隔线则显式在下方新建段落，
+      // 避免光标停在 <hr> 右侧。
       if (block.tagName === 'P') {
         const md = (block.textContent ?? '').replace(/\u200b/g, '').trim()
         const fence = /^(`{3,}|~{3,})[^\s`]*$/.test(md)
         const tableRow = md.startsWith('|') && md.endsWith('|') && md.split('|').length > 3
         const hrLine = /^([-*_])( *?\1){2,} *$/.test(md)
-        if (fence || tableRow || (hrLine && block.previousElementSibling)) return
+        if (fence || tableRow) return
+        if (hrLine && block.previousElementSibling) {
+          event.preventDefault()
+          event.stopPropagation()
+          const hr = document.createElement('hr')
+          hr.setAttribute('data-block', '0')
+          const next = document.createElement('p')
+          next.setAttribute('data-block', '0')
+          next.innerHTML = '<br>'
+          block.replaceWith(hr)
+          hr.insertAdjacentElement('afterend', next)
+          stabilizeCaret(next)
+          prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
+          return
+        }
       }
       // 引用块内空段回车 = 逐层跳出（Vditor 原生语义）
       const blockEmpty = !(block.textContent ?? '').replace(/\u200b/g, '').trim() && !block.querySelector('img')
@@ -1109,36 +1172,15 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       caretRange.collapse(true)
       selection.removeAllRanges()
       selection.addRange(caretRange)
-      const caretParent = caretBlock.parentElement
-      const caretPrevious = caretBlock.previousElementSibling
-      const caretIndex = caretParent ? [...caretParent.children].indexOf(caretBlock) : -1
+      stabilizeCaret(caretBlock)
       // 交回 Vditor 输入链路：Spin 重渲染、撤销入栈、草稿同步
       prose.dispatchEvent(new InputEvent('input', { inputType: 'insertParagraph', bubbles: true }))
-      const restoreCaret = (): void => {
-        let target: HTMLElement | null = caretBlock
-        if (!target?.isConnected && caretPrevious?.isConnected) {
-          target = caretPrevious.nextElementSibling as HTMLElement | null
-        }
-        if (!target?.isConnected && caretParent?.isConnected && caretIndex >= 0) {
-          target = caretParent.children[caretIndex] as HTMLElement | null
-        }
-        if (disposed || !target?.isConnected) return
-        // Vditor 可能在 Spin 时移除空段落的 <br>，需恢复占位后光标才能真正落进新段落。
-        if (!(target.textContent ?? '').replace(/[\u200b\n\r]/g, '').trim() && !target.querySelector('img')) target.innerHTML = '<br>'
-        const rangeAfterRender = document.createRange()
-        rangeAfterRender.selectNodeContents(target)
-        rangeAfterRender.collapse(true)
-        selection.removeAllRanges()
-        selection.addRange(rangeAfterRender)
-        target.scrollIntoView({ block: 'nearest' })
-      }
-      restoreCaret()
-      requestAnimationFrame(restoreCaret)
-      window.setTimeout(restoreCaret, 50)
     }
     container.addEventListener('keydown', onEditorKeydown, true)
 
     const syncDraft = (): void => {
+      window.clearTimeout(draftSyncTimer)
+      draftSyncTimer = 0
       const state = useStore.getState()
       if (!ready || !editor || disposed || state.activeTabId !== tabId || state.activeProjectId !== projectId) return
       const value = editor.getValue()
@@ -1156,8 +1198,17 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         syncingFromEditor = false
       }
     }
+    // Vditor 已即时维护编辑表面；全文序列化与 store 更新合并到短暂空闲后执行，
+    // 连续回删/输入时避免同一按键重复序列化整篇文档。
+    const scheduleDraftSync = (): void => {
+      window.clearTimeout(draftSyncTimer)
+      draftSyncTimer = window.setTimeout(() => {
+        draftSyncTimer = 0
+        syncDraft()
+      }, 32)
+    }
     const onInput = (event: Event): void => {
-      if (!(event as InputEvent).isComposing) syncDraft()
+      if (!(event as InputEvent).isComposing) scheduleDraftSync()
     }
 
     // ---- 图片 / Mermaid 图工具条（v0.6.9 调宽；v0.6.10 扩展对齐与 Mermaid）----
@@ -1500,7 +1551,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
           }).catch(() => {})
           refresh()
         },
-        input: syncDraft,
+        input: scheduleDraftSync,
         blur: syncDraft
       })
     }).catch((error) => {

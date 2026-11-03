@@ -518,10 +518,10 @@ input, textarea { user-select: text; }
 /* 引用块（> 摘要式分行）内的行内软换行：占位 span 里的 "\n" 渲染为真实换行 */
 .prose span[data-an-softbreak-br] { white-space: pre-wrap; }
 
-/* 块悬浮工具栏（上移/下移/删除）已移除（v0.6.4）：删除块改用选中整块后按退格，
-   正文编辑体验对齐 Typora/Word。仅含输入框的块弹层（标题 ID / 表格行列 / 代码块语言）
-   保留，由 MarkdownView.centerBlockToolbar 定位到块上方/下方。 */
-.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:has(button[data-type="remove"]):not(:has(.vditor-input)) {
+/* 普通块工具栏与标题的 ID / 上移 / 下移 / 删除弹层全部移除；
+   表格行列、代码块语言等非标题输入弹层保留。 */
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:has(button[data-type="remove"]):not(:has(.vditor-input)),
+.markdown-editor .vditor-wysiwyg > div.vditor-panel--none:has(button[data-type="remove"]):has(.vditor-input[placeholder^="ID"]) {
   display: none !important;
 }
 /* 含输入框的块弹层：位置由 JS 计算（块上方/下方），此处仅保证可见 */
@@ -2025,6 +2025,9 @@ select:focus-visible {
 .toc-compact::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .toc-compact:hover, .toc-compact:focus-within { width: 248px; box-shadow: var(--shadow-pop); }
 .toc-compact .toc-item { display: flex; align-items: center; justify-content: center; gap: 0; min-height: 26px; padding: 3px 6px; width: 100%; white-space: nowrap; background: transparent; }
+.toc-compact { --toc-row-hover: #F3F4F6; }
+[data-theme='dark'] .toc-compact { --toc-row-hover: #2B2F33; }
+.toc-compact .toc-item:hover { background: var(--toc-row-hover); border-radius: 6px; }
 /* 展开态按层级缩进：线段列固定，缩进量只加在标题文字上（v0.6.4 调整） */
 .toc-compact:is(:hover, :focus-within) .toc-item { justify-content: flex-start; gap: 10px; padding-left: 6px; }
 .toc-compact .toc-mark { display: block; flex: none; width: 3px; height: 14px; background: var(--Fills-F2-hover); border-radius: var(--radius-full); transition: width var(--duration-default) var(--ease-out), height var(--duration-default) var(--ease-out), background-color var(--duration-default) var(--ease-out); }
