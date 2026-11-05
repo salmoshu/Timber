@@ -130,6 +130,7 @@ export default function SettingsView() {
   }
 
   const downloaded = updaterState?.type === 'update-downloaded'
+  const preparing = updaterState?.type === 'download-progress' && (updaterState.percent ?? 0) >= 99
   const downloadingNow =
     updaterState?.type === 'download-progress' ||
     downloading ||
@@ -371,7 +372,7 @@ export default function SettingsView() {
                 {downloaded
                   ? '立即重启更新'
                   : downloadingNow
-                    ? '下载中…'
+                    ? preparing ? '准备中…' : '下载中…'
                     : checking
                       ? '检查中…'
                       : updaterState?.type === 'update-available'
@@ -387,8 +388,16 @@ export default function SettingsView() {
             )}
             {updaterState?.type === 'download-progress' && (
               <div className="st-row">
-                <div className="uc-progress" style={{ marginTop: 0 }}>
-                  <div className="uc-progress-bar" style={{ width: `${updaterState.percent ?? 0}%` }} />
+                <div style={{ width: '100%' }}>
+                  <div className="st-hint" style={{ marginBottom: 6 }}>
+                    {preparing ? '安装包已下载，正在校验并准备更新，无需重新下载。' : `正在下载 ${updaterState.percent ?? 0}%`}
+                  </div>
+                  <div className="uc-progress" style={{ marginTop: 0 }}>
+                    <div
+                      className={`uc-progress-bar${preparing ? ' indeterminate' : ''}`}
+                      style={preparing ? undefined : { width: `${updaterState.percent ?? 0}%` }}
+                    />
+                  </div>
                 </div>
               </div>
             )}

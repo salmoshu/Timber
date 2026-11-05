@@ -50,6 +50,7 @@ export default function UpdateCard() {
 
   const version = event?.version ?? ''
   const percent = event?.percent ?? 0
+  const preparing = event?.type === 'download-progress' && percent >= 99
   const ignored =
     Boolean(prefs.ignoredVersion) &&
     Boolean(version) &&
@@ -123,9 +124,13 @@ export default function UpdateCard() {
       )}
       {phase === 'progress' && (
         <>
-          <div className="uc-title">正在下载 v{version}</div>
+          <div className="uc-title">{preparing ? '正在校验并准备更新' : `正在下载 v${version}`}</div>
+          <p className="uc-desc">{preparing ? '安装包已下载，正在校验并准备安装，无需重新下载。' : `已下载 ${percent}%`}</p>
           <div className="uc-progress">
-            <div className="uc-progress-bar" style={{ width: `${percent}%` }} />
+            <div
+              className={`uc-progress-bar${preparing ? ' indeterminate' : ''}`}
+              style={preparing ? undefined : { width: `${percent}%` }}
+            />
           </div>
         </>
       )}

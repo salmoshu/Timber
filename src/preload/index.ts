@@ -26,6 +26,9 @@ const bridge: TimberBridge = {
   onUpdateStatus: (cb) => {
     const listener = (_e: Electron.IpcRendererEvent, payload: UpdateStatusEvent) => cb(payload)
     ipcRenderer.on('update-status-changed', listener)
+    void ipcRenderer.invoke('update-status-current').then((payload: UpdateStatusEvent | null) => {
+      if (payload) cb(payload)
+    }).catch(() => {})
     return () => ipcRenderer.removeListener('update-status-changed', listener)
   },
   onOpenExternalPage: (cb) => {

@@ -35,6 +35,9 @@
 .prose h4 { font-size: 1.1em; margin: 22px 0 6px; }
 .prose h5 { font-size: 1em; margin: 18px 0 6px; }
 .prose h6 { font-size: 0.95em; margin: 16px 0 6px; color: var(--ink2); }
+/* 相邻标题不再需要为悬浮工具栏预留操作空间；非相邻标题保持原有阅读节奏。 */
+.prose :is(h1,h2,h3,h4,h5,h6) + :is(h1,h2,h3,h4,h5,h6) { margin-top: 12px; padding-top: 0; }
+.prose :is(h1,h2,h3,h4,h5,h6):has(+ :is(h1,h2,h3,h4,h5,h6)) { margin-bottom: 8px; padding-bottom: 0; }
 
 .prose p { margin: 10px 0; }
 .prose ul, .prose ol { margin: 8px 0 12px; padding-left: 26px; }

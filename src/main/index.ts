@@ -307,6 +307,7 @@ ipcMain.handle('export:binary', async (_e, payload: { data: string; path: string
 // 版本更新：偏好由渲染端持久化并在初始化时传入，状态经 'update-status-changed' 推送
 ipcMain.handle('update-check', () => updateService.checkForUpdates())
 ipcMain.handle('update-download', () => updateService.downloadUpdate())
+ipcMain.handle('update-status-current', () => updateService.getCurrentStatus())
 ipcMain.handle('update-quit-and-install', () => updateService.quitAndInstall())
 ipcMain.on('update-set-prefs', (_e, prefs) => updateService.applyPrefs(prefs))
 

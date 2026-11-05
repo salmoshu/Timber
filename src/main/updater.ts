@@ -62,6 +62,11 @@ export class UpdateService {
   private downloadStarted = false
   private downloadComplete = false
   private downloadPromise: Promise<void> | null = null
+  private lastStatus: UpdateStatusEvent | null = null
+
+  getCurrentStatus(): UpdateStatusEvent | null {
+    return this.lastStatus
+  }
 
   attach(target: UpdateStatusTarget): void {
     this.target = target
@@ -145,7 +150,7 @@ export class UpdateService {
       this.downloadStarted = true
       if (percent === this.downloadPercent) return
       this.downloadPercent = percent
-      this.send({ type: 'download-progress', percent })
+      this.send({ type: 'download-progress', percent, version: this.downloadVersion })
     })
     autoUpdater.on('update-downloaded', (info) => {
       this.downloadVersion = info.version
@@ -173,6 +178,7 @@ export class UpdateService {
   }
 
   private send(payload: UpdateStatusEvent): void {
+    this.lastStatus = payload
     if (this.target && !this.target.isDestroyed()) {
       this.target.send(UPDATE_STATUS_CHANNEL, payload)
     }

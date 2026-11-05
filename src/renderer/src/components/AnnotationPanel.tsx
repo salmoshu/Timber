@@ -117,6 +117,7 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   const draft = useStore((s) => s.draft)
   const [toc, setToc] = useState<TocEntry[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
 
   // 阅读模式：文档/模式变化后重建；正文直接编辑或异步初始化后实时更新目录。
   // （编辑模式由下方源码提取 effect 负责，这里若不跳过，60ms 后会把源码目录清空）
@@ -179,14 +180,18 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   // 展开态只作用于标题文字（线段列固定在一条竖线上）。
   const minLv = Math.min(...toc.map((h) => h.level))
   return (
-    <nav className={compact ? "toc-list toc-compact" : "toc-list"} aria-label="文档目录">
+    <nav className={compact ? "toc-list toc-compact" : "toc-list"} aria-label="文档目录" onMouseLeave={() => setHoverIndex(null)}>
       {toc.map((h, i) => (
         <button
           key={i}
           className={`toc-item dep${Math.min(h.level - minLv, 5)} ${activeIndex === i ? 'active' : ''}`}
-          style={{ '--toc-pad': `${(h.level - minLv) * 12}px` } as React.CSSProperties}
+          style={{
+            '--toc-pad': `${(h.level - minLv) * 12}px`,
+            '--toc-line-strength': hoverIndex === null ? 0 : Math.max(0, 1 - Math.abs(hoverIndex - i) / 3)
+          } as React.CSSProperties}
           aria-label={h.text}
           aria-current={activeIndex === i ? 'location' : undefined}
+          onMouseEnter={() => setHoverIndex(i)}
           onClick={() => {
             if (mode === 'source') scrollToSourceHeading(h)
             else scrollToHeading(h)

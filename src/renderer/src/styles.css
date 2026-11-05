@@ -780,6 +780,8 @@ input, textarea { user-select: text; }
   overflow: hidden; margin-top: 6px;
 }
 .uc-progress-bar { height: 100%; border-radius: var(--radius-full); background: var(--accent); transition: width 0.2s var(--ease-out); }
+.uc-progress-bar.indeterminate { width: 36%; transition: none; animation: uc-preparing 1.25s ease-in-out infinite; }
+@keyframes uc-preparing { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
 
 /* ---- 深色主题 ----
    核心语义变量全部由 brand-tokens.css 的 [data-theme='dark'] 自动覆盖；
@@ -2030,7 +2032,12 @@ select:focus-visible {
 .toc-compact .toc-item:hover { background: var(--toc-row-hover); border-radius: 6px; }
 /* 展开态按层级缩进：线段列固定，缩进量只加在标题文字上（v0.6.4 调整） */
 .toc-compact:is(:hover, :focus-within) .toc-item { justify-content: flex-start; gap: 10px; padding-left: 6px; }
-.toc-compact .toc-mark { display: block; flex: none; width: 3px; height: 14px; background: var(--Fills-F2-hover); border-radius: var(--radius-full); transition: width var(--duration-default) var(--ease-out), height var(--duration-default) var(--ease-out), background-color var(--duration-default) var(--ease-out); }
+.toc-compact .toc-mark {
+  display: block; flex: none; width: 3px; height: 14px;
+  background: var(--Fills-F2-hover); border-radius: var(--radius-full);
+  transform: scaleX(calc(1 + var(--toc-line-strength, 0) * 5)); transform-origin: left center;
+  transition: transform var(--duration-default) var(--ease-out), width var(--duration-default) var(--ease-out), height var(--duration-default) var(--ease-out), background-color var(--duration-default) var(--ease-out);
+}
 .toc-compact .dep0 .toc-mark { height: 18px; }
 .toc-compact .dep2 .toc-mark { height: 11px; }
 .toc-compact .dep3 .toc-mark { height: 10px; }
