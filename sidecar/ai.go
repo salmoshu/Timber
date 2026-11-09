@@ -41,6 +41,7 @@ type aiArchRequest struct {
 	Action  string          `json:"action,omitempty"`
 	Context json.RawMessage `json:"context,omitempty"`
 	AI      aiConfig        `json:"ai,omitempty"`
+	Stream  bool            `json:"stream,omitempty"`
 }
 
 // aiArchResponse 统一 200 返回（错误在 error 字段分层：no-cli/exec/timeout/parse/api），前端按类提示
@@ -61,15 +62,58 @@ type aiCli struct {
 	path string
 }
 
-// detectAiCli 探测可用的 agent CLI：kimi 优先，codex 兜底
-func detectAiCli() *aiCli {
-	if p, err := exec.LookPath("kimi"); err == nil {
-		return &aiCli{name: "kimi", path: p}
+func executableAiCli(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && (runtime.GOOS == "windows" || info.Mode()&0111 != 0)
+}
+
+// aiCliCandidates 覆盖远程非登录 shell 不会继承的用户级 CLI 目录。
+// WSL/SSH 中 nvm、Volta、asdf 等通常由交互式 shell rc 加入 PATH，timberd 看不到。
+func aiCliCandidates(home, name string) []string {
+	if home == "" {
+		return nil
 	}
-	if p, err := exec.LookPath("codex"); err == nil {
-		return &aiCli{name: "codex", path: p}
+	paths := make([]string, 0, 12)
+	if name == "kimi" {
+		paths = append(paths, filepath.Join(home, ".kimi-code", "bin", name))
+	}
+	paths = append(paths,
+		filepath.Join(home, ".local", "bin", name),
+		filepath.Join(home, "bin", name),
+		filepath.Join(home, ".npm-global", "bin", name),
+		filepath.Join(home, ".volta", "bin", name),
+		filepath.Join(home, ".asdf", "shims", name),
+		filepath.Join(home, ".local", "share", "mise", "shims", name),
+	)
+	appendNewestFirst := func(pattern string) {
+		matches, _ := filepath.Glob(pattern)
+		for i := len(matches) - 1; i >= 0; i-- {
+			paths = append(paths, matches[i])
+		}
+	}
+	appendNewestFirst(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", name))
+	appendNewestFirst(filepath.Join(home, ".local", "share", "fnm", "node-versions", "*", "installation", "bin", name))
+	return paths
+}
+
+func detectAiCliAt(home string, lookPath func(string) (string, error)) *aiCli {
+	for _, name := range []string{"kimi", "codex"} {
+		if p, err := lookPath(name); err == nil {
+			return &aiCli{name: name, path: p}
+		}
+		for _, p := range aiCliCandidates(home, name) {
+			if executableAiCli(p) {
+				return &aiCli{name: name, path: p}
+			}
+		}
 	}
 	return nil
+}
+
+// detectAiCli 探测可用的 agent CLI：kimi 优先，codex 兜底；同时支持本地与远程非登录环境。
+func detectAiCli() *aiCli {
+	home, _ := os.UserHomeDir()
+	return detectAiCliAt(home, exec.LookPath)
 }
 
 // wrapCmd Windows 上 npm 垫片（.cmd/.bat）无法被 CreateProcess 直接执行，经 cmd /c 启动
@@ -81,6 +125,22 @@ func wrapCmd(ctx context.Context, path string, args ...string) *exec.Cmd {
 		}
 	}
 	return exec.CommandContext(ctx, path, args...)
+}
+
+// withAiCliPath 让脚本型 CLI 能找到同目录的 node 等运行时，同时保留系统 PATH。
+func withAiCliPath(env []string, cliDir string) []string {
+	for i, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "PATH") {
+			env[i] = parts[0] + "=" + cliDir + string(os.PathListSeparator) + parts[1]
+			return env
+		}
+	}
+	return append(env, "PATH="+cliDir)
+}
+
+func aiCliEnv(cli *aiCli) []string {
+	return withAiCliPath(os.Environ(), filepath.Dir(cli.path))
 }
 
 // aiArchSpecRules 给模型的 spec 契约硬性要求（CLI 与 API 模式共用）。
@@ -191,6 +251,44 @@ func (s *server) projectDigest(p *Project, ref string) string {
 	return "\n\n项目结构上下文：不可用（非 git 项目或分析失败），请基于用户描述与当前架构上下文作答。\n"
 }
 
+// aiHttpErrorMessage 提取 OpenAI 兼容服务返回的核心错误，避免把整段 JSON/HTML 当作唯一提示。
+func aiHttpErrorMessage(raw []byte) string {
+	fallback := strings.TrimSpace(string(raw))
+	var payload struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+		Detail  string          `json:"detail"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return fallback
+	}
+	if len(payload.Error) > 0 {
+		var text string
+		if json.Unmarshal(payload.Error, &text) == nil && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+		var object struct {
+			Message string `json:"message"`
+			Detail  string `json:"detail"`
+		}
+		if json.Unmarshal(payload.Error, &object) == nil {
+			if strings.TrimSpace(object.Message) != "" {
+				return strings.TrimSpace(object.Message)
+			}
+			if strings.TrimSpace(object.Detail) != "" {
+				return strings.TrimSpace(object.Detail)
+			}
+		}
+	}
+	if strings.TrimSpace(payload.Message) != "" {
+		return strings.TrimSpace(payload.Message)
+	}
+	if strings.TrimSpace(payload.Detail) != "" {
+		return strings.TrimSpace(payload.Detail)
+	}
+	return fallback
+}
+
 // runAiHttp 经 OpenAI 兼容 /chat/completions 生成；返回首个 choice 的 message.content
 func runAiHttp(ctx context.Context, cfg aiConfig, prompt string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -219,9 +317,15 @@ func runAiHttp(ctx context.Context, cfg aiConfig, prompt string) (string, error)
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != 200 {
-		msg := strings.TrimSpace(string(raw))
-		if len(msg) > 300 {
-			msg = msg[:300] + "…"
+		msg := aiHttpErrorMessage(raw)
+		if secret := strings.TrimSpace(cfg.APIKey); secret != "" {
+			msg = strings.ReplaceAll(msg, secret, "[已隐藏]")
+		}
+		if msg == "" {
+			msg = "服务未返回错误详情"
+		}
+		if len(msg) > 500 {
+			msg = msg[:500] + "…"
 		}
 		return "", fmt.Errorf("HTTP %d：%s", resp.StatusCode, msg)
 	}
@@ -248,8 +352,8 @@ func runAiHttp(ctx context.Context, cfg aiConfig, prompt string) (string, error)
 }
 
 // runAiArchCli 非交互执行 agent CLI：kimi 走 -p argv（shell:false 等价），codex 走 exec -（stdin 传 prompt）。
-// 返回合并的 stdout+stderr 文本。
-func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string) (string, error) {
+// 原始输出与过程事件同时保留；回调在工具开始/结束时触发，无需等待整个进程结束。
+func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string, onProgress func(aiArchProgress)) (string, error) {
 	var cmd *exec.Cmd
 	if cli.name == "kimi" {
 		cmd = wrapCmd(ctx, cli.path, "-p", prompt, "--output-format", "stream-json")
@@ -257,6 +361,7 @@ func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string) (string, 
 		cmd = wrapCmd(ctx, cli.path, "exec", "-", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never")
 		cmd.Stdin = strings.NewReader(prompt)
 	}
+	cmd.Env = aiCliEnv(cli)
 	prepTreeCmd(cmd)
 	// 取消/超时默认只杀直接子进程；cmd /c 垫片会再拖起 node 等孙进程，必须整树终止
 	cmd.Cancel = func() error {
@@ -269,11 +374,15 @@ func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string) (string, 
 	// 进程已退但孙进程仍占着 stdout 管道时，Run 会在拷贝上阻塞；WaitDelay 兜底放行
 	cmd.WaitDelay = 10 * time.Second
 	cmd.Dir = dir
-	var out strings.Builder
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	raw := &aiCliRawOutput{}
+	stdout := &aiCliPipeWriter{cliName: cli.name, raw: raw, onProgress: onProgress}
+	stderr := &aiCliPipeWriter{cliName: cli.name, raw: raw, onProgress: onProgress}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err := cmd.Run()
-	return out.String(), err
+	stdout.finish()
+	stderr.finish()
+	return raw.String(), err
 }
 
 // extractAssistantText 从 stream-json 事件流拼接 assistant 文本；解析不出时返回空串
@@ -398,13 +507,15 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "bad-request", Message: "不支持的 AI 操作"})
 		return
 	}
+	emitter := newAiArchEmitter(w, req.Stream)
+	emitter.progress(aiArchProgress{Stage: "context", Status: "running", Label: "正在准备项目上下文"})
 	// 后端选择：请求带有效 API 配置 → 接口；否则探测本机 CLI
 	useApi := req.AI.valid()
 	var cli *aiCli
 	if !useApi {
 		cli = detectAiCli()
 		if cli == nil {
-			writeJSON(w, 200, aiArchResponse{Ok: false, Error: "no-cli", Message: "未配置 AI：请在 设置 → AI 配置 OpenAI 兼容接口，或安装并登录 kimi / codex CLI"})
+			emitter.result(aiArchResponse{Ok: false, Error: "no-cli", Message: "未配置 AI：请在 设置 → AI 配置 OpenAI 兼容接口，或安装并登录 kimi / codex CLI"})
 			return
 		}
 	}
@@ -418,16 +529,19 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 	} else {
 		base.Cli = cli.name
 	}
+	emitter.progress(aiArchProgress{Stage: "backend", Status: "done", Label: aiBackendLabel(base.Backend, base.Cli, base.Model)})
 
 	var text, raw string
 	if useApi {
 		prompt := buildAiArchApiPrompt(req, s.projectDigest(p, strings.TrimSpace(req.Ref)))
+		emitter.progress(aiArchProgress{Stage: "context", Status: "done", Label: "项目上下文已就绪"})
+		emitter.progress(aiArchProgress{Stage: "agent", Status: "running", Label: "API 正在生成回答"})
 		var err error
 		text, err = runAiHttp(ctx, req.AI, prompt)
 		raw = text
 		if ctx.Err() == context.DeadlineExceeded {
 			base.Ok, base.Error, base.Message = false, "timeout", "AI 接口超时（180 秒），可简化描述后重试"
-			writeJSON(w, 200, base)
+			emitter.result(base)
 			return
 		}
 		if err != nil {
@@ -435,16 +549,18 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			base.Ok, base.Error, base.Message = false, "api", err.Error()
-			writeJSON(w, 200, base)
+			emitter.result(base)
 			return
 		}
 	} else {
 		prompt := buildAiArchRequestPrompt(req)
+		emitter.progress(aiArchProgress{Stage: "context", Status: "done", Label: "项目上下文已就绪"})
+		emitter.progress(aiArchProgress{Stage: "agent", Status: "running", Label: aiBackendLabel("cli", cli.name, "") + " 正在分析项目"})
 		var err error
-		raw, err = runAiArchCli(ctx, cli, p.Path, prompt)
+		raw, err = runAiArchCli(ctx, cli, p.Path, prompt, emitter.progress)
 		if ctx.Err() == context.DeadlineExceeded {
 			base.Ok, base.Error, base.Message, base.Output = false, "timeout", "AI 生成超时（180 秒），可简化描述后重试", tailStr(raw, 500)
-			writeJSON(w, 200, base)
+			emitter.result(base)
 			return
 		}
 		if err != nil {
@@ -453,12 +569,13 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			base.Ok, base.Error, base.Message, base.Output = false, "exec", fmt.Sprintf("AI CLI 执行失败：%v", err), tailStr(raw, 500)
-			writeJSON(w, 200, base)
+			emitter.result(base)
 			return
 		}
 		text = extractAssistantText(cli.name, raw)
 	}
 
+	emitter.progress(aiArchProgress{Stage: "agent", Status: "done", Label: "Agent 执行完成"})
 	if req.Action == "ask" {
 		var result struct {
 			Answer string `json:"answer"`
@@ -469,10 +586,11 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
 		if start >= 0 && end > start && json.Unmarshal([]byte(text[start:end+1]), &result) == nil && strings.TrimSpace(result.Answer) != "" {
 			base.Ok, base.Answer = true, result.Answer
-			writeJSON(w, 200, base)
+			emitter.progress(aiArchProgress{Stage: "answer", Status: "done", Label: "回答已生成"})
+			emitter.result(base)
 		} else {
 			base.Ok, base.Error, base.Message = false, "parse", "AI 未返回有效回答，请重试"
-			writeJSON(w, 200, base)
+			emitter.result(base)
 		}
 		return
 	}
@@ -483,12 +601,13 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 	}
 	if perr != nil {
 		base.Ok, base.Error, base.Message, base.Output = false, "parse", perr.Error(), tailStr(raw, 500)
-		writeJSON(w, 200, base)
+		emitter.result(base)
 		return
 	}
 	normalizeSpec(spec)
 	base.Ok, base.Spec = true, spec
-	writeJSON(w, 200, base)
+	emitter.progress(aiArchProgress{Stage: "answer", Status: "done", Label: "架构数据已生成"})
+	emitter.result(base)
 }
 
 // handleAiTest 设置页「测试连接」：用给定配置发一条最小消息验证地址/密钥/模型可用

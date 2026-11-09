@@ -24,7 +24,9 @@ function SettingsIcon({ section }: { section: Section }) {
 /** 设置视图：占据整个内容区——左侧栏位置放设置导航（关闭按钮在标题上方），主体部分放设置内容 */
 export default function SettingsView() {
   const { settings, setSetting } = useStore()
-  const [section, setSection] = useState<Section>('appearance')
+  const requestedSection = useStore((s) => s.settingsSection)
+  const [section, setSection] = useState<Section>(requestedSection ?? 'appearance')
+  useEffect(() => { if (requestedSection) setSection(requestedSection) }, [requestedSection])
 
   // ---- 版本区状态 ----
   const bridge = window.timber

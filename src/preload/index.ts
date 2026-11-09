@@ -46,6 +46,7 @@ const bridge: TimberBridge = {
   exportPdf: (payload) => ipcRenderer.invoke('export:pdf', payload),
   exportImage: (payload) => ipcRenderer.invoke('export:image', payload),
   exportBinary: (payload) => ipcRenderer.invoke('export:binary', payload),
+  exportHtml: (payload) => ipcRenderer.invoke('export:html', payload),
   onTabShortcut: (cb) => {
     const listener = (_e: Electron.IpcRendererEvent, kind: 'close' | 'next') => cb(kind)
     ipcRenderer.on('tab-shortcut', listener)

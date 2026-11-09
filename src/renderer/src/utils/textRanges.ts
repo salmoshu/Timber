@@ -1,5 +1,6 @@
 import type { Annotation } from '@shared/types'
 import { smoothScrollTo } from './scroll'
+import { textMatches } from './markdownEditing'
 
 /** 用 Range 高亮文字，不向可编辑正文插入节点，避免污染 Markdown 和撤销记录。 */
 export function setTextHighlight(name: string, ranges: Range[]): void {
@@ -39,17 +40,13 @@ function textRange(text: ReturnType<typeof collectText>, start: number, end: num
   return range
 }
 
-export function findTextRanges(root: HTMLElement, query: string): Range[] {
+export function findTextRanges(root: HTMLElement, query: string, caseSensitive = false, wholeWord = false): Range[] {
   if (!query) return []
   const text = collectText(root)
-  const full = text.full.toLowerCase()
-  const needle = query.toLowerCase()
   const ranges: Range[] = []
-  let index = full.indexOf(needle)
-  while (index >= 0) {
-    const range = textRange(text, index, index + needle.length)
+  for (const match of textMatches(text.full, query, caseSensitive, wholeWord)) {
+    const range = textRange(text, match.start, match.end)
     if (range) ranges.push(range)
-    index = full.indexOf(needle, index + needle.length)
   }
   return ranges
 }

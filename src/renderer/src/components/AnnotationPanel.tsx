@@ -113,11 +113,23 @@ function locateInSource(quote: string): boolean {
   return true
 }
 
+const MAX_COMPACT_TOC_ITEMS = 17
+const COMPACT_TOC_ITEM_HEIGHT = 10
+
 function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent | null; mode: string; compact?: boolean }) {
   const draft = useStore((s) => s.draft)
   const [toc, setToc] = useState<TocEntry[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  const [hoverOffset, setHoverOffset] = useState<number | null>(null)
+  const [compactStart, setCompactStart] = useState(0)
+  const pointerYRef = useRef<number | null>(null)
+  const railRef = useRef<HTMLElement | null>(null)
+  const flyoutRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setCompactStart(Math.round((railRef.current?.scrollTop ?? 0) / COMPACT_TOC_ITEM_HEIGHT))
+  }, [toc.length])
 
   // 阅读模式：文档/模式变化后重建；正文直接编辑或异步初始化后实时更新目录。
   // （编辑模式由下方源码提取 effect 负责，这里若不跳过，60ms 后会把源码目录清空）
@@ -175,33 +187,136 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
     return compact ? null : <div className="ap-empty">当前文档没有可用的标题目录。</div>
   }
 
+  const selectAtPointer = (nav: HTMLElement): void => {
+    const pointerY = pointerYRef.current
+    if (pointerY === null) return
+    const offset = pointerY + nav.scrollTop
+    setHoverOffset(offset)
+    const raw = Math.round((offset - 5) / 10)
+    setHoverIndex(Math.min(toc.length - 1, Math.max(0, raw)))
+  }
+  const tickWidthFor = (index: number): number | undefined => {
+    if (hoverOffset === null) return undefined
+    const distance = Math.abs(index * 10 + 5 - hoverOffset)
+    const proximity = Math.max(0, 1 - distance / (10 * 3))
+    const eased = proximity * proximity * (3 - 2 * proximity)
+    return 12 + eased * 18
+  }
+
   // 层级按相对深度归一（v0.6.3）：文档从 h2/h3 起笔时顶层仍从零缩进起。
   // dep 类输出真实深度（0-5，v0.6.4 不再封顶两层）；--toc-pad 为纯层级缩进量，
   // 展开态只作用于标题文字（线段列固定在一条竖线上）。
   const minLv = Math.min(...toc.map((h) => h.level))
+  const jumpTo = (entry: TocEntry, index: number): void => {
+    if (mode === 'source') scrollToSourceHeading(entry)
+    else scrollToHeading(entry)
+    setActiveIndex(index)
+  }
+  const clearHover = (): void => {
+    pointerYRef.current = null
+    setHoverOffset(null)
+    setHoverIndex(null)
+  }
+  const focusIndex = (index: number): void => {
+    setHoverIndex(index)
+    setHoverOffset(index * 10 + 5)
+  }
+  const syncScroll = (source: HTMLElement, target: HTMLElement): void => {
+    const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
+    const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
+    const next = sourceMax === 0 ? 0 : (source.scrollTop / sourceMax) * targetMax
+    if (Math.abs(target.scrollTop - next) > 1) target.scrollTop = next
+  }
+  if (!compact) {
+    return (
+      <nav className="toc-list" aria-label="文档目录">
+        {toc.map((h, i) => (
+          <button key={i} className={`toc-item ${activeIndex === i ? 'active' : ''}`} onClick={() => jumpTo(h, i)}>
+            {h.text || '(无标题)'}
+          </button>
+        ))}
+      </nav>
+    )
+  }
+  // 只渲染当前窗口内的横线，滚动到行间时也不多露出第 18 根；浮层保留完整目录。
+  const compactStartIndex = Math.min(compactStart, Math.max(0, toc.length - MAX_COMPACT_TOC_ITEMS))
+  const compactToc = toc.slice(compactStartIndex, compactStartIndex + MAX_COMPACT_TOC_ITEMS)
   return (
-    <nav className={compact ? "toc-list toc-compact" : "toc-list"} aria-label="文档目录" onMouseLeave={() => setHoverIndex(null)}>
-      {toc.map((h, i) => (
-        <button
-          key={i}
-          className={`toc-item dep${Math.min(h.level - minLv, 5)} ${activeIndex === i ? 'active' : ''}`}
-          style={{
-            '--toc-pad': `${(h.level - minLv) * 12}px`,
-            '--toc-line-strength': hoverIndex === null ? 0 : Math.max(0, 1 - Math.abs(hoverIndex - i) / 3)
-          } as React.CSSProperties}
-          aria-label={h.text}
-          aria-current={activeIndex === i ? 'location' : undefined}
-          onMouseEnter={() => setHoverIndex(i)}
-          onClick={() => {
-            if (mode === 'source') scrollToSourceHeading(h)
-            else scrollToHeading(h)
-            setActiveIndex(i)
-          }}
-        >
-          <span className="toc-mark" aria-hidden="true" /><span className="toc-label">{h.text || '(无标题)'}</span>
-        </button>
-      ))}
-    </nav>
+    <div
+      className="toc-shell"
+      onPointerMove={(event) => {
+        const rail = railRef.current
+        if (!rail || !rail.contains(event.target as Node)) return
+        pointerYRef.current = event.clientY - rail.getBoundingClientRect().top - 4
+        selectAtPointer(rail)
+      }}
+      onPointerLeave={clearHover}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHover()
+      }}
+    >
+      <nav
+        ref={railRef}
+        className="toc-list toc-compact"
+        aria-label="文档目录"
+        onScroll={(event) => {
+          const rail = event.currentTarget
+          setCompactStart(Math.round(rail.scrollTop / COMPACT_TOC_ITEM_HEIGHT))
+          if (flyoutRef.current) syncScroll(rail, flyoutRef.current)
+          selectAtPointer(rail)
+        }}
+      >
+        <div aria-hidden="true" style={{ height: compactStartIndex * COMPACT_TOC_ITEM_HEIGHT }} />
+        {compactToc.map((h, offset) => {
+          const i = compactStartIndex + offset
+          return (
+            <button
+              key={i}
+              className={`toc-item dep${Math.min(h.level - minLv, 5)} ${activeIndex === i ? 'active' : ''} ${
+                hoverIndex === i ? 'hover-active' : hoverIndex !== null && Math.abs(hoverIndex - i) === 1 ? 'hover-near' : ''
+              }`}
+              aria-label={h.text}
+              aria-current={activeIndex === i ? 'location' : undefined}
+              onFocus={() => focusIndex(i)}
+              onClick={() => jumpTo(h, i)}
+            >
+              <span className="toc-mark" style={{ width: tickWidthFor(i) }} aria-hidden="true" />
+            </button>
+          )
+        })}
+        <div aria-hidden="true" style={{ height: (toc.length - compactStartIndex - compactToc.length) * COMPACT_TOC_ITEM_HEIGHT }} />
+      </nav>
+      <div
+        ref={flyoutRef}
+        className="toc-flyout"
+        role="group"
+        aria-label="目录内容"
+        onScroll={(event) => {
+          const rail = railRef.current
+          if (!rail) return
+          syncScroll(event.currentTarget, rail)
+          selectAtPointer(rail)
+        }}
+        onPointerMove={(event) => {
+          const item = (event.target as Element).closest<HTMLElement>('.toc-flyout-item')
+          if (item) focusIndex(Number(item.dataset.tocIndex))
+        }}
+      >
+        {toc.map((h, i) => (
+          <button
+            key={i}
+            className={`toc-flyout-item dep${Math.min(h.level - minLv, 5)} ${activeIndex === i ? 'active' : ''} ${hoverIndex === i ? 'hover-active' : ''}`}
+            style={{ '--toc-pad': `${(h.level - minLv) * 12}px` } as React.CSSProperties}
+            data-toc-index={i}
+            aria-current={activeIndex === i ? 'location' : undefined}
+            onFocus={() => focusIndex(i)}
+            onClick={() => jumpTo(h, i)}
+          >
+            <span className="toc-flyout-label">{h.text || '(无标题)'}</span>
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 

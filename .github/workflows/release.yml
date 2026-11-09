@@ -34,10 +34,39 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 检查类型与 Markdown 编辑行为
+        run: |
+          pnpm typecheck
+          pnpm test:markdown
+
+      - name: 检查后台服务与图片保存
+        working-directory: sidecar
+        run: go test ./...
+
+      - name: 检查版本标签
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw "版本标签与 package.json 不一致" }
+
       - name: 构建（sidecar + 渲染层 + 版本标记校验 + electron-builder）
         run: node scripts/run-electron-builder.cjs
         env:
           OUTPUT_DIR: release-ci
+
+      - name: 验证实际 Markdown 编辑器
+        run: pnpm test:markdown:ui
+
+      - name: 保存编辑器失败截图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: markdown-smoke-diagnostics
+          path: |
+            tmp/markdown-smoke-*/result.json
+            tmp/markdown-smoke-*/failure.png
+          if-no-files-found: ignore
 
       - name: 确定发布标签
         id: tag

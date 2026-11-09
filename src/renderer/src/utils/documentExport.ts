@@ -188,14 +188,56 @@ function pagedHtml(title: string): string {
 
 let exporting = false
 
-export type DocumentExportKind = 'pdf' | 'word' | 'image'
+function blobDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(new Error('导出资源读取失败'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** Local assets must survive closing Timber or moving the exported HTML to another machine. */
+export async function portableDocumentHtml(body: string, title: string, projectId: string): Promise<string> {
+  const template = document.createElement('template')
+  template.innerHTML = body
+  const base = await rawBaseFor(projectId)
+  await Promise.all([...template.content.querySelectorAll('img')].map(async (image) => {
+    const src = image.getAttribute('src') ?? ''
+    if (!src.startsWith(base + '/raw/')) return
+    const response = await fetch(src)
+    if (!response.ok) throw new Error('本地图片读取失败，请确认图片仍存在')
+    image.src = await blobDataUrl(await response.blob())
+    image.removeAttribute('data-an-orig-src')
+    image.removeAttribute('data-an-display-src')
+  }))
+  let mathCss = ''
+  if (template.content.querySelector('.katex')) {
+    const stylesheetUrl = new URL('vditor-libs/dist/js/katex/katex.min.css', document.baseURI)
+    const response = await fetch(stylesheetUrl)
+    if (!response.ok) throw new Error('公式样式读取失败')
+    mathCss = await response.text()
+    const resources = [...new Set([...mathCss.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1]))]
+    await Promise.all(resources.map(async (resource) => {
+      const url = new URL(resource.replace(/["']/g, ''), stylesheetUrl)
+      const font = await fetch(url)
+      if (!font.ok) throw new Error('公式字体读取失败')
+      mathCss = mathCss.split(`url(${resource})`).join(`url("${await blobDataUrl(await font.blob())}")`)
+    }))
+  }
+  // No application scripts, editor controls, token-bearing URLs or live diagram dependencies.
+  template.content.querySelectorAll('script, .vditor-copy, .vditor-anchor').forEach((element) => element.remove())
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${mathCss}\n.export-document{max-width:960px;margin:0 auto;padding:36px clamp(16px,5vw,60px)}pre{overflow-x:auto!important}table{max-width:100%}</style></head><body><main class="export-document">${template.innerHTML}</main></body></html>`
+}
+
+export type DocumentExportKind = 'pdf' | 'word' | 'image' | 'html'
 
 export async function exportActiveDocument(kind: DocumentExportKind): Promise<void> {
   const state = useStore.getState()
   const doc = state.activeDoc
   const projectId = state.activeProjectId
   const bridge = window.timber
-  const label = kind === 'pdf' ? 'PDF' : kind === 'word' ? 'Word' : '长图'
+  const label = kind === 'pdf' ? 'PDF' : kind === 'word' ? 'Word' : kind === 'html' ? 'HTML' : '长图'
   if (!doc || !projectId) return
   if (!bridge) {
     state.toast('info', `纯 Web 预览模式不支持导出${label}`)
@@ -205,7 +247,7 @@ export async function exportActiveDocument(kind: DocumentExportKind): Promise<vo
   exporting = true
   try {
     const name = (doc.path.split('/').pop() ?? 'document').replace(/\.(md|markdown|mdown|mkd)$/i, '')
-    const extension = kind === 'pdf' ? '.pdf' : kind === 'word' ? '.docx' : '.png'
+    const extension = kind === 'pdf' ? '.pdf' : kind === 'word' ? '.docx' : kind === 'html' ? '.html' : '.png'
     const path = await askPath('save', `${name}${extension}`, extension)
     if (!path) return
     const overwrite = await bridge.pathExists(path)
@@ -213,7 +255,9 @@ export async function exportActiveDocument(kind: DocumentExportKind): Promise<vo
     const body = await renderMarkdownForExport(state.draft, doc.path, projectId)
     await waitForHtmlImages(body)
     if (kind === 'pdf') await ensurePagedPreview()
-    const result = kind === 'pdf'
+    const result = kind === 'html'
+      ? await bridge.exportHtml({ html: await portableDocumentHtml(body, name, projectId), path, overwrite })
+      : kind === 'pdf'
       ? await bridge.exportPdf({ html: pagedHtml(name), path, overwrite })
       : kind === 'image'
         ? await bridge.exportImage({ html: continuousHtml(body, name), path, overwrite })

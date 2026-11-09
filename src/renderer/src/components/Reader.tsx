@@ -13,6 +13,8 @@ import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRa
 import { rawBaseFor, origProjectId } from '../store'
 import { exportActiveDocument, type DocumentExportKind } from '../utils/documentExport'
 import { IconAnnotation, IconExport } from './icons'
+import { InlineFormatButtons, MarkdownWritingToolbar, WritingStatus } from './WritingTools'
+import { useWritingExperience } from '../utils/useWritingExperience'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
 
@@ -68,6 +70,7 @@ export default function Reader() {
   const [pop, setPop] = useState<{ x: number; y: number; below?: boolean } | null>(null)
   const [rawBase, setRawBase] = useState('')
   const [findOpen, setFindOpen] = useState(false)
+  const [findReplace, setFindReplace] = useState(false)
   const [paged, setPaged] = useState(false)
   const [pagedEdit, setPagedEdit] = useState(false)
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
@@ -95,9 +98,10 @@ export default function Reader() {
   // Ctrl+F 查找渲染正文；高亮使用 Range，不修改编辑器 DOM。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-        if (useStore.getState().mode === 'source') return
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && ['f', 'h'].includes(e.key.toLowerCase())) {
+        if (!useStore.getState().activeDoc || document.querySelector('.paged-preview')) return
         e.preventDefault()
+        setFindReplace(e.key.toLowerCase() === 'h')
         setFindOpen(true)
       }
     }
@@ -107,7 +111,7 @@ export default function Reader() {
 
   // 切换模式/文档时清理选区气泡和临时高亮。
   useEffect(() => {
-    if (mode === 'source') setFindOpen(false)
+    setFindOpen(false)
     setPop(null)
     setTextHighlight('search-hit', [])
   }, [mode, activeTabId])
@@ -136,6 +140,7 @@ export default function Reader() {
   const isExcel = activeDoc && ['xlsx', 'xls'].includes(activeDoc.ext)
   const isMd = activeDoc && ['md', 'markdown', 'mdown', 'mkd'].includes(activeDoc.ext)
   const isHtml = activeDoc && ['html', 'htm'].includes(activeDoc.ext)
+  const writingClass = useWritingExperience(!!isMd, paged)
 
   // HTML、图片与 Excel 经 sidecar /raw 以真实 URL 加载（远程项目走远端 base）
   const rawUrl =
@@ -287,14 +292,14 @@ export default function Reader() {
   // 面包屑分段（VSCode 风格：目录 › 目录 › 文件）
   const crumbs = activeDoc.path.split('/')
   const hasModeTools = isMd || activeDoc.ext === 'txt' || isHtml
-  const exportItems: MenuItem[] = (['pdf', 'word', 'image'] as DocumentExportKind[]).map((kind) => ({
+  const exportItems: MenuItem[] = (['pdf', 'word', 'image', 'html'] as DocumentExportKind[]).map((kind) => ({
     key: kind,
-    label: kind === 'pdf' ? '导出 PDF（按分页预览）' : kind === 'word' ? '导出 Word (.docx)' : '导出长图 (.png)',
+    label: kind === 'pdf' ? '导出 PDF（按分页预览）' : kind === 'word' ? '导出 Word (.docx)' : kind === 'html' ? '导出 HTML（含本地图片）' : '导出长图 (.png)',
     onClick: () => void exportActiveDocument(kind)
   }))
 
   return (
-    <div className="reader resource-reader">
+    <div className={`reader resource-reader ${writingClass}`}>
       <TabsBar>
         {hasModeTools && (
           <div className="rt-tool-group">
@@ -335,7 +340,7 @@ export default function Reader() {
           <div className="rt-tool-group">
             <button
               className="rt-btn"
-              title="导出 PDF / Word / 长图"
+              title="导出 PDF / Word / 长图 / HTML"
               aria-label="导出文档"
               aria-expanded={!!exportMenu}
               onClick={(e) => {
@@ -379,7 +384,8 @@ export default function Reader() {
         ))}
       </div>
 
-      {findOpen && <FindBar onClose={() => setFindOpen(false)} />}
+      {isMd && !paged && <MarkdownWritingToolbar />}
+      {findOpen && <FindBar replace={findReplace} onClose={() => setFindOpen(false)} />}
 
       <div className={`document-workspace ${!paged && (activeDoc.ext === 'md' || mode === 'source') ? 'with-outline' : ''}`}>
       {!paged && <DocumentOutline />}
@@ -459,14 +465,13 @@ export default function Reader() {
         )}
 
         {!paged && pop && (mode === 'read' ? isMd : isMd || activeDoc.ext === 'txt' || isHtml) && (
-          <button
+          <div
             className={`ann-pop ${pop.below ? 'below' : ''}`}
             style={{ left: pop.x, top: pop.y }}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={startCompose}
           >
-            🏷 添加标签
-          </button>
+            {isMd && <InlineFormatButtons />}
+            <button onMouseDown={(e) => e.preventDefault()} onClick={startCompose}>🏷 添加标签</button>
+          </div>
         )}
       </div>
       <div
@@ -479,6 +484,7 @@ export default function Reader() {
         />
       </div>
       </div>
+      {isMd && !paged && <WritingStatus />}
       {exportMenu && (
         <ContextMenu x={exportMenu.x} y={exportMenu.y} items={exportItems} onClose={() => setExportMenu(null)} />
       )}

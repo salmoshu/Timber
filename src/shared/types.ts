@@ -422,6 +422,8 @@ export interface TimberBridge {
   exportImage(payload: { html: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; error?: string }>
   /** 导出二进制文档（DOCX 等）：data 为 base64 */
   exportBinary(payload: { data: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; error?: string }>
+  /** 导出独立 HTML，包含样式、本地图片和静态图表。 */
+  exportHtml(payload: { html: string; path: string; overwrite: boolean }): Promise<{ ok: boolean; path?: string; error?: string }>
   /** 标签快捷键（主进程拦截 Ctrl+W / Ctrl+Tab 后转发） */
   onTabShortcut(cb: (kind: 'close' | 'next') => void): () => void
   /** sidecar 自动重启后新 base/token（更新渲染层缓存） */

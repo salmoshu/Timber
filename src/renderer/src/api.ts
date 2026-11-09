@@ -22,6 +22,39 @@ export async function apiInfo(): Promise<ApiInfo> {
 
 export interface ApiOpts {
   signal?: AbortSignal
+  /** NDJSON 过程事件；最终结果仍由 apiWith 的返回值交付 */
+  onEvent?: (event: Record<string, unknown>) => void
+}
+
+async function readNdjson<T>(response: Response, onEvent: ApiOpts['onEvent']): Promise<T> {
+  if (!response.body) throw new Error('AI 服务未返回过程流')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: T | undefined
+  let hasResult = false
+  const consume = (line: string): void => {
+    const text = line.trim()
+    if (!text) return
+    const event = JSON.parse(text) as Record<string, unknown>
+    if (event.event === 'result') {
+      result = event.result as T
+      hasResult = true
+    } else {
+      onEvent?.(event)
+    }
+  }
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    lines.forEach(consume)
+    if (done) break
+  }
+  consume(buffer)
+  if (!hasResult) throw new Error('AI 服务连接中断，请重试')
+  return result as T
 }
 
 export async function apiWith<T = unknown>(
@@ -49,11 +82,14 @@ export async function apiWith<T = unknown>(
     }
     throw e
   }
-  const data = (await r.json().catch(() => ({}))) as T & { error?: string }
   if (!r.ok) {
+    const data = (await r.json().catch(() => ({}))) as { error?: string }
     throw new Error(data.error ?? `HTTP ${r.status}`)
   }
-  return data
+  if (opts?.onEvent && (r.headers.get('content-type') ?? '').includes('application/x-ndjson')) {
+    return readNdjson<T>(r, opts.onEvent)
+  }
+  return (await r.json().catch(() => ({}))) as T
 }
 
 export async function api<T = unknown>(
@@ -190,6 +226,14 @@ export async function entireSearch(
 
 // ---- AI 架构图（sidecar 生成 archify spec；优先 OpenAI 兼容接口，回退本机 agent CLI） ----
 
+export interface AiArchProgress {
+  stage: string
+  status?: 'running' | 'done' | 'error'
+  label: string
+  detail?: string
+  toolId?: string
+}
+
 /** AI 架构生成结果；ok:false 时 error 分层：no-cli / exec / timeout / parse / api */
 export interface AiArchResult {
   ok: boolean
@@ -213,13 +257,31 @@ export async function archAiGenerate(
   prompt: string,
   signal: AbortSignal,
   call: ApiCall = api,
-  options?: { action: 'edit' | 'ask'; context: import('./components/ArchAiPanel').ArchAiContext; ai?: import('./utils/settings').AiSettings }
+  options?: {
+    action: 'edit' | 'ask'
+    context: import('./components/ArchAiPanel').ArchAiContext
+    ai?: import('./utils/settings').AiSettings
+    onProgress?: (event: AiArchProgress) => void
+  }
 ): Promise<AiArchResult> {
   return call<AiArchResult>(
     'POST',
     `/api/projects/${id}/ai/arch`,
-    { prompt, action: options?.action, context: options?.context, ref: options?.context.ref, ai: options?.ai },
-    { signal }
+    { prompt, action: options?.action, context: options?.context, ref: options?.context.ref, ai: options?.ai, stream: true },
+    {
+      signal,
+      onEvent: (event) => {
+        if (event.event !== 'progress' || typeof event.label !== 'string') return
+        const status = event.status === 'running' || event.status === 'done' || event.status === 'error' ? event.status : undefined
+        options?.onProgress?.({
+          stage: typeof event.stage === 'string' ? event.stage : 'agent',
+          status,
+          label: event.label,
+          detail: typeof event.detail === 'string' ? event.detail : undefined,
+          toolId: typeof event.toolId === 'string' ? event.toolId : undefined
+        })
+      }
+    }
   )
 }
 

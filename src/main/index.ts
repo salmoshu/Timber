@@ -304,6 +304,16 @@ ipcMain.handle('export:binary', async (_e, payload: { data: string; path: string
   }
 })
 
+ipcMain.handle('export:html', async (_e, payload: { html: string; path: string; overwrite: boolean }) => {
+  try {
+    if (!isAbsolute(payload.path) || !/\.html?$/i.test(payload.path)) throw new Error('无效的 HTML 保存路径')
+    writeFileSync(payload.path, payload.html, { encoding: 'utf8', flag: payload.overwrite ? 'w' : 'wx' })
+    return { ok: true, path: payload.path }
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) }
+  }
+})
+
 // 版本更新：偏好由渲染端持久化并在初始化时传入，状态经 'update-status-changed' 推送
 ipcMain.handle('update-check', () => updateService.checkForUpdates())
 ipcMain.handle('update-download', () => updateService.downloadUpdate())

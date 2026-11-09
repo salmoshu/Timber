@@ -14,6 +14,9 @@ import { applyImageMetas, effectiveAlign, imageKey, mermaidKey, saveImageMeta, t
 import { styleMermaidSvgs } from '../utils/mermaid'
 import { collectText, findAnnotationRange, setTextHighlight } from '../utils/textRanges'
 import ContextMenu, { type MenuItem } from './ContextMenu'
+import { formatMarkdown } from '../utils/markdownEditing'
+import { formattingShortcut, MARKDOWN_COMMAND_EVENT, type MarkdownCommandRequest } from '../utils/markdownCommands'
+import { clipboardImageFiles, saveMarkdownImages } from '../utils/markdownImages'
 
 interface Props {
   annotations: Annotation[]
@@ -681,6 +684,103 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     let unsubscribe: (() => void) | undefined
     let annotationRanges: { annotation: Annotation; range: Range }[] = []
     let popObserver: MutationObserver | undefined
+    let savedEditorRange: Range | null = null
+
+    const rememberEditorSelection = (): void => {
+      const selection = window.getSelection()
+      const prose = container.querySelector<HTMLElement>('.prose')
+      if (selection?.rangeCount && prose?.contains(selection.anchorNode) && prose.contains(selection.focusNode)) savedEditorRange = selection.getRangeAt(0).cloneRange()
+    }
+    const restoreEditorSelection = (): HTMLElement | null => {
+      const prose = container.querySelector<HTMLElement>('.prose')
+      if (!prose) return null
+      prose.focus({ preventScroll: true })
+      const range = savedEditorRange && prose.contains(savedEditorRange.commonAncestorContainer) ? savedEditorRange : document.createRange()
+      if (range !== savedEditorRange) { range.selectNodeContents(prose); range.collapse(false) }
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      return prose
+    }
+    const executeMarkdownCommand = (request: MarkdownCommandRequest): void => {
+      if (!ready || !editor || disposed) return
+      const prose = restoreEditorSelection()
+      if (!prose) return
+      const native = container.querySelector<HTMLElement>(`.vditor-toolbar [data-type="${request.command}"]`)
+      if (request.markdown !== undefined) editor.insertMD(request.markdown)
+      else if (request.command === 'paragraph' || /^h[1-6]$/.test(request.command)) {
+        document.execCommand('formatBlock', false, request.command === 'paragraph' ? 'p' : request.command)
+        prose.dispatchEvent(new InputEvent('input', { inputType: 'formatBlock', bubbles: true }))
+      } else if (native && !request.table && request.command !== 'table') native.click()
+      else if (request.command === 'frontmatter') {
+        const value = editor.getValue()
+        const change = formatMarkdown(value, 0, 0, 'frontmatter')
+        editor.setValue(change.text + value.slice(change.end))
+      } else {
+        const selected = editor.getSelection()
+        editor.insertMD(formatMarkdown(selected, 0, selected.length, request.command, request.table).text)
+      }
+      rememberEditorSelection()
+      syncDraft()
+      scheduleRefresh()
+    }
+    const onMarkdownCommand = (event: Event): void => executeMarkdownCommand((event as CustomEvent<MarkdownCommandRequest>).detail)
+    const insertImageFiles = async (files: File[]): Promise<void> => {
+      if (!ready || disposed) return
+      rememberEditorSelection()
+      const insertion = savedEditorRange?.cloneRange()
+      try {
+        const markdown = await saveMarkdownImages(files, projectId, docPath)
+        if (disposed) return
+        const prose = container.querySelector<HTMLElement>('.prose')
+        if (insertion && prose?.contains(insertion.commonAncestorContainer)) savedEditorRange = insertion
+        else if (insertion) { useStore.getState().toast('info', '图片已保存到 assets 目录；编辑位置已变化，请从目录插入'); return }
+        executeMarkdownCommand({ command: 'image', markdown })
+      } catch (error) {
+        if (!disposed) useStore.getState().toast('err', `图片插入失败：${error instanceof Error ? error.message : error}`)
+      }
+    }
+    const onInsertImages = (event: Event): void => { void insertImageFiles((event as CustomEvent<File[]>).detail) }
+    const onImagePaste = (event: ClipboardEvent): void => {
+      const files = clipboardImageFiles(event.clipboardData)
+      if (!files.length) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      void insertImageFiles(files)
+    }
+    const onImageDrop = (event: DragEvent): void => {
+      const files = Array.from(event.dataTransfer?.files ?? []).filter((file) => file.type.startsWith('image/'))
+      if (!files.length) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      const range = document.caretRangeFromPoint(event.clientX, event.clientY)
+      if (range && container.querySelector('.prose')?.contains(range.commonAncestorContainer)) {
+        window.getSelection()?.removeAllRanges()
+        window.getSelection()?.addRange(range)
+      }
+      void insertImageFiles(files)
+    }
+    const onWritingKeydown = (event: KeyboardEvent): void => {
+      if (event.isComposing || !ready || !editor) return
+      const command = formattingShortcut(event)
+      if (command) { event.preventDefault(); event.stopImmediatePropagation(); rememberEditorSelection(); executeMarkdownCommand({ command }); return }
+      if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return
+      const selection = window.getSelection()
+      const element = selection?.anchorNode?.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : selection?.anchorNode as Element | null
+      const paragraph = element?.closest('p')
+      if (selection?.isCollapsed && paragraph && container.contains(paragraph) && !(paragraph.textContent ?? '').replace(/\u200b/g, '').trim() && !paragraph.closest('li, td, th, pre[data-type="code-block"]')) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        rememberEditorSelection()
+        window.dispatchEvent(new Event('timber:open-insert'))
+      }
+    }
+    document.addEventListener('selectionchange', rememberEditorSelection)
+    window.addEventListener(MARKDOWN_COMMAND_EVENT, onMarkdownCommand)
+    window.addEventListener('timber:insert-images', onInsertImages)
+    container.addEventListener('paste', onImagePaste, true)
+    container.addEventListener('drop', onImageDrop, true)
+    container.addEventListener('keydown', onWritingKeydown, true)
 
     /** 块悬浮工具栏定位：
      *  - 纯按钮弹层（段落等，上移/下移/删除）：移到行左侧留白区，并与块垂直居中；
@@ -1459,6 +1559,12 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         value: useStore.getState().draft,
         height: 'auto',
         cache: { enable: false },
+        hint: { emoji: {
+          smile: '😄', laughing: '😆', blush: '😊', heart: '❤️', '+1': '👍', '-1': '👎',
+          tada: '🎉', rocket: '🚀', eyes: '👀', thinking: '🤔', warning: '⚠️', bulb: '💡',
+          white_check_mark: '✅', x: '❌', fire: '🔥', star: '⭐', sparkles: '✨', memo: '📝',
+          bug: '🐛', hammer: '🔨', question: '❓', lock: '🔒', coffee: '☕', wave: '👋'
+        } },
         toolbar: [
           'headings', 'bold', 'italic', 'strike', 'quote', '|',
           'list', 'ordered-list', 'check', 'code', 'inline-code', '|',
@@ -1466,7 +1572,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         ],
         toolbarConfig: { pin: true },
         link: { isOpen: false },
-        upload: { handler: () => '暂不支持粘贴图片：请先把图片放入项目目录，再引用相对路径' },
+        upload: { handler: () => '支持粘贴或拖入 PNG、JPEG、GIF、WebP 图片（每张不超过 8 MB）' },
         preview: {
           theme: { current: '' },
           hljs: { enable: false },
@@ -1561,6 +1667,12 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     return () => {
       syncDraft()
       disposed = true
+      document.removeEventListener('selectionchange', rememberEditorSelection)
+      window.removeEventListener(MARKDOWN_COMMAND_EVENT, onMarkdownCommand)
+      window.removeEventListener('timber:insert-images', onInsertImages)
+      container.removeEventListener('paste', onImagePaste, true)
+      container.removeEventListener('drop', onImageDrop, true)
+      container.removeEventListener('keydown', onWritingKeydown, true)
       refreshRef.current = null
       // 切换文档/标签时关掉可能开着的图片/Mermaid 浮层
       setLightbox(null)

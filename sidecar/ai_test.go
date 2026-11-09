@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -43,5 +48,89 @@ func TestInvalidArchitectureCannotReplaceCurrentDiagram(t *testing.T) {
 		if _, err := extractSpec(input); err == nil {
 			t.Errorf("accepted invalid replacement: %s", input)
 		}
+	}
+}
+
+func TestAiHttpErrorMessageExtractsProviderDetail(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "error object", raw: `{"error":{"message":"API key 已过期","type":"auth_error"}}`, want: "API key 已过期"},
+		{name: "error string", raw: `{"error":"模型不存在"}`, want: "模型不存在"},
+		{name: "top-level message", raw: `{"message":"请求频率过高"}`, want: "请求频率过高"},
+		{name: "plain response", raw: `<html>Bad Gateway</html>`, want: `<html>Bad Gateway</html>`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := aiHttpErrorMessage([]byte(tc.raw)); got != tc.want {
+				t.Fatalf("unexpected message: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunAiHttpReportsStatusAndRedactsKey(t *testing.T) {
+	const secret = "test-secret-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"密钥 ` + secret + ` 已失效"}}`))
+	}))
+	defer server.Close()
+	_, err := runAiHttp(context.Background(), aiConfig{BaseURL: server.URL, APIKey: secret, Model: "test-model"}, "test")
+	if err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "HTTP 401") || !strings.Contains(message, "密钥 [已隐藏] 已失效") {
+		t.Fatalf("missing actionable detail: %q", message)
+	}
+	if strings.Contains(message, secret) {
+		t.Fatalf("API key leaked in error: %q", message)
+	}
+}
+
+func TestDetectAiCliFindsUserLevelInstallations(t *testing.T) {
+	cases := []struct {
+		name     string
+		cliName  string
+		relative []string
+	}{
+		{name: "Kimi official directory", cliName: "kimi", relative: []string{".kimi-code", "bin", "kimi"}},
+		{name: "Codex user bin", cliName: "codex", relative: []string{".local", "bin", "codex"}},
+		{name: "Codex under nvm", cliName: "codex", relative: []string{".nvm", "versions", "node", "v24.18.1", "bin", "codex"}},
+		{name: "Kimi under mise", cliName: "kimi", relative: []string{".local", "share", "mise", "shims", "kimi"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(append([]string{home}, tc.relative...)...)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			notInPath := func(string) (string, error) { return "", os.ErrNotExist }
+			cli := detectAiCliAt(home, notInPath)
+			if cli == nil || cli.name != tc.cliName || cli.path != path {
+				t.Fatalf("detection failed: got %#v, want %s at %s", cli, tc.cliName, path)
+			}
+		})
+	}
+}
+
+func TestWithAiCliPathPrependsRuntimeDirectory(t *testing.T) {
+	dir := filepath.Join("home", "user", ".local", "bin")
+	env := withAiCliPath([]string{"HOME=/home/user", "Path=/usr/bin"}, dir)
+	wantPath := "Path=" + dir + string(os.PathListSeparator) + "/usr/bin"
+	if env[1] != wantPath || env[0] != "HOME=/home/user" {
+		t.Fatalf("unexpected environment: %#v", env)
+	}
+	env = withAiCliPath([]string{"HOME=/home/user"}, dir)
+	if len(env) != 2 || env[1] != "PATH="+dir {
+		t.Fatalf("missing PATH fallback: %#v", env)
 	}
 }

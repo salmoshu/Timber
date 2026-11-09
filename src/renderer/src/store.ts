@@ -387,6 +387,8 @@ interface State {
   toasts: Toast[]
   settings: AppSettings
   settingsOpen: boolean
+  /** 打开设置时指定初始分区；AI 错误卡片可直达配置页 */
+  settingsSection: 'ai' | null
   extPageUrl: string | null
   /** 搜索结果点击后待定位：打开文档后滚到首个命中处 */
   pendingLocate: { path: string; keyword: string } | null
@@ -440,7 +442,7 @@ interface State {
   setAnnPanelWidth(w: number): void
 
   setSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): void
-  openSettings(): void
+  openSettings(section?: 'ai'): void
   closeSettings(): void
   openAddProject(): void
   closeAddProject(): void
@@ -594,6 +596,7 @@ export const useStore = create<State>((set, get) => ({
   toasts: [],
   settings: loadSettings(),
   settingsOpen: false,
+  settingsSection: null,
   extPageUrl: null,
   pendingLocate: null,
   ...loadLayout(),
@@ -753,12 +756,12 @@ export const useStore = create<State>((set, get) => ({
     applyAppearance(next)
   },
 
-  openSettings() {
-    set({ settingsOpen: true })
+  openSettings(section) {
+    set({ settingsOpen: true, settingsSection: section ?? null })
   },
 
   closeSettings() {
-    set({ settingsOpen: false })
+    set({ settingsOpen: false, settingsSection: null })
   },
 
   openAddProject() {
