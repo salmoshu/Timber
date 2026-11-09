@@ -4,18 +4,23 @@ import { DOC_FORMAT_GROUPS } from '@shared/types'
 import { useStore } from '../store'
 import { aiTest } from '../api'
 import { loadUpdaterPrefs, saveUpdaterPrefs } from '../utils/updater-prefs'
+import { THEME_PALETTES, type ThemeId } from '../utils/settings'
+import TypographySettings from './TypographySettings'
+import EditorSettings from './EditorSettings'
 
-type Section = 'appearance' | 'reading' | 'editor' | 'ai' | 'version'
+type Section = 'appearance' | 'typography' | 'reading' | 'editor' | 'ai' | 'version'
 
 const SECTIONS: Array<{ key: Section; icon: Section; label: string }> = [
   { key: 'appearance', icon: 'appearance', label: '外观' },
+  { key: 'typography', icon: 'typography', label: '字体与排版' },
   { key: 'reading', icon: 'reading', label: '阅读与标注' },
-  { key: 'editor', icon: 'editor', label: '编辑' },
+  { key: 'editor', icon: 'editor', label: '编辑器' },
   { key: 'ai', icon: 'ai', label: 'AI' },
   { key: 'version', icon: 'version', label: '版本' }
 ]
 
 function SettingsIcon({ section }: { section: Section }) {
+  if (section === 'typography') return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m3 19 6-14 6 14M5.5 13h7M16 10h6m-3 0v9" /></svg>
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {section === 'appearance' ? <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></> : section === 'reading' ? <><path d="M12 5v15M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z" /></> : section === 'editor' ? <><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z" /></> : section === 'ai' ? <><path d="M12 3l1.8 4.9L18.7 9.7l-4.9 1.8L12 16.4l-1.8-4.9L5.3 9.7l4.9-1.8L12 3Z" /><path d="M18.5 14.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2Z" /></> : <><path d="M20 7a9 9 0 1 0 1 9M20 3v5h-5" /></>}
   </svg>
@@ -169,6 +174,7 @@ export default function SettingsView() {
         {SECTIONS.map((s) => (
           <button
             key={s.key}
+            data-section={s.key}
             className={`st-item ${section === s.key ? 'active' : ''}`}
             onClick={() => setSection(s.key)}
           >
@@ -185,44 +191,16 @@ export default function SettingsView() {
 
             <div className="st-row">
               <div className="st-label">主题</div>
-              <div className="seg">
-                <button className={settings.theme === 'system' ? 'active' : ''} onClick={() => setSetting('theme', 'system')} title="跟随系统深浅色自动切换">
-                  系统
-                </button>
-                <button className={settings.theme === 'light' ? 'active' : ''} onClick={() => setSetting('theme', 'light')}>
-                  浅色
-                </button>
-                <button className={settings.theme === 'dark' ? 'active' : ''} onClick={() => setSetting('theme', 'dark')}>
-                  深色
-                </button>
-              </div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">正文字号</div>
-              <div className="st-control">
-                <input
-                  type="range"
-                  min={13}
-                  max={18}
-                  step={1}
-                  value={settings.fontSize}
-                  onChange={(e) => setSetting('fontSize', Number(e.target.value))}
-                />
-                <span className="st-value">{settings.fontSize}px</span>
-              </div>
-              <div className="st-hint">作用于 Markdown 阅读区正文</div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">正文字体</div>
-              <div className="seg">
-                <button className={!settings.serifFont ? 'active' : ''} onClick={() => setSetting('serifFont', false)}>
-                  无衬线
-                </button>
-                <button className={settings.serifFont ? 'active' : ''} onClick={() => setSetting('serifFont', true)}>
-                  衬线
-                </button>
+              <div className="theme-picker" role="group" aria-label="应用主题">
+                <button className={`theme-option ${settings.theme === 'system' ? 'active' : ''}`} onClick={() => setSetting('theme', 'system')} aria-pressed={settings.theme === 'system'}>跟随系统</button>
+                {([false, true] as const).map((dark) => <div className="theme-category" key={String(dark)}>
+                  <span className="theme-category-label">{dark ? '深色' : '浅色'}</span>
+                  <div className="theme-options">{(Object.entries(THEME_PALETTES) as [ThemeId, typeof THEME_PALETTES[ThemeId]][]).filter(([, palette]) => palette.dark === dark).map(([id, palette]) =>
+                    <button key={id} className={`theme-option ${settings.theme === id ? 'active' : ''}`} onClick={() => setSetting('theme', id)} aria-pressed={settings.theme === id}>
+                      <span className="theme-swatch" aria-hidden="true" style={{ background: palette.background, color: palette.text, borderColor: palette.accent }}>Aa<span style={{ background: palette.accent }} /></span>{palette.label}
+                    </button>
+                  )}</div>
+                </div>)}
               </div>
             </div>
 
@@ -246,6 +224,8 @@ export default function SettingsView() {
           </div>
         )}
 
+        {section === 'typography' && <TypographySettings />}
+
         {section === 'reading' && (
           <div className="st-card">
             <div className="st-card-title">阅读与标注</div>
@@ -265,27 +245,7 @@ export default function SettingsView() {
           </div>
         )}
 
-        {section === 'editor' && (
-          <div className="st-card">
-            <div className="st-card-title">编辑</div>
-
-            <div className="st-row">
-              <div className="st-label">自动保存</div>
-              <div className="st-hint">始终开启，停止输入后自动落盘；Ctrl+S 仍可立即保存</div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">自动保存延迟</div>
-              <div className="seg">
-                {[1000, 2000, 3000].map((ms) => (
-                  <button key={ms} className={settings.autoSaveDelayMs === ms ? 'active' : ''} onClick={() => setSetting('autoSaveDelayMs', ms)}>
-                    {ms / 1000}s
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        {section === 'editor' && <EditorSettings />}
 
         {section === 'ai' && (
           <div className="st-card">

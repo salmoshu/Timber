@@ -133,6 +133,10 @@ export function pruneRecentFiles(projectId: string, from: string): void {
   writeJSON(RECENT_PREFIX + projectId, recentFiles(projectId).filter((p) => !under(p)))
 }
 
+export function removeRecentFile(projectId: string, path: string): void {
+  writeJSON(RECENT_PREFIX + projectId, recentFiles(projectId).filter((p) => p !== path))
+}
+
 export function clearRecentFiles(projectId: string): void {
   localStorage.removeItem(RECENT_PREFIX + projectId)
 }

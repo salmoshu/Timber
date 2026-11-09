@@ -32,12 +32,13 @@ jobs:
           go-version: '1.23'
 
       - name: 安装依赖
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org
 
-      - name: 检查类型与 Markdown 编辑行为
+      - name: 检查类型、Markdown 编辑与字体设置
         run: |
           pnpm typecheck
           pnpm test:markdown
+          pnpm test:fonts
 
       - name: 检查后台服务与图片保存
         working-directory: sidecar
@@ -58,6 +59,9 @@ jobs:
       - name: 验证实际 Markdown 编辑器
         run: pnpm test:markdown:ui
 
+      - name: 验证文件打开、主界面和单文件模式
+        run: pnpm test:app:ui
+
       - name: 保存编辑器失败截图
         if: failure()
         uses: actions/upload-artifact@v4
@@ -66,6 +70,8 @@ jobs:
           path: |
             tmp/markdown-smoke-*/result.json
             tmp/markdown-smoke-*/failure.png
+            tmp/app-smoke-*/result.json
+            tmp/app-smoke-*/failure.png
           if-no-files-found: ignore
 
       - name: 确定发布标签

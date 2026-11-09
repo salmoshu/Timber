@@ -2,6 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { ApiInfo, TimberBridge, UpdateStatusEvent } from '@shared/types'
 
 const bridge: TimberBridge = {
+  listFontFamilies: (refresh) => ipcRenderer.invoke('fonts:list', refresh === true),
+  takePendingFiles: () => ipcRenderer.invoke('files:take-pending'),
+  onPendingFiles: (cb) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('files:pending', listener)
+    return () => ipcRenderer.removeListener('files:pending', listener)
+  },
   getApiInfo: () => ipcRenderer.invoke('api:info'),
   browseLocal: (path) => ipcRenderer.invoke('files:browse', path),
   pathExists: (path) => ipcRenderer.invoke('files:exists', path),

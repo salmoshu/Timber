@@ -3,7 +3,7 @@ import type { Muya } from '../../index';
 import type { Token } from '../../inline/model/types';
 import type { TSelection, TSelectionState } from '../../selection/types';
 import type { ColorFormatType, IColorStyle } from '../../utils/colorSpan';
-import type { IBaseOptions, IKeyboardShortcutOptions } from '../types';
+import type { IBaseOptions, IInlineAnnotationOptions, IKeyboardShortcutOptions } from '../types';
 
 import type { FormatToolIcon, IColorSection, IColorSwatch } from './config';
 import Format from '../../block/base/format';
@@ -76,7 +76,7 @@ export class InlineFormatToolbar extends BaseFloat {
     private _formats: Token[] = [];
 
     /** Toolbar configuration options */
-    declare public options: IBaseOptions & IKeyboardShortcutOptions;
+    declare public options: IBaseOptions & IKeyboardShortcutOptions & IInlineAnnotationOptions;
 
     /** Format tool icons configuration */
     private _icons: FormatToolIcon[] = icons;
@@ -85,7 +85,6 @@ export class InlineFormatToolbar extends BaseFloat {
     private _formatContainer: HTMLDivElement = document.createElement('div');
 
     private _dragging = false;
-
     private _searchSelection: TSelectionState | null = null;
 
     private _colorPanelCloseTimer: number | null = null;
@@ -95,7 +94,7 @@ export class InlineFormatToolbar extends BaseFloat {
      * @param muya - Muya editor instance
      * @param options - Toolbar options
      */
-    constructor(muya: Muya, options: Partial<IBaseOptions> & IKeyboardShortcutOptions = {}) {
+    constructor(muya: Muya, options: Partial<IBaseOptions> & IKeyboardShortcutOptions & IInlineAnnotationOptions = {}) {
         const name = 'mu-format-picker';
         const opts = Object.assign({}, defaultOptions, options);
         super(muya, name, opts);
@@ -171,15 +170,15 @@ export class InlineFormatToolbar extends BaseFloat {
         else if (!equalSelections(this._searchSelection, selection))
             this._searchSelection = null;
         const { anchorBlock, formats, isCollapsed, isSelectionInSameBlock, selectionCoords } = selection.context;
+        const canFormat = isSelectionInSameBlock && anchorBlock instanceof Format;
         // A result selected by Find is navigation rather than a formatting gesture.
         if (this._dragging || this.muya.editor.isComposing || this.muya.isReadOnly || this._hasExternalFocus()
             || this._searchSelection !== null
-            || isCollapsed || !isSelectionInSameBlock
-            || !(anchorBlock instanceof Format) || !selectionCoords) {
+            || isCollapsed || !canFormat || !selectionCoords) {
             this.hide();
             return;
         }
-        this._block = anchorBlock;
+        this._block = anchorBlock instanceof Format ? anchorBlock : null;
         this._formats = [...formats];
         const native = document.getSelection();
         const range = native?.rangeCount ? native.getRangeAt(0).cloneRange() : null;
@@ -275,6 +274,23 @@ export class InlineFormatToolbar extends BaseFloat {
                 ? this._createColorItem(icon, i18n)
                 : this._createIconItem(icon, formats, i18n),
         );
+        if (this.options.annotationAction) {
+            const label = this.options.annotationLabel || '批注';
+            children.push(h('li.item.annotation', [h('button.mu-annotation-button', {
+                attrs: { type: 'button', title: label, 'aria-label': label },
+                on: {
+                    mousedown: (event: Event) => this._keepSelection(event),
+                    click: (event: Event) => {
+                        this._keepSelection(event);
+                        this.options.annotationAction?.();
+                        this.hide();
+                    },
+                },
+            }, h('svg', { attrs: { width: '17', height: '17', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' } }, [
+                h('path', { attrs: { d: 'M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3z' } }),
+                h('path', { attrs: { d: 'M8 9h8m-8 4h5' } }),
+            ]))]));
+        }
         const vnode = h('ul', children);
 
         patch(oldVNode || formatContainer, vnode);

@@ -389,7 +389,7 @@ interface State {
   settings: AppSettings
   settingsOpen: boolean
   /** 打开设置时指定初始分区；AI 错误卡片可直达配置页 */
-  settingsSection: 'ai' | null
+  settingsSection: 'ai' | 'typography' | null
   extPageUrl: string | null
   /** 搜索结果点击后待定位：打开文档后滚到首个命中处 */
   pendingLocate: { path: string; keyword: string } | null
@@ -443,7 +443,7 @@ interface State {
   setAnnPanelWidth(w: number): void
 
   setSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): void
-  openSettings(section?: 'ai'): void
+  openSettings(section?: 'ai' | 'typography'): void
   closeSettings(): void
   openAddProject(): void
   closeAddProject(): void
@@ -464,6 +464,7 @@ interface State {
   init(): Promise<void>
   toast(kind: Toast['kind'], text: string): void
   importProject(path: string): Promise<void>
+  openFiles(paths: string[]): Promise<void>
   removeProject(id: string): Promise<void>
   selectProject(id: string): Promise<void>
   rescan(): Promise<void>
@@ -636,6 +637,8 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setView(v) {
+    const project = get().projects.find((item) => item.id === get().activeProjectId)
+    if (v !== 'resources' && (!project || project.kind === 'file')) return
     set({ view: v })
   },
 
@@ -923,7 +926,7 @@ export const useStore = create<State>((set, get) => ({
       const r = await api<{ projects: Project[] }>('GET', '/api/projects')
       const localProjects = r.projects ?? []
       // 远程连接不自动重连：重启后保持未连接占位，由用户点击 ⟳ 手动重连（zcode 式）
-      set({ localProjects, projects: mergeProjects(localProjects, get().remotes, []), ready: true })
+      set({ localProjects, projects: mergeProjects(localProjects, get().remotes, []) })
     } catch (err) {
       set({ fatalError: String(err), ready: true })
       return
@@ -933,6 +936,7 @@ export const useStore = create<State>((set, get) => ({
     try { lastProjectId = localStorage.getItem(ACTIVE_PROJECT_KEY) } catch { /* 忽略不可用存储 */ }
     const first = projects.find((project) => project.id === lastProjectId) ?? projects[0]
     if (first) await get().selectProject(first.id)
+    set({ ready: true })
   },
 
   toast(kind, text) {
@@ -953,6 +957,20 @@ export const useStore = create<State>((set, get) => ({
       void get().selectProject(p.id)
     } catch (err) {
       get().toast('err', `导入失败：${err}`)
+    }
+  },
+
+  async openFiles(paths) {
+    for (const path of paths) {
+      try {
+        const project = await api<Project>('POST', '/api/projects', { path })
+        const localProjects = [...get().localProjects.filter((item) => item.id !== project.id), project]
+        set({ localProjects, projects: mergeProjects(localProjects, get().remotes, get().projects), view: 'resources', settingsOpen: false })
+        await get().selectProject(project.id)
+        if (project.file) await get().openTab(project.file, { pinned: true })
+      } catch (error) {
+        get().toast('err', `打开文件失败：${error instanceof Error ? error.message : error}`)
+      }
     }
   },
 
@@ -1070,6 +1088,7 @@ export const useStore = create<State>((set, get) => ({
     try { localStorage.setItem(ACTIVE_PROJECT_KEY, id) } catch { /* 忽略不可用存储 */ }
     set({
       activeProjectId: id,
+      view: s.projects.find((project) => project.id === id)?.kind === 'file' ? 'resources' : s.view,
       tree: null,
       treeLoading: true,
       tabs: [],
@@ -1107,6 +1126,9 @@ export const useStore = create<State>((set, get) => ({
       set({ tabs: ws.tabs, activeTabId: ws.activeTabId })
       const target = ws.tabs.find((t) => t.id === ws.activeTabId) ?? ws.tabs[0]
       if (target) await loadTabInto(target, set, get)
+    } else {
+      const project = get().projects.find((item) => item.id === id)
+      if (project?.kind === 'file' && project.file) await get().openTab(project.file, { pinned: true })
     }
   },
 
@@ -1303,6 +1325,8 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setMode(m) {
+    // Flushing emits real edits through json-change; serializing an untouched editor can normalize trailing newlines.
+    flushMarkdownEditor()
     const s = get()
     const cur = s.tabs.find((t) => t.id === s.activeTabId)
     if (cur) set({ tabs: s.tabs.map((t) => (t.id === cur.id ? { ...t, mode: m } : t)) })

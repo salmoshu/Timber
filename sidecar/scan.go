@@ -21,6 +21,8 @@ type Project struct {
 	Path     string    `json:"path"`
 	AddedAt  time.Time `json:"addedAt"`
 	DocCount int       `json:"docCount"`
+	Kind     string    `json:"kind,omitempty"`
+	File     string    `json:"file,omitempty"`
 }
 
 // DocNode 文档树节点（目录或文档）。
@@ -137,14 +139,25 @@ func (r *registry) add(path string) (*Project, error) {
 		}
 	}
 	st, err := os.Stat(abs)
-	if err != nil || !st.IsDir() {
-		return nil, fmt.Errorf("目录不存在或不可读: %s", path)
+	if err != nil {
+		return nil, fmt.Errorf("路径不存在或不可读: %s", path)
+	}
+	abs = filepath.Clean(abs)
+	if !st.IsDir() {
+		ext := strings.ToLower(filepath.Ext(abs))
+		if !st.Mode().IsRegular() || (ext != ".md" && ext != ".markdown" && ext != ".mdown" && ext != ".mkd") {
+			return nil, fmt.Errorf("请选择项目文件夹或 Markdown 文件")
+		}
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, p := range r.Projects {
-		if strings.EqualFold(p.Path, abs) {
+		registeredPath := p.Path
+		if p.Kind == "file" {
+			registeredPath = filepath.Join(p.Path, p.File)
+		}
+		if strings.EqualFold(registeredPath, abs) {
 			return p, nil
 		}
 	}
@@ -155,7 +168,14 @@ func (r *registry) add(path string) (*Project, error) {
 		Path:    abs,
 		AddedAt: time.Now(),
 	}
-	p.DocCount = countDocs(abs)
+	if st.IsDir() {
+		p.DocCount = countDocs(abs)
+	} else {
+		p.Kind = "file"
+		p.File = filepath.Base(abs)
+		p.Path = filepath.Dir(abs)
+		p.DocCount = 1
+	}
 	r.Projects = append(r.Projects, p)
 	if err := r.saveLocked(); err != nil {
 		return nil, err

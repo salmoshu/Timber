@@ -5,8 +5,10 @@ import type { EditorSearchOptions, EditorSearchResult, MarkdownEditorRuntime } f
 
 export function applyCodeMirrorEdit(cm: CodeMirror.Editor, change: TextEdit): void {
   cm.focus()
-  cm.replaceRange(change.text, cm.posFromIndex(change.start), cm.posFromIndex(change.end))
-  cm.setSelection(cm.posFromIndex(change.selectionStart), cm.posFromIndex(change.selectionEnd))
+  cm.operation(() => {
+    cm.replaceRange(change.text, cm.posFromIndex(change.start), cm.posFromIndex(change.end), 'markdown-command')
+    cm.setSelection(cm.posFromIndex(change.selectionStart), cm.posFromIndex(change.selectionEnd))
+  })
 }
 
 export function applyCodeMirrorCommand(cm: CodeMirror.Editor, request: MarkdownCommandRequest): void {

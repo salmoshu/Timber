@@ -15,3 +15,9 @@ export interface IKeyboardShortcutOptions extends IShortcutHintOptions {
     /** Disable command shortcuts when the host owns keyboard dispatch; menu navigation remains enabled. */
     keyboardShortcuts?: boolean;
 }
+
+export interface IInlineAnnotationOptions {
+    /** Preserve the current editor selection and let the host create an annotation. */
+    annotationAction?: () => void;
+    annotationLabel?: string;
+}

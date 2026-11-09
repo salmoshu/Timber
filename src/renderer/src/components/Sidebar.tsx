@@ -8,7 +8,7 @@ import GitPanel from './GitPanel'
 import { HistoryList } from './HistoryView'
 import { exportActiveDocument } from '../utils/documentExport'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
-import { clearRecentFiles, recentFiles } from '../utils/local-store'
+import { clearRecentFiles, recentFiles, removeRecentFile } from '../utils/local-store'
 import {
   blockPath,
   hiddenProjectIds,
@@ -306,12 +306,17 @@ function countDocs(node: DocNode): number {
 }
 
 /** 最近打开文件面板（v0.6.8）：项目级最近记录，点击直接打开，可一键清空 */
-function RecentFilesPanel({ projectId }: { projectId: string }) {
+function RecentFilesPanel({ projectId, onMenu }: { projectId: string; onMenu(e: ReactMouseEvent, node: DocNode): void }) {
   const openDoc = useStore((s) => s.openDoc)
   const activePath = useStore((s) => s.activeDoc?.path)
   const [items, setItems] = useState<string[]>(() => recentFiles(projectId))
   // 打开/切换文档会写入新记录（loadTabInto），随 activeDoc 变化刷新列表
-  useEffect(() => { setItems(recentFiles(projectId)) }, [projectId, activePath])
+  useEffect(() => {
+    const refresh = (): void => setItems(recentFiles(projectId))
+    refresh()
+    window.addEventListener('timber:recent-changed', refresh)
+    return () => window.removeEventListener('timber:recent-changed', refresh)
+  }, [projectId, activePath])
   return (
     <div className="rf-panel">
       <div className="rf-head">
@@ -341,6 +346,7 @@ function RecentFilesPanel({ projectId }: { projectId: string }) {
               className={`rf-item ${activePath === path ? 'active' : ''}`}
               title={path}
               onClick={() => void openDoc(path)}
+              onContextMenu={(event) => onMenu(event, { name, path, type: 'doc', ext })}
             >
               <span className={`doc-icon ${extClass(ext)}`}>{extIcon(ext)}</span>
               <span className="rf-name">{name}</span>
@@ -415,6 +421,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
   useEffect(() => {
     setTreeEdit(null)
     setNameValue('')
+    setTab((current) => current === 'git' ? 'docs' : current)
   }, [activeProjectId])
 
   const onReconnect = async (remoteId: string, projectId?: string) => {
@@ -569,6 +576,9 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
   }
 
   const onRenameNode = (node: DocNode): void => {
+    const parents = node.path.split('/').slice(0, -1)
+    parents.forEach((_, index) => treeOpenState.set(parents.slice(0, index + 1).join('/'), true))
+    setTab('docs')
     setNameValue(node.name)
     setTreeEdit({ mode: 'rename', node })
   }
@@ -662,10 +672,10 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     }
   }
 
-  const treeMenu = (e: ReactMouseEvent, node: DocNode, exactBlocked: boolean): void => {
+  const treeMenu = (e: ReactMouseEvent, node: DocNode, exactBlocked: boolean, recent = false): void => {
     e.preventDefault()
     if (!active) return
-    const abs = `${active.path}\\${node.path.replace(/\//g, '\\')}`
+    const abs = active.remoteId ? `${active.path.replace(/\/$/, '')}/${node.path}` : `${active.path}\\${node.path.replace(/\//g, '\\')}`
     const items: MenuItem[] = []
     if (node.type === 'doc') {
       items.push({
@@ -673,8 +683,10 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
         label: '打开文档',
         onClick: () => void useStore.getState().openDoc(node.path)
       })
-      items.push({ key: 'rename', label: '重命名', onClick: () => onRenameNode(node) })
-      items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
+      if (active.kind !== 'file') {
+        items.push({ key: 'rename', label: '重命名', onClick: () => onRenameNode(node) })
+        items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
+      }
     } else {
       items.push({ key: 'newdoc', label: '新建文件', onClick: () => openNamePrompt('file', node.path) })
       items.push({ key: 'newdir', label: '新建文件夹', onClick: () => openNamePrompt('dir', node.path) })
@@ -708,14 +720,19 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
         toast('ok', '绝对路径已复制')
       }
     })
-    items.push({
+    if (!active.remoteId && window.timber) items.push({ key: 'reveal', label: '在资源管理器中显示', onClick: () => void window.timber!.revealPath(abs) })
+    if (recent) items.push({ key: 'remove-recent', label: '从最近记录移除', separatorBefore: true, onClick: () => {
+      removeRecentFile(active.id, node.path)
+      window.dispatchEvent(new Event('timber:recent-changed'))
+    } })
+    if (active.kind !== 'file') items.push({
       key: 'delete',
       label: '删除…',
       danger: true,
       separatorBefore: true,
       onClick: () => void onDeleteNode(node)
     })
-    items.push({
+    if (active.kind !== 'file') items.push({
       key: 'block',
       label: exactBlocked ? '取消屏蔽' : '屏蔽',
       danger: !exactBlocked,
@@ -896,6 +913,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
               </button>
               <div className="sb-proj-ops">
                 <button
+                  disabled={active.kind === 'file'}
                   onClick={(e) =>
                     setMenu({
                       x: e.clientX,
@@ -930,7 +948,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
             >
               最近
             </button>
-            <button className={tab === 'git' ? 'active' : ''} onClick={() => setTab('git')}>
+            <button className={tab === 'git' ? 'active' : ''} disabled={active.kind === 'file'} title={active.kind === 'file' ? 'Git 功能需要项目文件夹' : undefined} onClick={() => setTab('git')}>
               Git
             </button>
           </div>
@@ -991,7 +1009,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
             </>
           ) : tab === 'recent' ? (
             <div className="sb-tree git-tree">
-              <RecentFilesPanel projectId={active.id} />
+              <RecentFilesPanel projectId={active.id} onMenu={(event, node) => treeMenu(event, node, isExactBlocked(active.id, node.path), true)} />
             </div>
           ) : (
             <div className="sb-tree git-tree">

@@ -89,7 +89,11 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	total := 0
 	truncated := false
 
-	_ = filepath.WalkDir(p.Path, func(path string, d fs.DirEntry, err error) error {
+	searchRoot := p.Path
+	if p.Kind == "file" {
+		searchRoot = filepath.Join(p.Path, p.File)
+	}
+	_ = filepath.WalkDir(searchRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || truncated {
 			return nil
 		}

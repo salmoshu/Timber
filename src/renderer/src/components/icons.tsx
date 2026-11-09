@@ -54,6 +54,19 @@ export function IconAnnotation({ size = 15 }: { size?: number }) {
   )
 }
 
+/** 阅读模式：眼睛图标。 */
+export function IconRead({ size = 16 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>
+}
+
+export function IconSource({ size = 16 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18" /></svg>
+}
+
+export function IconPagePreview({ size = 17 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6M8 13h8m-8 4h6" /></svg>
+}
+
 /** 导出文档：向下箭头落入托盘 */
 export function IconExport({ size = 15 }: { size?: number }) {
   return (

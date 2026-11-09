@@ -9,7 +9,7 @@
   box-shadow: var(--shadow);
   font-size: var(--reader-font-size, var(--md-B1-font-size));
   font-family: var(--reader-font-family, inherit);
-  line-height: 1.65;
+  line-height: var(--reader-line-height, 1.6);
   color: var(--ink);
   user-select: text;
   word-break: break-word;
@@ -57,7 +57,7 @@
 .prose blockquote p { margin: 3px 0; }
 
 .prose code {
-  font-family: var(--font-mono);
+  font-family: var(--code-font-family, var(--font-mono));
   font-size: 0.9em; background: var(--Fills-F1); padding: 1.5px 6px;
   border-radius: var(--radius-sm); color: var(--Syntax-Punctuation);
 }

@@ -465,7 +465,7 @@ input, textarea { user-select: text; }
   display: block; flex: 1 0 auto; width: 100%; max-width: var(--reader-width, 80%);
   box-sizing: border-box; border: none; outline: none; resize: none; overflow: hidden;
   margin: 0 auto; padding: 28px 40px; background: var(--paper); color: var(--ink);
-  font-family: var(--font-mono); font-size: var(--md-code-font-size);
+  font-family: var(--code-font-family, var(--font-mono)); font-size: var(--md-code-font-size);
   line-height: var(--md-code-line-height);
   white-space: pre-wrap; overflow-wrap: break-word;
 }
@@ -1999,8 +1999,8 @@ select:focus-visible {
 .resource-reader { container-type: inline-size; }
 .document-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; background: var(--paper); }
 .document-workspace > .reader-body { min-width: 0; padding: 12px 18px 40px; }
-.document-workspace .prose { width: 100%; max-width: 100%; margin: 0 auto 48px; padding: 32px 24px !important; border-radius: 0; box-shadow: none; }
-.document-workspace .editor-plain { max-width: 100%; padding: 32px 24px; }
+.document-workspace .prose { width: 100%; max-width: var(--reader-width, 100%); margin: 0 auto 48px; padding: 32px 24px !important; border-radius: 0; box-shadow: none; }
+.document-workspace .editor-plain { max-width: var(--reader-width, 100%); padding: 32px 24px; }
 .document-workspace .txt-view { max-width: 100%; margin: 0; padding: 32px 24px; box-shadow: none; }
 .document-outline { width: 48px; flex: none; display: flex; align-items: flex-start; padding-top: 56px; position: relative; z-index: 25; }
 .toc-shell { position: relative; flex: none; width: 44px; max-height: calc(100% - 80px); --toc-row-hover: #F3F4F6; }
@@ -2083,7 +2083,7 @@ select:focus-visible {
 .writing-typewriter .document-workspace > .reader-body { padding-top: 32vh; padding-bottom: 48vh; }
 .writing-immersive .app-body > :is(.project-sidebar, .resource-sidebar, .history-sidebar),
 .writing-immersive .resource-reader .document-margin { display: none; }
-.resource-reader .editor-plain { tab-size: 2; }
+.resource-reader .editor-plain, .timber-muya .mu-code { tab-size: var(--editor-tab-size, 2); }
 
 /* 0.7.0 · 内置 Muya 与 CodeMirror 的 Timber 主题适配。 */
 :root {
@@ -2102,7 +2102,9 @@ select:focus-visible {
 .timber-muya {
   --mu-font-family: var(--reader-font-family, inherit);
   --mu-font-size: var(--reader-font-size, 16px);
-  --mu-line-height: 1.65;
+  --mu-line-height: var(--reader-line-height, 1.6);
+  --mu-code-font-size: var(--md-code-font-size, 14px);
+  --mu-code-font-family: var(--code-font-family, var(--font-mono));
   --editor-color: var(--ink);
   --editor-color-80: var(--ink);
   --editor-color-50: var(--ink2);
@@ -2112,7 +2114,7 @@ select:focus-visible {
   --editor-bg-color: var(--paper);
   --editor-area-width: 100%;
   --link-color: var(--accent);
-  --code-block-bg-color: var(--bg);
+  --code-block-bg-color: var(--code-background, var(--bg));
   --table-border-color: var(--line);
   --blockquote-text-color: var(--ink2);
   --blockquote-border-color: var(--accent);
@@ -2149,6 +2151,52 @@ select:focus-visible {
 .resource-reader .ann-pop { display: flex; align-items: center; gap: 2px; padding: 4px; max-width: calc(100% - 16px); }
 .resource-reader .ann-pop > button { border: 0; background: transparent; color: inherit; border-radius: 5px; padding: 5px 7px; font-size: 12px; white-space: nowrap; }
 .resource-reader .ann-pop > button:hover { background: var(--accent-soft); color: var(--accent); }
+
+.reader-mode-controls { display: flex; align-items: center; gap: 8px; }
+.reader-mode-switch { position: relative; display: flex; align-items: center; width: 72px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: 20px; background: var(--sidebar-bg); color: var(--ink2); }
+.reader-mode-switch > span:not(.mode-switch-thumb) { position: relative; z-index: 1; flex: 1; display: flex; align-items: center; justify-content: center; }
+.mode-switch-thumb { position: absolute; width: calc(50% - 2px); inset: 2px auto 2px 2px; border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-xs); transition: transform 160ms ease; }
+.reader-mode-switch.source .mode-switch-thumb { transform: translateX(100%); }
+.reader-mode-switch:not(.source) > span:nth-child(2), .reader-mode-switch.source > span:last-child { color: var(--accent); font-weight: 600; }
+.reader-preview-button { display: grid; place-items: center; width: 29px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ink2); }
+.reader-preview-button:hover { background: var(--Fills-F1); color: var(--ink); }
+.reader-preview-button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--line); }
+.reader-mode-switch:focus-visible, .reader-preview-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tb-view:disabled { cursor: default; opacity: .4; }
+.theme-picker { display: grid; gap: 16px; width: 100%; padding: 8px 0; }
+.st-row:has(.theme-picker) { align-items: flex-start; }
+.theme-category { display: grid; gap: 8px; }
+.theme-category-label { color: var(--ink3); font-size: 12px; }
+.theme-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 8px; }
+.theme-option { display: flex; align-items: center; gap: 8px; width: fit-content; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink2); text-align: left; font-size: 12px; }
+.theme-options .theme-option { width: 100%; }
+.theme-option:hover { background: var(--sb-hover); }
+.theme-option.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.theme-swatch { position: relative; flex: none; width: 32px; height: 28px; display: grid; place-items: center; border: 1px solid; border-radius: 5px; font-family: Georgia, serif; font-size: 13px; }
+.theme-swatch > span { position: absolute; bottom: 0; left: 0; width: 100%; height: 3px; }
+.mu-format-picker:has(.annotation) { width: max-content; max-width: calc(100vw - 16px); }
+.mu-format-picker:has(.annotation) li.item { flex: none; width: 26px; }
+.mu-format-picker li.item.annotation { width: 26px; }
+.mu-annotation-button { display: grid; place-items: center; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; color: var(--editor-color); }
+.mu-annotation-button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.timber-muya .mu-code-block { background: var(--code-background); }
+.timber-muya .token.comment, .timber-muya .token.prolog, .timber-muya .token.doctype, .timber-muya .token.cdata,
+.timber-source-editor.cm-s-default .cm-comment { color: var(--Syntax-Comment); }
+.timber-muya .token.keyword, .timber-muya .token.atrule,
+.timber-source-editor.cm-s-default .cm-keyword { color: var(--Syntax-Keyword); }
+.timber-muya .token.string, .timber-muya .token.char, .timber-muya .token.attr-value,
+.timber-source-editor.cm-s-default .cm-string { color: var(--Syntax-String); }
+.timber-muya .token.number, .timber-muya .token.boolean, .timber-muya .token.constant,
+.timber-source-editor.cm-s-default .cm-number, .timber-source-editor.cm-s-default .cm-atom { color: var(--Syntax-Literal); }
+.timber-muya .token.function, .timber-muya .token.class-name, .timber-muya .token.tag,
+.timber-source-editor.cm-s-default .cm-def, .timber-source-editor.cm-s-default .cm-header, .timber-source-editor.cm-s-default .cm-link { color: var(--Syntax-Mark); }
+.timber-muya .token.punctuation, .timber-muya .token.operator { color: var(--Syntax-Punctuation); }
+.timber-source-editor.cm-s-default .cm-variable { color: var(--ink); }
+.toc-shell { --toc-row-hover: var(--sb-hover); }
+[data-theme='dark'] .toc-shell { --toc-row-hover: var(--sb-hover); }
+@media (prefers-reduced-motion: reduce) {
+  .mode-switch-thumb { transition: none; }
+}
 .find-panel { flex: none; background: var(--paper); border-bottom: 1px solid var(--line); }
 .find-panel .find-bar { border-bottom: none; }
 .find-panel .find-replace-row { padding-top: 0; padding-left: 38px; }
@@ -2214,6 +2262,7 @@ select:focus-visible {
 .st-card .st-row > .st-label { margin: 0; font-weight: 500; }
 .st-card .st-row > .st-hint { grid-column: 1 / -1; font-size: 12px; }
 .st-card .st-row > .fmt-groups { grid-column: 1 / -1; margin-top: 10px; }
+.st-card .st-row > .theme-picker { grid-column: 1 / -1; min-width: 0; }
 .st-card .st-row .seg { background: var(--Fills-F2); }
 .st-card .st-row .seg button { padding: 7px 14px; }
 .st-card .st-row .seg button.active { background: var(--paper); color: var(--ink); box-shadow: 0 1px 4px #0000000a; }

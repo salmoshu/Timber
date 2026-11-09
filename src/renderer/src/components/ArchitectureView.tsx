@@ -5,18 +5,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ArchRefs } from '@shared/types'
 import { archRefs } from '../api'
 import { apiCallFor, useStore } from '../store'
-import { archTheme, setArchTheme } from '../utils/local-store'
 import ArchMatrix from './ArchMatrix'
 import ArchInsightsView from './ArchInsights'
 import ArchAiPanel, { type ArchAiContext } from './ArchAiPanel'
 import { readCurrentArchitecture, saveCurrentArchitecture } from '../utils/architecture'
-import { filterKeyForProject } from '../utils/settings'
+import { filterKeyForProject, isDarkTheme, THEME_PALETTES, type ThemeId } from '../utils/settings'
+import { useResolvedTheme } from '../utils/useResolvedTheme'
 
 type Mode = 'snapshot' | 'delta' | 'matrix' | 'insights'
 
 /** 架构图皮肤（archify HTML 的 data-theme）；矩阵/洞察为 React 渲染，随应用主题，不受此影响 */
-type ArchTheme = 'light' | 'dark'
-
 /** arch/spec/insights 错误码 → 空态文案（矩阵/洞察组件共用） */
 const ARCH_ERROR_TEXTS: Record<string, string> = {
   'no-commits': '该仓库暂无提交，无法生成架构快照',
@@ -30,9 +28,22 @@ export function archErrorText(code: string): string {
 }
 
 /** 把 archify 写死的深色替换为目标主题（仅替换首个出现，即 <html> 标签上的 data-theme） */
-export function applyArchTheme(html: string, theme: ArchTheme): string {
-  if (theme === 'dark') return html
-  return html.replace('data-theme="dark"', `data-theme="${theme}"`)
+export function applyArchTheme(html: string, theme: ThemeId): string {
+  const palette = THEME_PALETTES[theme]
+  const colorScheme = isDarkTheme(theme) ? 'dark' : 'light'
+  const values: Record<string, string> = {
+    bg: palette.background, grid: palette.sidebar, text: palette.text,
+    'text-muted': `color-mix(in srgb, ${palette.text} 75%, transparent)`,
+    'text-dim': `color-mix(in srgb, ${palette.text} 58%, transparent)`,
+    'text-faint': `color-mix(in srgb, ${palette.text} 58%, transparent)`,
+    panel: palette.panel, 'panel-border': palette.sidebar,
+    'lane-fill': palette.sidebar, 'lane-stroke': palette.accent,
+    arrow: palette.accent, 'arrow-emphasis': palette.accent, mask: palette.background,
+    'toolbar-bg': palette.sidebar, 'toolbar-border': palette.accent,
+    'toolbar-text': palette.text, 'toolbar-hover': palette.panel, 'toolbar-menu-bg': palette.panel
+  }
+  const style = `<style id="timber-arch-palette">html[data-theme] {color-scheme:${colorScheme};${Object.entries(values).map(([key, value]) => `--${key}:${value};`).join('')}}</style>`
+  return html.replace('data-theme="dark"', `data-theme="${colorScheme}"`).replace('</head>', `${style}</head>`)
 }
 
 /** 向 archify 自包含 HTML 注入滚动条样式（0.5.2）：10px 细滚动条、圆角半透明 thumb、hover 加深一档。
@@ -53,10 +64,6 @@ export function injectArchChrome(html: string): string {
   const i = html.indexOf('</head>')
   // archify 输出为标准 HTML（必含 </head>）；异常结构兜底追加到末尾
   return i < 0 ? html + style : `${html.slice(0, i)}${style}\n${html.slice(i)}`
-}
-
-function systemTheme(): ArchTheme {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 export default function ArchitectureView() {
@@ -82,24 +89,7 @@ export default function ArchitectureView() {
   const [aiHtml, setAiHtml] = useState<string | null>(null)
   const displayingCurrent = mode === 'snapshot' && snapRef === 'HEAD' && current !== null
 
-  // 架构图主题：未设置过则跟随系统；用户一切换即持久化并解除跟随
-  const [followSystem, setFollowSystem] = useState(() => archTheme() === null)
-  const [theme, setTheme] = useState<ArchTheme>(() => archTheme() ?? systemTheme())
-
-  useEffect(() => {
-    if (!followSystem) return
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = (e: MediaQueryListEvent): void => setTheme(e.matches ? 'dark' : 'light')
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [followSystem])
-
-  const toggleTheme = (): void => {
-    const next: ArchTheme = theme === 'dark' ? 'light' : 'dark'
-    setArchTheme(next)
-    setFollowSystem(false)
-    setTheme(next)
-  }
+  const theme = useResolvedTheme()
 
   // iframe srcDoc 前统一套用主题并注入滚动条样式（缓存命中分支同走此路径，切换主题即时生效）
   const themedHtml = useMemo(() => (html ? injectArchChrome(applyArchTheme(html, theme)) : null), [html, theme])
@@ -320,13 +310,6 @@ export default function ArchitectureView() {
             </select>
           </label>
         )}
-        <button
-          className="av-theme"
-          onClick={toggleTheme}
-          title="架构图主题：首次跟随系统，切换后独立记忆"
-        >
-          {theme === 'dark' ? '☀' : '🌙'}
-        </button>
         {displayingCurrent && <span className="av-current-label" title={current?.prompt}>AI 已更新</span>}
         <button className="av-refresh" onClick={refresh} title="重新渲染">⟳</button>
       </div>

@@ -12,8 +12,8 @@ import ContextMenu, { type MenuItem } from './ContextMenu'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { rawBaseFor, origProjectId } from '../store'
 import { exportActiveDocument, type DocumentExportKind } from '../utils/documentExport'
-import { IconAnnotation, IconExport } from './icons'
-import { InlineFormatButtons, MarkdownWritingToolbar, WritingStatus } from './WritingTools'
+import { IconAnnotation, IconExport, IconRead, IconSource, IconPagePreview } from './icons'
+import { MarkdownInsertPalette, WritingStatus } from './WritingTools'
 import { useWritingExperience } from '../utils/useWritingExperience'
 import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
 
@@ -68,7 +68,6 @@ export default function Reader() {
   }, [setMode])
 
   const proseWrapRef = useRef<HTMLDivElement>(null)
-  const [pop, setPop] = useState<{ x: number; y: number; below?: boolean } | null>(null)
   const [rawBase, setRawBase] = useState('')
   const [findOpen, setFindOpen] = useState(false)
   const [findReplace, setFindReplace] = useState(false)
@@ -99,6 +98,21 @@ export default function Reader() {
   // Ctrl+F 查找渲染正文；高亮使用 Range，不修改编辑器 DOM。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        const runtime = getMarkdownEditor()
+        if (!runtime || !(e.target instanceof Node) || !runtime.root.contains(e.target)) return
+        e.preventDefault()
+        if (runtime.kind === 'source') {
+          const { start, end } = runtime.getSelectionOffsets() ?? { start: 0, end: 0 }
+          const value = runtime.getValue()
+          const quote = value.slice(start, end)
+          if (quote.trim()) setComposeQuote({ quote, prefix: value.slice(Math.max(0, start - 40), start), suffix: value.slice(end, end + 40) })
+        } else {
+          const anchor = selectionAnchor(runtime.root)
+          if (anchor) setComposeQuote(anchor)
+        }
+        return
+      }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && ['f', 'h'].includes(e.key.toLowerCase())) {
         if (!useStore.getState().activeDoc || document.querySelector('.paged-preview')) return
         e.preventDefault()
@@ -113,7 +127,6 @@ export default function Reader() {
   // 切换模式/文档时清理选区气泡和临时高亮。
   useEffect(() => {
     setFindOpen(false)
-    setPop(null)
     setTextHighlight('search-hit', [])
   }, [mode, activeTabId])
 
@@ -209,63 +222,6 @@ export default function Reader() {
     }
   }, [activeTabId, activeDoc])
 
-  const onMouseUp = useCallback((e: React.MouseEvent) => {
-    // 双击保留正常选词行为；拖选文字后再显示批注气泡。
-    if (e.detail > 1) {
-      setPop(null)
-      return
-    }
-    const wrap = proseWrapRef.current
-    if (!wrap) return
-    // 源码模式从统一编辑器接口取选区，避免依赖 CodeMirror 内部 textarea。
-    if (useStore.getState().mode === 'source') {
-      const runtime = getMarkdownEditor()
-      const selection = runtime?.getSelectionOffsets()
-      if (!runtime || !selection) return
-      const { start: s, end: en } = selection
-      const value = runtime.getValue()
-      const quote = value.slice(s, en)
-      if (s === en || !quote.trim()) {
-        setPop(null)
-        return
-      }
-      ;(onMouseUp as unknown as { _anchor?: unknown })._anchor = {
-        quote,
-        prefix: value.slice(Math.max(0, s - 40), s),
-        suffix: value.slice(en, en + 40)
-      }
-      const wrapRect = wrap.getBoundingClientRect()
-      setPop({ x: e.clientX - wrapRect.left, y: e.clientY - wrapRect.top + wrap.scrollTop - 8 })
-      return
-    }
-    const prose = wrap.querySelector('.prose') as HTMLElement | null
-    if (!prose) return
-    const anchor = selectionAnchor(prose)
-    if (!anchor) {
-      setPop(null)
-      return
-    }
-    const sel = window.getSelection()!
-    const rect = sel.getRangeAt(0).getBoundingClientRect()
-    const wrapRect = wrap.getBoundingClientRect()
-    // 气泡挂在滚动容器内（position:absolute），需把视口坐标换算成内容坐标（补 scrollTop）
-    const x = rect.left - wrapRect.left + rect.width / 2
-    const aboveTop = rect.top - wrapRect.top
-    const below = aboveTop < 48
-    const y = below
-      ? rect.bottom - wrapRect.top + wrap.scrollTop + 10
-      : aboveTop + wrap.scrollTop - 10
-    setPop({ x, y, below })
-    ;(onMouseUp as unknown as { _anchor?: unknown })._anchor = anchor
-  }, [])
-
-  const startCompose = () => {
-    const anchor = (onMouseUp as unknown as { _anchor?: { quote: string; prefix: string; suffix: string } })._anchor
-    if (anchor) setComposeQuote(anchor)
-    setPop(null)
-    window.getSelection()?.removeAllRanges()
-  }
-
 
   if (!activeDoc) {
     // 标签栏始终保留：打开失败的文档不再「吃掉」整个阅读区，错误卡片提供关闭出口
@@ -306,34 +262,23 @@ export default function Reader() {
       <TabsBar>
         {hasModeTools && (
           <div className="rt-tool-group">
-            <div className="seg icon-seg">
-              <button
-                className={!paged && mode === 'read' ? 'active' : ''}
-                onClick={() => { setPaged(false); setMode('read') }}
-                title={isHtml ? '阅读模式（渲染网页）' : '阅读模式（可直接编辑）'}
-                aria-label="阅读模式"
-                aria-pressed={!paged && mode === 'read'}
-              >
-                📖
-              </button>
-              <button
-                className={!paged && mode === 'source' ? 'active' : ''}
-                onClick={() => { setPaged(false); setMode('source') }}
-                title={isHtml ? '编辑模式（编辑 HTML 源码）' : '编辑模式（编辑源码）'}
-                aria-label="编辑模式"
-                aria-pressed={!paged && mode === 'source'}
-              >
-                ✎
+            <div className="reader-mode-controls">
+              <button className={`reader-mode-switch ${mode === 'source' ? 'source' : ''}`}
+                role="switch" aria-label="源码模式" aria-checked={mode === 'source'}
+                title={mode === 'source' ? '切换到阅读模式' : '切换到源码模式'}
+                onClick={() => { setPaged(false); setMode(mode === 'source' ? 'read' : 'source') }}>
+                <span className="mode-switch-thumb" aria-hidden="true" />
+                <span title="阅读模式"><IconRead /></span><span title="源码模式"><IconSource /></span>
               </button>
               {isMd && (
                 <button
-                  className={paged ? 'active' : ''}
-                  onClick={() => { setPaged(true); setMode('read') }}
+                  className={`reader-preview-button ${paged ? 'on' : ''}`}
+                  onClick={() => { setPaged(!paged); setMode('read') }}
                   title="A4 分页预览（PDF 按此分页导出）"
                   aria-label="分页预览"
                   aria-pressed={paged}
                 >
-                  ▤
+                  <IconPagePreview />
                 </button>
               )}
             </div>
@@ -387,7 +332,7 @@ export default function Reader() {
         ))}
       </div>
 
-      {isMd && !paged && <MarkdownWritingToolbar />}
+      {isMd && !paged && <MarkdownInsertPalette />}
       {findOpen && <FindBar replace={findReplace} onClose={() => setFindOpen(false)} />}
 
       <div className={`document-workspace ${!paged && (activeDoc.ext === 'md' || mode === 'source') ? 'with-outline' : ''}`}>
@@ -395,8 +340,6 @@ export default function Reader() {
       <div
         className="reader-body"
         ref={proseWrapRef}
-        onMouseUp={onMouseUp}
-        onInput={() => setPop(null)}
       >
         {paged && isMd ? (
           pagedEdit ? (
@@ -467,15 +410,6 @@ export default function Reader() {
           <pre className="txt-view">{activeDoc.content}</pre>
         )}
 
-        {!paged && pop && (mode === 'read' ? isMd : isMd || activeDoc.ext === 'txt' || isHtml) && (
-          <div
-            className={`ann-pop ${pop.below ? 'below' : ''}`}
-            style={{ left: pop.x, top: pop.y }}
-          >
-            {isMd && <InlineFormatButtons />}
-            <button onMouseDown={(e) => e.preventDefault()} onClick={startCompose}>🏷 添加标签</button>
-          </div>
-        )}
       </div>
       <div
         className={`document-margin ${marginExpanded ? 'expanded' : ''} ${annotationsOpen ? '' : 'hidden'}`}

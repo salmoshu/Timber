@@ -53,7 +53,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, next)
       element.dispatchEvent(new Event('input', { bubbles: true }))
     }
-    const key = (element, value, options = {}) => element.dispatchEvent(new KeyboardEvent('keydown', { key: value, code: value, bubbles: true, cancelable: true, ...options }))
+    const key = (element, value, options = {}) => { element.focus(); return element.dispatchEvent(new KeyboardEvent('keydown', { key: value, code: value, keyCode: value.length === 1 ? value.toUpperCase().charCodeAt(0) : 0, bubbles: true, cancelable: true, ...options })) }
     const documentWith = async (markdown, mode = 'source') => {
       window.__writer.setDocument(markdown, mode)
       await wait(() => {
@@ -120,6 +120,108 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       runtime().execute({ command: 'paragraph', markdown: next })
     }
 
+    const savedSettings = localStorage.getItem('timber-settings')
+    try {
+      localStorage.setItem('timber-settings', JSON.stringify({ serifFont: true }))
+      check(window.__writer.loadSettings().editorFontFamily.includes('Georgia'), 'legacy serif font preference was lost')
+      localStorage.setItem('timber-settings', JSON.stringify({ serifFont: false }))
+      check(window.__writer.loadSettings().editorFontFamily.includes('Microsoft YaHei'), 'legacy sans-serif font preference was lost')
+      localStorage.setItem('timber-settings', JSON.stringify({ editorFontFamily: '"Font, With Comma", Georgia', codeFontFamily: '', editorLineWidth: '640px' }))
+      const restoredFonts = window.__writer.loadSettings()
+      check(restoredFonts.editorFontFamily.startsWith('"Font, With Comma"') && restoredFonts.codeFontFamily === '' && restoredFonts.editorLineWidth === '640px', 'quoted families, empty default stack or editor width did not survive settings load')
+    } finally {
+      if (savedSettings === null) localStorage.removeItem('timber-settings')
+      else localStorage.setItem('timber-settings', savedSettings)
+    }
+    checks.push('saved serif and sans-serif font preferences migrate to font families')
+
+    const originalTypography = window.__writer.settings()
+    const typography = { fontSize: 22, editorFontFamily: 'Georgia', lineHeight: 1.9, codeFontSize: 18, codeFontFamily: 'Consolas', wrapCodeBlocks: false, editorLineWidth: '640px' }
+    const typographyDocument = 'Typography 正文\n\n```js\nconst longLine = "' + 'long code '.repeat(50) + '"\n```\n'
+    const styledProse = await documentWith(typographyDocument, 'read')
+    for (const [setting, value] of Object.entries(typography)) window.__writer.setting(setting, value)
+    await pause(100)
+    check(runtime().root === styledProse, 'changing typography remounted Muya')
+    check(styledProse.getBoundingClientRect().width <= 641, 'maximum editor width did not reach Muya')
+    check(getComputedStyle(styledProse).fontSize === '22px' && getComputedStyle(styledProse).fontFamily.includes('Georgia'), 'body font or size did not reach Muya')
+    check(Math.abs(parseFloat(getComputedStyle(styledProse).lineHeight) - 22 * 1.9) < 0.1, 'body line height did not reach Muya')
+    const styledCode = styledProse.querySelector('.mu-code-block .mu-code')
+    check(styledCode && getComputedStyle(styledCode).fontSize === '18px' && getComputedStyle(styledCode).fontFamily.includes('Consolas'), 'code font or size did not reach Muya code blocks')
+    check(getComputedStyle(styledCode).whiteSpace === 'pre', 'Muya code did not stop wrapping')
+    window.__writer.mode('source')
+    await wait(() => runtime()?.kind === 'source', 'source did not mount for typography checks')
+    const styledSource = runtime().root
+    const cm = styledSource.CodeMirror
+    check(styledSource.getBoundingClientRect().width <= 641, 'maximum editor width did not reach CodeMirror')
+    check(getComputedStyle(styledSource).fontSize === '18px' && getComputedStyle(styledSource).fontFamily.includes('Consolas'), 'code font or size did not reach CodeMirror')
+    check(getComputedStyle(styledSource.querySelector('pre.CodeMirror-line')).whiteSpace === 'pre', 'source did not preserve disabled wrapping')
+    cm.setSelection(cm.posFromIndex(1), cm.posFromIndex(5))
+    window.__writer.setting('codeFontSize', 20)
+    window.__writer.setting('wrapCodeBlocks', true)
+    await pause(100)
+    check(runtime().root === styledSource && cm.getSelection() === typographyDocument.slice(1, 5), 'changing source typography lost the editor or selection')
+    check(getComputedStyle(styledSource).fontSize === '20px' && getComputedStyle(styledSource.querySelector('pre.CodeMirror-line')).whiteSpace === 'pre-wrap', 'source typography did not update in place')
+    window.__writer.mode('read')
+    await wait(() => runtime()?.kind === 'muya', 'Muya did not restore for typography checks')
+    check(getComputedStyle(runtime().root.querySelector('.mu-code-block .mu-code')).whiteSpace === 'pre-wrap', 'Muya did not preserve enabled wrapping after remount')
+    check(!window.__writer.dirty() && window.__writer.draft() === typographyDocument, 'typography changes altered the pristine document')
+    for (const setting of Object.keys(typography)) window.__writer.setting(setting, originalTypography[setting])
+    checks.push('live body/code typography and wrapping preserve selection and pristine drafts across modes')
+
+    {
+      const document = 'editor preference\n\n```js\nconst one = 1\nconst two = 2\n```\n'
+      const root = await documentWith(document, 'read')
+      check(!!root.querySelector('.mu-line-numbers-rows'), 'default code block line numbers are missing')
+      const initialSettings = window.__writer.settings()
+      window.__writer.setting('codeBlockLineNumbers', false)
+      await wait(() => !root.querySelector('.mu-line-numbers-rows'), 'code block line numbers did not hide after changing the editor setting')
+      window.__writer.setting('codeBlockLineNumbers', true)
+      await wait(() => !!root.querySelector('.mu-line-numbers-rows'), 'code block line numbers did not return after changing the editor setting')
+      check(runtime().root === root && !window.__writer.dirty() && window.__writer.draft() === document, 'code display settings remounted or changed the pristine document')
+      await documentWith('one\ntwo', 'source')
+      const sourceRoot = runtime().root
+      window.__writer.setting('tabSize', 4)
+      window.__writer.setting('sourceCodeLineNumbers', false)
+      check(sourceRoot.CodeMirror.getOption('lineNumbers') === false, 'source line numbers setting was ignored')
+      selectSource(sourceRoot, 0, 7)
+      key(window.__writer.sourceInput(), 'Tab')
+      check(value() === '    one\n    two', 'source Tab did not follow the four-space indentation preference')
+      key(window.__writer.sourceInput(), 'Tab', { shiftKey: true })
+      check(value() === 'one\ntwo', 'source Shift+Tab did not remove the configured indentation')
+      for (const setting of ['tabSize', 'sourceCodeLineNumbers', 'codeBlockLineNumbers']) window.__writer.setting(setting, initialSettings[setting])
+      check(runtime().root === sourceRoot, 'changing editor preferences recreated the source editor')
+      await documentWith('', 'source')
+      const input = window.__writer.sourceInput()
+      window.__writer.toggle('autoPairBracket')
+      check(key(input, '(', { code: 'Digit9', keyCode: 57, shiftKey: true }) && value() === '', 'disabled bracket pairing still intercepted source input')
+      key(input, '"', { code: 'Quote', keyCode: 222, shiftKey: true })
+      check(value() === '""', 'disabling brackets also disabled independent quote pairing')
+      window.__writer.undo()
+      window.__writer.toggle('autoPairBracket')
+      window.__writer.toggle('autoPairQuote')
+      check(key(input, '"', { code: 'Quote', keyCode: 222, shiftKey: true }) && value() === '', 'disabled quote pairing still intercepted source input')
+      key(input, '(', { code: 'Digit9', keyCode: 57, shiftKey: true })
+      check(value() === '()', 'disabling quotes also disabled independent bracket pairing')
+      window.__writer.undo()
+      window.__writer.toggle('autoPairQuote')
+      checks.push('live code/source line numbers, configured Tab and independent bracket/quote pairing')
+    }
+
+    {
+      const markdown = '# Icon controls\n\nPreview content.\n'
+      await documentWith(markdown, 'read')
+      const mode = document.querySelector('[aria-label="源码模式"]')
+      const preview = document.querySelector('[aria-label="分页预览"]')
+      check(mode?.querySelectorAll('svg').length === 2 && !mode.textContent.trim(), 'mode switch still contains visible text instead of read/source icons')
+      check(preview?.querySelector('svg') && !preview.textContent.trim() && preview.hasAttribute('aria-pressed'), 'page preview is not an accessible icon button')
+      preview.click()
+      await wait(() => !!document.querySelector('.paged-preview') && preview.getAttribute('aria-pressed') === 'true', 'preview icon did not open paginated preview')
+      preview.click()
+      await wait(() => runtime()?.kind === 'muya' && preview.getAttribute('aria-pressed') === 'false', 'preview icon did not return to the reader')
+      check(window.__writer.draft() === markdown && !window.__writer.dirty(), 'preview icon changed the pristine document')
+      checks.push('icon-only read/source switch and page preview button toggle without editing the document')
+    }
+
     let source = await documentWith('- task')
     let input = window.__writer.sourceInput()
     selectSource(source)
@@ -162,6 +264,12 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     window.__writer.mode('source')
     await wait(() => runtime()?.kind === 'source' && value().trim() === 'mode switch edited', 'source mode did not restore draft')
     checks.push('source and reading mode preserve draft')
+    input = window.__writer.sourceInput()
+    key(input, 'z', { code: 'KeyZ', ctrlKey: true })
+    await wait(() => value() === 'mode switch', 'source undo history was lost after mode switch: ' + value())
+    key(input, 'y', { code: 'KeyY', ctrlKey: true })
+    await wait(() => value() === 'mode switch edited', 'source Ctrl+Y did not redo after mode switch')
+    checks.push('source keyboard undo/redo survives editor remount')
 
     source = await documentWith('')
     input = window.__writer.sourceInput()
@@ -186,6 +294,47 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     window.__writer.undo()
     await wait(() => !value().includes('**hello**'), 'WYSIWYG operation was not undoable')
     checks.push('WYSIWYG selection formatting and undo')
+    key(prose, 'y', { code: 'KeyY', ctrlKey: true })
+    await wait(() => value().includes('**hello**'), 'Muya Ctrl+Y did not redo formatting')
+    key(prose, 'z', { code: 'KeyZ', ctrlKey: true })
+    await wait(() => !value().includes('**hello**'), 'Muya Ctrl+Z did not undo formatting')
+    key(prose, 'z', { code: 'KeyZ', ctrlKey: true, shiftKey: true })
+    await wait(() => value().includes('**hello**'), 'Muya Ctrl+Shift+Z did not redo formatting')
+    window.__writer.mode('source')
+    await wait(() => runtime()?.kind === 'source', 'source editor did not mount')
+    replaceSource('changed in source\n')
+    await wait(() => window.__writer.draft() === 'changed in source\n', 'source change did not reach shared draft')
+    window.__writer.mode('read')
+    await wait(() => runtime()?.kind === 'muya', 'Muya did not remount')
+    prose = runtime().root
+    key(prose, 'z', { code: 'KeyZ', ctrlKey: true })
+    await wait(() => value().includes('**hello**'), 'Muya did not undo the source edit as a standalone step: ' + value())
+    key(prose, 'z', { code: 'KeyZ', ctrlKey: true })
+    await wait(() => value().trim() === 'hello world', 'Muya original history was lost after source edits: ' + value())
+    key(prose, 'y', { code: 'KeyY', ctrlKey: true })
+    key(prose, 'y', { code: 'KeyY', ctrlKey: true })
+    await wait(() => value().trim() === 'changed in source', 'Muya could not redo across modes')
+    checks.push('Muya keyboard history and source edits survive mode switches')
+
+    prose = await documentWith('select annotation\n\nsecond paragraph\n', 'read')
+    selectText(prose, 'annotation')
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    await wait(() => !!document.querySelector('.mu-annotation-button'), 'Muya annotation button did not appear')
+    check(document.querySelector('.mu-annotation-button svg')?.namespaceURI === 'http://www.w3.org/2000/svg' && !document.querySelector('.mu-annotation-button').textContent.trim(), 'annotation toolbar action is text rather than an icon')
+    check(!document.querySelector('.ann-pop, .writing-toolbar'), 'duplicate Timber selection/writing toolbar remains')
+    document.querySelector('.mu-annotation-button').click()
+    await wait(() => window.__writer.compose()?.quote === 'annotation' && !!document.querySelector('.ap-compose'), 'Muya annotation lost selection or did not open composer')
+    window.__writer.cancelCompose()
+    runtime().focus()
+    selectAcross(prose, 'select', 'paragraph')
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    await pause(100)
+    await wait(() => {
+      const toolbar = document.querySelector('.mu-format-picker-container')
+      return !toolbar || Number(getComputedStyle(toolbar).opacity) === 0
+    }, 'cross-paragraph selection displayed a standalone annotation toolbar')
+    check(!window.__writer.compose(), 'cross-paragraph selection unexpectedly opened annotation composition')
+    checks.push('annotation icon shares normal formatting toolbar visibility; cross-paragraph selection hides the whole toolbar')
 
     prose = await documentWith('Heading target\n', 'read')
     selectText(prose, 'Heading target')
@@ -195,6 +344,17 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
 
     const rich = '---\ntitle: 保留元信息\ntags: [markdown, timber]\n---\n\n# 示例\n\nhello world\n\n- [x] done\n- [ ] todo\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconst n = 1\n```\n\n$$\nE=mc^2\n$$\n\n注释[^note1]\n\n[^note1]: 说明\n'
     prose = await documentWith(rich, 'read')
+    const taskBoxes = prose.querySelectorAll('li.mu-task-list-item > input[type="checkbox"], li.mu-task-list-item > span.mu-task-list-checkbox')
+    check(taskBoxes.length === 2, 'task list checkboxes are missing')
+    for (const box of taskBoxes) {
+      const shape = getComputedStyle(box, '::before')
+      check(shape.width === shape.height && parseFloat(shape.borderTopLeftRadius) <= 3 && !shape.borderTopLeftRadius.includes('%'), 'Markdown task checkbox is still circular')
+    }
+    taskBoxes[1].click()
+    await wait(() => /^- \[[xX]\] todo$/m.test(value()), 'square task checkbox did not toggle the Markdown task state')
+    window.__writer.undo()
+    await wait(() => /^- \[ \] todo$/m.test(value()), 'task checkbox toggle was not undoable')
+    checks.push('square task checkboxes toggle Markdown state and support undo')
     selectText(prose, 'hello')
     window.__writer.command('italic')
     await wait(() => value().includes('*hello*'), 'rich document did not sync')
@@ -367,6 +527,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
         import { renderMarkdownForExport, portableDocumentHtml } from './src/renderer/src/utils/documentExport'
         import MarkdownView, { selectionAnchor, resolveDocLink } from './src/renderer/src/components/MarkdownView'
         import { findAnnotationRange } from './src/renderer/src/utils/textRanges'
+        import { THEME_PALETTES, loadSettings } from './src/renderer/src/utils/settings'
         const project = window.__smokeProject
         let tabSequence = 0
         window.__writer = {
@@ -380,10 +541,17 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
           dirty: () => useStore.getState().dirty,
           mode: mode => useStore.getState().setMode(mode),
           theme: theme => useStore.getState().setSetting('theme', theme),
+          setting: (key, value) => useStore.getState().setSetting(key, value),
+          settings: () => useStore.getState().settings,
+          loadSettings,
+          palettes: THEME_PALETTES,
+          compose: () => useStore.getState().composeQuote,
+          cancelCompose: () => useStore.getState().setComposeQuote(null),
           command: runMarkdownCommand,
           toggle: toggleWritingPreference,
           runtime: getMarkdownEditor,
           value: () => getMarkdownEditor()?.getValue(),
+          history: () => getMarkdownEditor()?.root?.CodeMirror?.getHistory?.(),
           sourceInput: () => getMarkdownEditor()?.root.querySelector('textarea'),
           selectSource(start, end) { const editor = getMarkdownEditor(); editor.focus(); editor.setSelectionOffsets(start, end) },
           undo: () => getMarkdownEditor()?.undo(),
@@ -424,7 +592,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       const checks = await win.webContents.executeJavaScript('(' + runBrowserChecks.toString() + ')()', true)
       const imageFiles = fs.readdirSync(path.join(projectDir, 'assets')).length
       if (imageFiles !== 3) throw new Error('expected three independently saved images, got ' + imageFiles)
-      for (const theme of ['light', 'dark']) {
+      for (const theme of Object.keys(await win.webContents.executeJavaScript('window.__writer.palettes'))) {
         await win.webContents.executeJavaScript(`(async () => {
           window.__writer.theme(${JSON.stringify(theme)})
           const deadline = Date.now() + 5000
@@ -437,11 +605,18 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
           const image = document.querySelector('.timber-muya .mu-inline-image img')
           if (!image?.complete || image.naturalWidth !== 2) throw new Error('Image failed after ${theme} theme initialization')
           if (window.__writer.dirty()) throw new Error('${theme} theme initialization marked a pristine document dirty')
+          if (document.documentElement.dataset.palette !== ${JSON.stringify(theme)}) throw new Error('${theme} palette was not applied')
+          const probe = document.createElement('span')
+          probe.style.color = window.__writer.palettes[${JSON.stringify(theme)}].background
+          document.body.appendChild(probe)
+          const expected = getComputedStyle(probe).color
+          probe.remove()
+          if (getComputedStyle(document.querySelector('.prose')).backgroundColor !== expected) throw new Error('${theme} editor background does not match the palette')
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
         })()`)
-        fs.writeFileSync(path.join(temp, theme + '.png'), (await win.webContents.capturePage()).toPNG())
+        if (['light', 'nord', 'catppuccin-latte', 'dracula'].includes(theme)) fs.writeFileSync(path.join(temp, theme + '.png'), (await win.webContents.capturePage()).toPNG())
       }
-      checks.push('light and dark themes initialize and render')
+      checks.push('all 33 palettes initialize, render and preserve pristine documents')
       fs.writeFileSync(report, JSON.stringify({ passed: true, checks, savedImages: imageFiles, screenshots: temp, consoleErrors: failures }, null, 2))
       sidecar.kill()
       for (const file of generated) fs.unlinkSync(file)
@@ -455,6 +630,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
         draft: window.__writer?.draft(),
         prose: document.querySelector('.prose')?.innerHTML,
         source: window.__writer?.value(),
+        history: window.__writer?.history?.(),
         selection: window.getSelection()?.toString()
       })`).catch(() => null) : null
       fs.writeFileSync(report, JSON.stringify({ passed: false, error: String(error.stack || error), editorState, consoleErrors: failures, diagnostics: temp }, null, 2))

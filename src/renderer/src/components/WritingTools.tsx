@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { useStore } from '../store'
 import { documentStats, type MarkdownCommand } from '../utils/markdownEditing'
 import { MARKDOWN_COMMAND_EVENT, runMarkdownCommand } from '../utils/markdownCommands'
-import { useWritingPreferences, toggleWritingPreference } from '../utils/writingPreferences'
 import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
 
 interface InsertItem { label: string; keywords: string; command: MarkdownCommand; markdown?: string }
@@ -16,6 +15,7 @@ const INSERT_ITEMS: InsertItem[] = [
   { label: '引用', keywords: 'quote 引用', command: 'quote' },
   { label: '代码块', keywords: 'code fence 代码', command: 'code' },
   { label: '表格', keywords: 'table 表格', command: 'table' },
+  { label: '本地图片', keywords: 'image picture 图片', command: 'image' },
   { label: '分隔线', keywords: 'line divider 分隔', command: 'line' },
   { label: '数学公式', keywords: 'math latex 公式 数学', command: 'math' },
   { label: '行内公式', keywords: 'inline math 行内 公式', command: 'inline-math' },
@@ -28,34 +28,29 @@ const INSERT_ITEMS: InsertItem[] = [
     .map(([label, keywords]) => ({ label, keywords: `emoji 表情 ${keywords}`, command: 'paragraph' as MarkdownCommand, markdown: label.split(' ')[0] }))
 ]
 
-export function InlineFormatButtons() {
-  return <>{([
-    ['bold', 'B', '加粗 (Ctrl+B)'], ['italic', 'I', '斜体 (Ctrl+I)'], ['strike', 'S̶', '删除线 (Ctrl+Shift+X)'],
-    ['highlight', 'H', '高亮 (Ctrl+Shift+H)'], ['inline-code', '‹›', '行内代码 (Ctrl+`)'], ['link', '↗', '链接 (Ctrl+K)']
-  ] as [MarkdownCommand, string, string][]).map(([command, label, title]) => <button key={command} className="writing-format-btn" title={title} aria-label={title} onMouseDown={(event) => event.preventDefault()} onClick={() => runMarkdownCommand(command)}>{label}</button>)}</>
-}
-
-export function MarkdownWritingToolbar() {
-  const mode = useStore((s) => s.mode)
-  const preferences = useWritingPreferences()
+export function MarkdownInsertPalette() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const [rows, setRows] = useState(2)
   const [columns, setColumns] = useState(3)
   const [position, setPosition] = useState({ left: 100, top: 120 })
-  const trigger = useRef<HTMLButtonElement>(null)
   const palette = useRef<HTMLDivElement>(null)
   const search = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const items = INSERT_ITEMS.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(query.toLowerCase().trim()))
   const close = (): void => { setOpen(false); getMarkdownEditor()?.focus() }
   const show = (): void => {
-    const rect = trigger.current?.getBoundingClientRect()
+    const rect = getMarkdownEditor()?.caretRect()
     setPosition({ left: Math.max(8, Math.min(rect?.left ?? 120, window.innerWidth - 352)), top: Math.max(8, Math.min((rect?.bottom ?? 90) + 6, window.innerHeight - 420)) })
     setQuery(''); setIndex(0); setOpen(true)
   }
   const choose = (item: InsertItem): void => {
+    if (item.command === 'image') {
+      setOpen(false)
+      fileInput.current?.click()
+      return
+    }
     if (item.markdown !== undefined) window.dispatchEvent(new CustomEvent(MARKDOWN_COMMAND_EVENT, { detail: { command: item.command, markdown: item.markdown } }))
     else runMarkdownCommand(item.command, item.command === 'table' ? { rows, columns } : undefined)
     setOpen(false)
@@ -67,7 +62,7 @@ export function MarkdownWritingToolbar() {
   useEffect(() => {
     if (!open) return
     search.current?.focus()
-    const outside = (event: PointerEvent): void => { if (!palette.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpen(false) }
+    const outside = (event: PointerEvent): void => { if (!palette.current?.contains(event.target as Node)) setOpen(false) }
     const hide = (): void => setOpen(false)
     document.addEventListener('pointerdown', outside)
     window.addEventListener('resize', hide)
@@ -75,25 +70,12 @@ export function MarkdownWritingToolbar() {
   }, [open])
   useEffect(() => { palette.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }) }, [index])
 
-  return <div className="writing-toolbar" aria-label="Markdown 写作工具">
-    {mode === 'source' && <div className="writing-format-group"><InlineFormatButtons /></div>}
-    <button ref={trigger} className="writing-tool" aria-expanded={open} aria-haspopup="dialog" onMouseDown={(event) => event.preventDefault()} onClick={() => open ? close() : show()} title="空行输入 / 或 Ctrl+/">＋ 插入</button>
-    <button className="writing-tool" onMouseDown={(event) => event.preventDefault()} onClick={() => runMarkdownCommand('table', { rows, columns })} title="插入表格">▦ 表格</button>
-    <button className="writing-tool" onMouseDown={(event) => event.preventDefault()} onClick={() => fileInput.current?.click()} title="也可粘贴截图或拖入图片">▧ 图片</button>
+  return <>
     <input ref={fileInput} type="file" className="writing-file-input" multiple accept="image/png,image/jpeg,image/gif,image/webp" aria-label="选择要插入的图片" onChange={(event) => {
       const files = Array.from(event.currentTarget.files ?? [])
       if (files.length) window.dispatchEvent(new CustomEvent('timber:insert-images', { detail: files }))
       event.currentTarget.value = ''
     }} />
-    <span className="writing-toolbar-spacer" />
-    <button className={`writing-tool ${preferences.focus ? 'active' : ''}`} aria-pressed={preferences.focus} onClick={() => toggleWritingPreference('focus')} title="专注当前段落 (F8 / Ctrl+Shift+J)">专注</button>
-    <button className={`writing-tool ${preferences.typewriter ? 'active' : ''}`} aria-pressed={preferences.typewriter} onClick={() => toggleWritingPreference('typewriter')} title="输入时光标保持在阅读区中央 (F9)">打字机</button>
-    <button className={`writing-tool ${preferences.distractionFree ? 'active' : ''}`} aria-pressed={preferences.distractionFree} onClick={() => toggleWritingPreference('distractionFree')} title="收起两侧面板，Esc 退出 (F10)">沉浸</button>
-    <details className="writing-options"><summary className="writing-tool" title="写作设置" aria-label="写作设置">⚙</summary><div>
-      <label><input type="checkbox" checked={preferences.autoPair} onChange={() => toggleWritingPreference('autoPair')} />源码括号与引号自动配对</label>
-      <label><input type="checkbox" checked={preferences.smartLists} onChange={() => toggleWritingPreference('smartLists')} />源码列表与引用智能续行</label>
-      <small>Tab / Shift+Tab 缩进 · Ctrl+H 查找替换</small>
-    </div></details>
     {open && createPortal(<div ref={palette} className="writing-insert-palette" role="dialog" aria-modal="false" aria-label="Markdown 快速插入" style={position} onKeyDown={(event) => {
       if (event.nativeEvent.isComposing) return
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
@@ -107,7 +89,7 @@ export function MarkdownWritingToolbar() {
       </div>
       <div className="writing-table-size"><span>表格尺寸</span><label>行 <input type="number" min="1" max="50" aria-label="表格数据行数" value={rows} onChange={(event) => setRows(Math.max(1, Math.min(50, Number(event.target.value) || 1)))} /></label><label>列 <input type="number" min="1" max="20" aria-label="表格列数" value={columns} onChange={(event) => setColumns(Math.max(1, Math.min(20, Number(event.target.value) || 1)))} /></label></div>
     </div>, document.body)}
-  </div>
+  </>
 }
 
 export function WritingStatus() {

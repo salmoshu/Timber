@@ -20,6 +20,7 @@ export default function TitleBar() {
   const toggleSidebar = useStore((s) => s.toggleSidebar)
   const view = useStore((s) => s.view)
   const setView = useStore((s) => s.setView)
+  const folderProject = useStore((s) => s.projects.some((p) => p.id === s.activeProjectId && p.kind !== 'file'))
   const [version, setVersion] = useState('')
   const [maximized, setMaximized] = useState(false)
 
@@ -64,6 +65,8 @@ export default function TitleBar() {
             <button
               key={v.key}
               className={`tb-view ${view === v.key ? 'active' : ''}`}
+              disabled={v.key !== 'resources' && !folderProject}
+              title={v.key !== 'resources' && !folderProject ? '请打开项目文件夹以使用架构和历史功能' : undefined}
               onClick={() => setView(v.key)}
             >
               {v.label}

@@ -11,6 +11,9 @@ export interface Project {
   path: string
   addedAt: string
   docCount: number
+  kind?: 'file'
+  /** Single-file workspaces use path as the resource root and file as the entry document. */
+  file?: string
   /** 远程项目：所属远程连接 id（本地项目无此字段） */
   remoteId?: string
 }
@@ -386,8 +389,17 @@ export interface ArchInsights {
 /** arch/insights 响应：成功为 ArchInsights，失败为 { ok:false, error }（no-commits/unknown-ref/no-source/not-a-repo） */
 export type ArchInsightsResult = ArchInsights | { ok: false; error: string }
 
+export interface FontCatalog {
+  families: string[]
+  error?: string
+}
+
 // preload 暴露给渲染进程的桥
 export interface TimberBridge {
+  /** Enumerate the installed system font families; bundled fonts are added by the picker. */
+  listFontFamilies(refresh?: boolean): Promise<FontCatalog>
+  takePendingFiles(): Promise<string[]>
+  onPendingFiles(cb: () => void): () => void
   getApiInfo(): Promise<ApiInfo>
   browseLocal(path?: string): Promise<{ path: string; parent: string; home: string; roots: string[]; folders: { name: string; path: string }[] }>
   pathExists(path: string): Promise<boolean>

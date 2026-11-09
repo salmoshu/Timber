@@ -89,6 +89,20 @@ test('pairing respects apostrophes, escaped delimiters and existing text', () =>
   assert.equal(pairMarkdown('\\', 1, 1, '['), null)
   assert.equal(pairMarkdown('next', 0, 0, '('), null)
 })
+
+test('configured four- and eight-space indentation preserves selected text and outdents one level', () => {
+  for (const size of [4, 8]) {
+    const changed = apply('one\ntwo', indentMarkdown('one\ntwo', 0, 7, false, size))
+    assert.equal(changed.text, ' '.repeat(size) + 'one\n' + ' '.repeat(size) + 'two')
+    assert.equal(apply(changed.text, indentMarkdown(changed.text, 0, changed.text.length, true, size)).text, 'one\ntwo')
+    assert.equal(apply('', indentMarkdown('', 0, 0, false, size)).text, ' '.repeat(size))
+  }
+})
+
+test('empty nested lists exit one configured indentation level', () => {
+  const input = '    - '
+  assert.equal(apply(input, smartEnter(input, input.length, input.length, 4)).text, '- ')
+})
 test('literal search escapes regexp syntax, respects case and whole words', () => {
   assert.deepEqual(textMatches('A.*b a.*b', '.*'), [{ start: 1, end: 3 }, { start: 6, end: 8 }])
   assert.equal(textMatches('Cat cat scatter', 'cat', false, true).length, 2)

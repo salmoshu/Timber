@@ -117,7 +117,7 @@ export function formatMarkdown(value: string, start: number, end: number, comman
   return edit(start, end, text, leading.length + inner, leading.length + inner + length)
 }
 
-export function smartEnter(value: string, start: number, end: number): TextEdit | null {
+export function smartEnter(value: string, start: number, end: number, tabSize = 2): TextEdit | null {
   if (start !== end) return null
   const from = start === 0 ? 0 : value.lastIndexOf('\n', start - 1) + 1
   const before = value.slice(from, start)
@@ -132,7 +132,7 @@ export function smartEnter(value: string, start: number, end: number): TextEdit 
     const restOfLine = value.slice(start).split('\n')[0]
     if (!content.trim() && !restOfLine.trim()) {
       const nested = /(?: {2,}|\t)$/.test(prefix)
-      const dedented = prefix.replace(/(?: {1,2}|\t)$/, '')
+      const dedented = prefix.replace(new RegExp(`(?: {1,${tabSize}}|\\t)$`), '')
       return edit(from, start, nested ? dedented + marker + ' ' + (task ? '[ ] ' : '') : prefix)
     }
     const ordered = /^(\d+)([.)])$/.exec(marker)
@@ -147,12 +147,14 @@ export function smartEnter(value: string, start: number, end: number): TextEdit 
   return indent ? edit(start, end, '\n' + indent) : null
 }
 
-export function indentMarkdown(value: string, start: number, end: number, outdent: boolean): TextEdit {
-  if (!outdent && start === end) return edit(start, end, '  ')
+export function indentMarkdown(value: string, start: number, end: number, outdent: boolean, tabSize = 2): TextEdit {
+  const indentation = ' '.repeat(tabSize)
+  if (!outdent && start === end) return edit(start, end, indentation)
   const [from, to] = lineBounds(value, start, end)
   const lines = value.slice(from, to).split('\n')
-  const deltas = lines.map((line) => outdent ? -(/^(?:\t| {1,2})/.exec(line)?.[0].length ?? 0) : 2)
-  const text = lines.map((line, i) => outdent ? line.slice(-deltas[i]) : '  ' + line).join('\n')
+  const leading = new RegExp(`^(?:\\t| {1,${tabSize}})`)
+  const deltas = lines.map((line) => outdent ? -(leading.exec(line)?.[0].length ?? 0) : tabSize)
+  const text = lines.map((line, i) => outdent ? line.slice(-deltas[i]) : indentation + line).join('\n')
   return { start: from, end: to, text, selectionStart: Math.max(from, start + deltas[0]), selectionEnd: Math.max(from, end + deltas.reduce((a, b) => a + b, 0)) }
 }
 

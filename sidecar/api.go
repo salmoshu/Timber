@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -112,6 +113,19 @@ func (s *server) project(w http.ResponseWriter, r *http.Request) *Project {
 	p := s.registry.get(r.PathValue("id"))
 	if p == nil {
 		writeError(w, 404, "项目不存在")
+		return nil
+	}
+	if p.Kind == "file" {
+		for _, section := range []string{"/git/", "/arch/", "/entire/", "/ai/"} {
+			if strings.Contains(r.URL.Path, section) {
+				writeError(w, 400, "folder-required")
+				return nil
+			}
+		}
+		if strings.HasSuffix(r.URL.Path, "/fs") {
+			writeError(w, 400, "folder-required")
+			return nil
+		}
 	}
 	return p
 }
@@ -153,6 +167,14 @@ func (s *server) handleRescan(w http.ResponseWriter, r *http.Request) {
 		Exts []string `json:"exts"`
 	}
 	_ = readJSON(r, &req)
+	if p.Kind == "file" {
+		p.DocCount = 0
+		if info, err := os.Stat(filepath.Join(p.Path, p.File)); err == nil && info.Mode().IsRegular() {
+			p.DocCount = 1
+		}
+		writeJSON(w, 200, p)
+		return
+	}
 	if len(req.Exts) > 0 {
 		p.DocCount = countDocsExts(p.Path, parseExts(strings.Join(req.Exts, ",")))
 	} else {
@@ -164,6 +186,16 @@ func (s *server) handleRescan(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleTree(w http.ResponseWriter, r *http.Request) {
 	p := s.project(w, r)
 	if p == nil {
+		return
+	}
+	if p.Kind == "file" {
+		info, err := os.Stat(filepath.Join(p.Path, p.File))
+		if err != nil {
+			writeError(w, 404, "文件不存在或不可读")
+			return
+		}
+		ext := strings.ToLower(filepath.Ext(p.File))
+		writeJSON(w, 200, &DocNode{Name: p.Name, Type: "dir", Children: []*DocNode{{Name: p.File, Path: p.File, Type: "doc", Ext: ext, Size: info.Size()}}})
 		return
 	}
 	tree, err := scanTreeExts(p.Path, parseExts(r.URL.Query().Get("exts")))

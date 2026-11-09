@@ -1,23 +1,43 @@
 import { app, BrowserWindow, clipboard, ipcMain, nativeImage, net, session, shell } from 'electron'
-import { cpSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve, isAbsolute } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { startSidecar, stopSidecar, setSidecarReadyListener } from './sidecar.js'
 import { renderArchHtml, compareArchDelta } from './archify.js'
 import { UpdateService, extractReleaseNotesSection } from './updater.js'
+import { listFontFamilies } from './fonts.js'
 import type { ApiInfo } from '@shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let apiInfo: ApiInfo | null = null
 let startupError: string | null = null
 const updateService = new UpdateService()
+const pendingFiles: string[] = []
+
+function queueFiles(paths: string[]): void {
+  for (const path of paths) {
+    if (!isAbsolute(path) || !/\.(md|markdown|mdown|mkd)$/i.test(path)) continue
+    try {
+      const absolute = resolve(path)
+      if (statSync(absolute).isFile() && !pendingFiles.includes(absolute)) pendingFiles.push(absolute)
+    } catch { /* Files may have been removed between the shell action and launch. */ }
+  }
+  if (pendingFiles.length) mainWindow?.webContents.send('files:pending')
+}
+
+app.on('open-file', (event, path) => {
+  event.preventDefault()
+  queueFiles([path])
+})
 
 // 单实例锁
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  queueFiles(process.argv.slice(app.isPackaged ? 1 : 2))
+  app.on('second-instance', (_event, argv) => {
+    queueFiles(argv)
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -150,6 +170,8 @@ function createWindow(): void {
 }
 
 // ---- IPC ----
+ipcMain.handle('fonts:list', (_event, refresh?: boolean) => listFontFamilies(refresh === true))
+ipcMain.handle('files:take-pending', () => pendingFiles.splice(0))
 ipcMain.handle('api:info', () => {
   if (startupError && !apiInfo) throw new Error(startupError)
   return apiInfo

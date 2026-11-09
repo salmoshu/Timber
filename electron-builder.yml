@@ -12,6 +12,13 @@ extraResources:
     to: vendor/archify
   - from: release-notes.md
     to: release-notes.md
+  - from: vendor/marktext-muya/LICENSE
+    to: licenses/MarkText-LICENSE
+  - from: vendor/marktext-muya/src/assets/styles/fonts
+    to: licenses/fonts
+    filter:
+      - '*LICENSE*'
+      - NOTO.md
 publish:
   - provider: github
     owner: salmoshu
@@ -27,3 +34,4 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  include: build/file-associations.nsh

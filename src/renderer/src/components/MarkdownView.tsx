@@ -8,12 +8,14 @@ import {
 } from '@muyajs/core'
 import type { Annotation } from '@shared/types'
 import { origProjectId, rawBaseFor, useStore } from '../store'
-import { systemPrefersDark } from '../utils/settings'
+import { isDarkTheme, type AppSettings } from '../utils/settings'
+import { useResolvedTheme } from '../utils/useResolvedTheme'
 import { collectText, findAnnotationRange, setTextHighlight } from '../utils/textRanges'
 import { formattingShortcut, MARKDOWN_COMMAND_EVENT, type MarkdownCommandRequest } from '../utils/markdownCommands'
 import { saveMarkdownImages, saveMarkdownImageSource } from '../utils/markdownImages'
 import { createMuyaRuntime, executeMuyaCommand, insertMarkdownInMuya } from '../utils/muyaRuntime'
 import { getMarkdownEditor, registerMarkdownEditor } from '../utils/markdownEditorRuntime'
+import { useWritingPreferences } from '../utils/writingPreferences'
 
 interface Props {
   annotations: Annotation[]
@@ -108,7 +110,7 @@ async function persistImageForActiveDocument(source: { src: string; alt: string 
   try {
     return await saveMarkdownImageSource(source.src, source.alt, state.activeProjectId, state.activeDoc.path)
   } catch (error) {
-    state.toast('err', `图片保存失败：${error instanceof Error ? error.message : error}。可改用工具栏“图片”重试。`)
+    state.toast('err', `图片保存失败：${error instanceof Error ? error.message : error}。可通过 / 插入图片重试。`)
     throw error
   }
 }
@@ -119,7 +121,15 @@ function registerMuyaPlugins(): void {
   pluginsRegistered = true
   Muya.use(EmojiSelector)
   Muya.use(FootnoteTool)
-  Muya.use(InlineFormatToolbar, { keyboardShortcuts: false })
+  Muya.use(InlineFormatToolbar, {
+    keyboardShortcuts: false,
+    annotationLabel: '添加批注',
+    annotationAction: () => {
+      const root = getMarkdownEditor()?.root
+      const anchor = root && selectionAnchor(root)
+      if (anchor) useStore.getState().setComposeQuote(anchor)
+    }
+  })
   Muya.use(ImageEditTool, { imageAction: persistImageForActiveDocument })
   Muya.use(ImageToolBar)
   Muya.use(ImageResizeBar)
@@ -179,6 +189,25 @@ interface SavedMuyaState {
 }
 const savedStates = new Map<string, SavedMuyaState>()
 
+function muyaAppearance(settings: AppSettings) {
+  return {
+    fontSize: settings.fontSize,
+    lineHeight: settings.lineHeight,
+    editorFontFamily: 'var(--reader-font-family)',
+    codeFontSize: settings.codeFontSize,
+    codeFontFamily: 'var(--code-font-family)',
+    wrapCodeBlocks: settings.wrapCodeBlocks,
+    codeBlockLineNumbers: settings.codeBlockLineNumbers,
+    tabSize: settings.tabSize,
+    hideQuickInsertHint: settings.hideQuickInsertHint
+  }
+}
+
+function muyaWritingOptions() {
+  const preferences = useWritingPreferences.getState()
+  return { autoPairBracket: preferences.autoPairBracket, autoPairQuote: preferences.autoPairQuote, autoPairMarkdownSyntax: preferences.autoPairMarkdownSyntax }
+}
+
 function MarkdownView({ annotations, onSelectAnn }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const refreshRef = useRef<() => void>(() => undefined)
@@ -191,17 +220,8 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
   const docPath = useStore((state) => state.activeDoc?.path)
   const projectId = useStore((state) => state.activeProjectId)
   const tabId = useStore((state) => state.activeTabId)
-  const themeSetting = useStore((state) => state.settings.theme)
-  const [systemDark, setSystemDark] = useState(systemPrefersDark())
-  const dark = themeSetting === 'dark' || (themeSetting === 'system' && systemDark)
+  const dark = isDarkTheme(useResolvedTheme())
   annotationsRef.current = annotations
-
-  useEffect(() => {
-    const query = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = (): void => setSystemDark(query.matches)
-    query.addEventListener('change', onChange)
-    return () => query.removeEventListener('change', onChange)
-  }, [])
 
   const refreshAnnotations = useCallback(() => {
     const root = hostRef.current?.querySelector<HTMLElement>('.prose')
@@ -232,6 +252,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       const state = useStore.getState()
       const project = state.projects.find((item) => item.id === projectId)
       const initialMarkdown = state.draft
+      const saved = savedStates.get(tabId)
       const resolveImage = (src: string): string => {
         if (!src || /^(?:https?:|data:|blob:)/i.test(src)) return src
         const resolved = resolveDocLink(docPath, src, project?.path)
@@ -241,28 +262,21 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       let muya: Muya
       try {
         muya = new Muya(mount, {
-          markdown: initialMarkdown,
+          markdown: saved?.markdown ?? initialMarkdown,
           frontMatter: true,
           footnote: true,
           superSubScript: true,
           texMathGfm: true,
           githubAlerts: true,
           cjkEmphasis: true,
-          codeBlockLineNumbers: true,
-          wrapCodeBlocks: true,
-          autoPairBracket: true,
-          autoPairMarkdownSyntax: true,
-          autoPairQuote: true,
+          ...muyaAppearance(state.settings),
+          ...muyaWritingOptions(),
           spellcheckEnabled: false,
-          hideQuickInsertHint: false,
           trimUnnecessaryCodeBlockEmptyLines: false,
           bulletListMarker: '-',
           orderListDelimiter: '.',
           frontmatterType: '-',
           mermaidTheme: dark ? 'dark' : 'default',
-          fontSize: 16,
-          lineHeight: 1.65,
-          tabSize: 2,
           documentId: () => `${projectId}/${docPath}`,
           imageAction: persistImageForActiveDocument,
           resolveImageSrc: resolveImage,
@@ -276,10 +290,10 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       }
       muya.domNode.setAttribute('data-editor', 'muya')
       muya.domNode.setAttribute('aria-label', 'Markdown 所见即所得编辑器')
-      const saved = savedStates.get(tabId)
-      if (saved?.markdown === initialMarkdown) {
+      if (saved) {
         muya.setHistory(saved.history)
         if (saved.selection) muya.setSelection(saved.selection)
+        muya.replaceContent(initialMarkdown)
       }
       const runtime = createMuyaRuntime(muya)
       registerMarkdownEditor(runtime)
@@ -309,12 +323,30 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         useStore.getState().toast('err', `图片插入失败：${payload instanceof Error ? payload.message : String(payload)}`)
       })
       const unsubscribe = useStore.subscribe((next, previous) => {
-        if (next.activeTabId !== tabId || next.draft === previous.draft || next.draft === muya.getMarkdown()) return
+        if (next.activeTabId !== tabId) return
+        if (next.settings !== previous.settings) {
+          muya.setOptions(muyaAppearance(next.settings), next.settings.codeBlockLineNumbers !== previous.settings.codeBlockLineNumbers)
+          rendered()
+        }
+        if (next.draft === previous.draft || next.draft === muya.getMarkdown()) return
         muya.setContent(next.draft)
         rendered()
       })
+      const unsubscribeWriting = useWritingPreferences.subscribe((next, previous) => {
+        if (next.autoPairBracket !== previous.autoPairBracket || next.autoPairQuote !== previous.autoPairQuote || next.autoPairMarkdownSyntax !== previous.autoPairMarkdownSyntax) muya.setOptions(muyaWritingOptions())
+      })
       const onCommand = (event: Event): void => executeMuyaCommand(muya, (event as CustomEvent<MarkdownCommandRequest>).detail)
       const onKeyDown = (event: KeyboardEvent): void => {
+        if (!event.isComposing && !event.altKey && (event.ctrlKey || event.metaKey)) {
+          const key = event.key.toLowerCase()
+          if (key === 'z' || key === 'y') {
+            event.preventDefault(); event.stopImmediatePropagation()
+            if (key === 'y' || event.shiftKey) muya.redo()
+            else muya.undo()
+            syncDraft()
+            return
+          }
+        }
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
           event.preventDefault(); event.stopPropagation()
           muya.flush(); syncDraft(); void useStore.getState().saveDoc()
@@ -326,6 +358,13 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
           event.preventDefault(); event.stopPropagation()
           executeMuyaCommand(muya, { command })
         }
+      }
+      const onBeforeInput = (event: InputEvent): void => {
+        if (event.inputType !== 'historyUndo' && event.inputType !== 'historyRedo') return
+        event.preventDefault(); event.stopImmediatePropagation()
+        if (event.inputType === 'historyUndo') muya.undo()
+        else muya.redo()
+        syncDraft()
       }
       const onClick = (event: MouseEvent): void => {
         const target = event.target as Element
@@ -374,6 +413,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
       }
       muya.domNode.addEventListener('keydown', onKeyDown, true)
+      muya.domNode.addEventListener('beforeinput', onBeforeInput, true)
       muya.domNode.addEventListener('click', onClick)
       muya.domNode.addEventListener('drop', onDrop, true)
       muya.domNode.addEventListener('dragover', onDragOver)
@@ -382,15 +422,13 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       rendered()
       disposeEditor = () => {
         unsubscribe()
+        unsubscribeWriting()
         cancelAnimationFrame(frame)
         muya.flush()
         const markdown = muya.getMarkdown()
         savedStates.set(tabId, { markdown, history: muya.getHistory(), selection: muya.getSelectionState() })
-        const current = useStore.getState()
-        // Theme changes rebuild Muya too. A pristine document must not become dirty merely
-        // because serialization normalizes an inconsequential trailing newline on teardown.
-        if (current.activeTabId === tabId && current.dirty && current.draft !== markdown)
-          current.setDraft(markdown)
+        // flush() commits pending edits through json-change. Merely unmounting must
+        // preserve the source draft, including its exact trailing newlines.
         window.removeEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
         window.removeEventListener('timber:insert-images', onImages)
         if (getMarkdownEditor() === runtime) registerMarkdownEditor(null)

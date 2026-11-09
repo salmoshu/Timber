@@ -21,6 +21,21 @@ export default function App() {
     void init()
   }, [init])
 
+  useEffect(() => {
+    const bridge = window.timber
+    if (!ready || fatalError || !bridge) return
+    let opening = Promise.resolve()
+    const drain = (): void => {
+      opening = opening.then(async () => {
+        const paths = await bridge.takePendingFiles()
+        await useStore.getState().openFiles(paths)
+      }).catch((error) => useStore.getState().toast('err', `打开文件失败：${String(error)}`))
+    }
+    const off = bridge.onPendingFiles(drain)
+    drain()
+    return off
+  }, [ready, fatalError])
+
   // 主进程拦截到的外链（导航 / window.open）转应用内浮层；浮层未挂载也能收到
   useEffect(() => window.timber?.onOpenExternalPage((url) => useStore.getState().openExtPage(url)), [])
 

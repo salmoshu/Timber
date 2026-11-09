@@ -16,6 +16,13 @@ import { clipboardImageFiles, saveMarkdownImages } from '../utils/markdownImages
 import { applyCodeMirrorCommand, applyCodeMirrorEdit, createSourceRuntime } from '../utils/sourceEditorRuntime'
 import { getMarkdownEditor, registerMarkdownEditor } from '../utils/markdownEditorRuntime'
 
+interface SourceSession {
+  value: string
+  history: ReturnType<CodeMirror.Editor['getHistory']>
+  selections: ReturnType<CodeMirror.Editor['listSelections']>
+}
+const savedSessions = new Map<string, SourceSession>()
+
 /** CodeMirror source view; the outer reader owns scrolling just like the Muya view. */
 export default function EditorPane() {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -28,19 +35,28 @@ export default function EditorPane() {
     const host = hostRef.current
     if (!host) return
     const initialValue = useStore.getState().draft
+    const editorSettings = useStore.getState().settings
+    const saved = tabId ? savedSessions.get(tabId) : undefined
     const cm = CodeMirror(host, {
-      value: initialValue,
+      value: saved?.value ?? initialValue,
       mode: isMarkdown ? 'markdown' : 'htmlmixed',
-      lineNumbers: true,
-      lineWrapping: true,
+      lineNumbers: editorSettings.sourceCodeLineNumbers,
+      lineWrapping: editorSettings.wrapCodeBlocks,
       viewportMargin: Infinity,
       styleActiveLine: true,
       autofocus: true,
-      indentUnit: 2,
-      tabSize: 2,
+      indentUnit: editorSettings.tabSize,
+      tabSize: editorSettings.tabSize,
       inputStyle: 'textarea',
-      spellcheck: false
+      spellcheck: false,
+      historyEventDelay: 600,
+      extraKeys: { 'Ctrl-Z': 'undo', 'Cmd-Z': 'undo', 'Ctrl-Y': 'redo', 'Cmd-Y': 'redo', 'Ctrl-Shift-Z': 'redo', 'Cmd-Shift-Z': 'redo' }
     })
+    if (saved) {
+      cm.setHistory(saved.history)
+      cm.setSelections(saved.selections)
+      if (saved.value !== initialValue) cm.replaceRange(initialValue, { line: 0, ch: 0 }, cm.posFromIndex(saved.value.length), 'mode-change')
+    }
     cmRef.current = cm
     cm.getWrapperElement().classList.add('editor-plain', 'timber-source-editor')
     cm.getWrapperElement().setAttribute('data-editor', 'source')
@@ -52,8 +68,18 @@ export default function EditorPane() {
       if (useStore.getState().draft !== cm.getValue()) useStore.getState().setDraft(cm.getValue())
     }
     cm.on('change', onChange)
+    let refreshFrame = 0
     const unsubscribe = useStore.subscribe((state, previous) => {
-      if (state.activeTabId !== tabId || state.draft === previous.draft) return
+      if (state.activeTabId !== tabId) return
+      if (state.settings !== previous.settings) {
+        cm.setOption('lineWrapping', state.settings.wrapCodeBlocks)
+        cm.setOption('lineNumbers', state.settings.sourceCodeLineNumbers)
+        cm.setOption('tabSize', state.settings.tabSize)
+        cm.setOption('indentUnit', state.settings.tabSize)
+        cancelAnimationFrame(refreshFrame)
+        refreshFrame = requestAnimationFrame(() => cm.refresh())
+      }
+      if (state.draft === previous.draft) return
       if (state.draft !== cm.getValue()) {
         const cursor = cm.getCursor()
         cm.setValue(state.draft)
@@ -135,9 +161,13 @@ export default function EditorPane() {
         return
       }
       const preferences = useWritingPreferences.getState()
-      const change = event.key === 'Tab' ? indentMarkdown(value, start, end, event.shiftKey)
-        : event.key === 'Enter' && !event.shiftKey && preferences.smartLists ? smartEnter(value, start, end)
-          : preferences.autoPair ? pairMarkdown(value, start, end, event.key) : null
+      const tabSize = useStore.getState().settings.tabSize
+      const pairKey = event.key === 'Backspace' ? value[start - 1] : event.key
+      const pairingEnabled = pairKey === '"' || pairKey === "'" ? preferences.autoPairQuote
+        : pairKey === '`' ? preferences.autoPairMarkdownSyntax : preferences.autoPairBracket
+      const change = event.key === 'Tab' ? indentMarkdown(value, start, end, event.shiftKey, tabSize)
+        : event.key === 'Enter' && !event.shiftKey && preferences.smartLists ? smartEnter(value, start, end, tabSize)
+          : pairingEnabled ? pairMarkdown(value, start, end, event.key) : null
       if (change) {
         event.preventDefault()
         applyCodeMirrorEdit(editor, change)
@@ -145,7 +175,9 @@ export default function EditorPane() {
     })
 
     return () => {
+      if (tabId) savedSessions.set(tabId, { value: cm.getValue(), history: cm.getHistory(), selections: cm.listSelections() })
       unsubscribe()
+      cancelAnimationFrame(refreshFrame)
       window.removeEventListener('timber:insert-images', onImages)
       window.removeEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
       wrapper.removeEventListener('paste', onPaste, true)

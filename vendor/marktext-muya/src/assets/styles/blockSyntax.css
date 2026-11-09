@@ -638,7 +638,7 @@ li.mu-task-list-item > input[type='checkbox'],
 li.mu-task-list-item > span.mu-task-list-checkbox {
     position: absolute;
 
-    /* Center the 18px circle (drawn by ::before at top:-2px, so its center sits
+    /* Center the 18px checkbox (drawn by ::before at top:-2px, so its center sits
        7px below this box's top) on the first text line, whose vertical midpoint
        is `0.5 * line-height * font-size`. The editor font is read from
        `--mu-font-size` rather than `em` on purpose: on Chromium the checkbox is
@@ -682,7 +682,7 @@ li.mu-task-list-item > span.mu-task-list-checkbox::before {
 
     background-color: var(--editor-bg-color);
     border: 2px solid var(--editor-color-50);
-    border-radius: 50%;
+    border-radius: 3px;
 
     transition: all 0.2s ease;
 
