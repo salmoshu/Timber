@@ -59,4 +59,6 @@ pnpm dist           # 打包 NSIS 安装包
 
 ## 许可
 
-MIT。架构图渲染基于 MIT 许可的 [Archify](https://github.com/tt-a1i/archify)（见 `vendor/archify/LICENSE` 与 `THIRD_PARTY_NOTICES.md`）。Markdown 引擎来自 MIT 许可的 [MarkText/Muya](https://github.com/marktext/marktext)，许可证、来源与本地改动见 `vendor/marktext-muya/LICENSE` 和 `UPSTREAM.md`。
+Timber 本体按 MIT 许可证开源，完整声明见根目录 `LICENSE`。在保留原作者版权及许可声明的前提下，可自由使用、复制、修改、发布、分发、再许可及销售软件副本；软件按“原样”提供，不附带任何明示或默示担保。
+
+内置第三方组件沿用各自许可证：架构图渲染基于 MIT 许可的 [Archify](https://github.com/tt-a1i/archify)（见 `vendor/archify/LICENSE` 与 `THIRD_PARTY_NOTICES.md`）；Markdown 引擎来自 MIT 许可的 [MarkText/Muya](https://github.com/marktext/marktext)，许可证、来源与本地改动见 `vendor/marktext-muya/LICENSE` 和 `UPSTREAM.md`。
