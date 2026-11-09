@@ -1,0 +1,432 @@
+import type { VNode } from 'snabbdom';
+import type Content from '../../block/base/content';
+import type Parent from '../../block/base/parent';
+import type AtxHeading from '../../block/commonMark/atxHeading';
+import type { Muya } from '../../index';
+import type {
+    IBulletListState,
+    IOrderListState,
+    ITaskListState,
+    TState,
+} from '../../state/types';
+import type { IQuickInsertMenuItem } from '../paragraphQuickInsertMenu/config';
+import type { IBaseOptions, IShortcutHintOptions } from '../types';
+import { replaceBlockByLabel } from '../../block/blockTransforms';
+import { canConvertGithubAlert, convertGithubAlert } from '../../block/githubAlerts';
+import { ScrollPage } from '../../block/scrollPage';
+import emptyStates from '../../config/emptyStates';
+import { atxHeadingBody } from '../../state/headings';
+import { isAnyListState, isAtxHeadingState } from '../../state/types';
+
+import { deepClone, isHTMLElement } from '../../utils';
+import { githubAlertBlockType } from '../../utils/githubAlerts';
+import { toListDelimiter } from '../../utils/listMarker';
+import { h, patch } from '../../utils/snabbdom';
+import BaseFloat from '../baseFloat';
+import { renderMenuIcon } from '../menuIcon';
+import { getShortcutHint } from '../shortcuts';
+import { canTurnIntoMenu, COPY_AS, COPY_AS_MENU, FRONT_MENU } from './config';
+import './index.css';
+
+const defaultOptions = {
+    placement: 'bottom' as const,
+    offsetOptions: {
+        mainAxis: 0,
+        crossAxis: 0,
+        alignmentAxis: 0,
+    },
+    showArrow: false,
+};
+
+export class ParagraphFrontMenu extends BaseFloat {
+    static pluginName = 'frontMenu';
+    public override capturesContentKeydown = true;
+    private _oldVNode: VNode | null = null;
+    private _block: Parent | null = null;
+    private _frontMenuContainer: HTMLDivElement = document.createElement('div');
+    declare protected options: IBaseOptions & IShortcutHintOptions;
+
+    constructor(muya: Muya, options: Partial<IBaseOptions> & IShortcutHintOptions = {}) {
+        const name = 'mu-front-menu';
+        const opts = Object.assign({}, defaultOptions, options);
+        super(muya, name, opts);
+        const parent = this.container!.parentNode;
+        if (isHTMLElement(parent)) {
+            Object.assign(parent.style, {
+                overflow: 'visible',
+            });
+        }
+        this.container!.appendChild(this._frontMenuContainer);
+        this.listen();
+    }
+
+    override listen() {
+        const { container } = this;
+        const { eventCenter } = this.muya;
+        super.listen();
+        eventCenter.subscribe('shortcut-hints-change', () => {
+            if (this.status && this._block?.parent)
+                this.render();
+        });
+
+        eventCenter.subscribe('muya-front-menu', ({ reference, block }) => {
+            if (reference) {
+                this._block = block;
+
+                setTimeout(() => {
+                    this.show(reference);
+                    this.render();
+                }, 0);
+            }
+        });
+
+        const enterLeaveHandler = () => {
+            this.hide();
+            this._block = null;
+        };
+
+        eventCenter.attachDOMEvent(container!, 'mouseleave', enterLeaveHandler);
+        // Keep the native selection available when the conversion records history.
+        eventCenter.attachDOMEvent(container!, 'mousedown', event => event.preventDefault());
+    }
+
+    private _renderSubMenu(subMenu: IQuickInsertMenuItem['children']) {
+        const { _block: block } = this;
+        const { i18n } = this.muya;
+        const children = subMenu.map((menuItem) => {
+            const { title, label, subTitle } = menuItem;
+            const iconWrapperSelector = 'div.icon-wrapper';
+            const iconWrapper = h(
+                iconWrapperSelector,
+                {
+                    props: {
+                        title: [i18n.t(title), subTitle, getShortcutHint(this.options, label, menuItem.shortCut)].filter(Boolean).join('\n'),
+                    },
+                },
+                renderMenuIcon(menuItem),
+            );
+
+            let itemSelector = `div.turn-into-item.${label.startsWith('github-alert ') ? label.replace(' ', '-') : label}`;
+            const alertType = block ? githubAlertBlockType(block) : null;
+            if (alertType && label === `github-alert ${alertType}`) {
+                itemSelector += '.active';
+            }
+            else if (block?.blockName === 'atx-heading') {
+                if (
+                    label.startsWith(block.blockName)
+                    && label.endsWith(String((block as AtxHeading).meta.level))
+                ) {
+                    itemSelector += '.active';
+                }
+            }
+            else if (!alertType && label === block?.blockName) {
+                itemSelector += '.active';
+            }
+
+            return h(
+                itemSelector,
+                {
+                    on: {
+                        click: (event) => {
+                            this.selectItem(event, { label });
+                        },
+                    },
+                },
+                [iconWrapper],
+            );
+        });
+        const subMenuSelector = 'li.turn-into-menu';
+
+        return h(subMenuSelector, children);
+    }
+
+    private _renderCopyAs() {
+        const { i18n } = this.muya;
+        const formats = COPY_AS_MENU.map(({ label, text }) => h(
+            `li.item.${label}`,
+            { on: { click: event => this.selectItem(event, { label }) } },
+            [h('span.text', i18n.t(text))],
+        ));
+
+        return h(`li.item.${COPY_AS.label}`, [
+            h('div.icon-wrapper', renderMenuIcon(COPY_AS)),
+            h('span.text', i18n.t(COPY_AS.text)),
+            h('div.arrow', '▸'),
+            h('ul.copy-as-menu', formats),
+        ]);
+    }
+
+    render() {
+        const { _oldVNode: oldVNode, _frontMenuContainer: frontMenuContainer, _block: block } = this;
+        const { i18n } = this.muya;
+        const { blockName } = block!;
+        const children = FRONT_MENU.map(({ icon, label, text, shortCut }) => {
+            const iconWrapperSelector = 'div.icon-wrapper';
+            const iconWrapper = h(iconWrapperSelector, renderMenuIcon({ icon, label }));
+            const textWrapper = h('span.text', i18n.t(text));
+            const hint = getShortcutHint(this.options, label, shortCut);
+            const shortCutWrapper = hint ? h('div.short-cut', { attrs: { title: hint } }, [h('span', hint)]) : null;
+            const itemSelector = `li.item.${label}`;
+            const itemChildren = shortCutWrapper ? [iconWrapper, textWrapper, shortCutWrapper] : [iconWrapper, textWrapper];
+
+            return h(
+                itemSelector,
+                {
+                    on: {
+                        click: (event) => {
+                            this.selectItem(event, { label });
+                        },
+                    },
+                },
+                itemChildren,
+            );
+        });
+
+        // Frontmatter can not be duplicated or copied as a block
+        if (blockName === 'frontmatter')
+            children.splice(0, 1);
+        else
+            children.splice(1, 0, this._renderCopyAs());
+
+        const subMenu = canTurnIntoMenu(block!);
+        if (subMenu.length) {
+            const line = h('li.divider');
+            children.unshift(line);
+            children.unshift(this._renderSubMenu(subMenu));
+        }
+
+        const vnode = h('ul', children);
+
+        if (oldVNode)
+            patch(oldVNode, vnode);
+        else patch(frontMenuContainer, vnode);
+
+        this._oldVNode = vnode;
+    }
+
+    selectItem(event: Event, { label }: { label: string }) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        // A single menu open performs at most one action: consume the target
+        // synchronously, then bail unless it is still in the document. This
+        // covers both a rapid second click (a real double-click before the
+        // deferred hide()) and an external command — e.g. the app menu bar —
+        // that unwrapped the block while this menu stayed open. Every action
+        // below assumes `block.parent` (#4686).
+        const block = this._block;
+        this._block = null;
+        if (!block?.parent)
+            return;
+
+        const format = COPY_AS_MENU.find(item => item.label === label);
+        if (format) {
+            void this.muya.editor.clipboard.copyBlockAs(block, format.copyType);
+            setTimeout(this.hide.bind(this));
+            return;
+        }
+
+        const oldState = block.getState();
+
+        const cursorBlock = /duplicate|new|delete/.test(label)
+            ? this._applyMetaAction(label, block, oldState)
+            : this._turnIntoBlock(label, block, oldState);
+
+        if (cursorBlock) {
+            // mock cursorBlock focus
+            cursorBlock.setCursor(0, 0, true);
+        }
+        // Delay hide to avoid dispatch enter handler
+        setTimeout(this.hide.bind(this));
+    }
+
+    private _applyMetaAction(label: string, block: Parent, oldState: TState) {
+        const { muya } = this;
+        switch (label) {
+            case 'duplicate': {
+                const state = deepClone(oldState);
+                const dupBlock = ScrollPage.loadBlock(state.name).create(muya, state);
+                block.parent!.insertAfter(dupBlock, block);
+                return dupBlock.lastContentInDescendant();
+            }
+
+            case 'new': {
+                const state = deepClone(emptyStates.paragraph);
+                const newBlock = ScrollPage.loadBlock('paragraph').create(
+                    muya,
+                    state,
+                );
+                block.parent!.insertAfter(newBlock, block);
+                return newBlock.lastContentInDescendant();
+            }
+
+            case 'delete': {
+                let cursorBlock = null;
+                if (block.prev) {
+                    cursorBlock = block.prev.lastContentInDescendant();
+                }
+                else if (block.next) {
+                    cursorBlock = block.next.firstContentInDescendant();
+                }
+                else {
+                    const state = deepClone(emptyStates.paragraph);
+                    const newBlock = ScrollPage.loadBlock('paragraph').create(
+                        muya,
+                        state,
+                    );
+                    block.parent!.insertAfter(newBlock, block);
+                    cursorBlock = newBlock.lastContentInDescendant();
+                }
+                block.remove();
+
+                return cursorBlock;
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    private _turnIntoBlock(label: string, block: Parent, oldState: TState) {
+        const { muya } = this;
+        if (canConvertGithubAlert(block, label)) {
+            convertGithubAlert(block, label);
+            return null;
+        }
+        switch (block.blockName) {
+            case 'paragraph':
+                // fall through
+            case 'atx-heading': {
+                if (block.blockName === 'paragraph' && block.blockName === label)
+                    return null;
+
+                const headingLevel = isAtxHeadingState(oldState) ? oldState.meta.level : null;
+                if (
+                    block.blockName === 'atx-heading'
+                    && headingLevel !== null
+                    && label.split(' ')[1] === String(headingLevel)
+                ) {
+                    return null;
+                }
+
+                const rawText = 'text' in oldState ? oldState.text : '';
+                const text
+                    = block.blockName === 'paragraph'
+                        ? rawText
+                        : atxHeadingBody(rawText);
+                const replace = () => replaceBlockByLabel({
+                    block,
+                    label,
+                    muya,
+                    text,
+                });
+                const { selection } = muya.editor;
+                if (selection.anchorBlock?.parent === block && selection.focusBlock?.parent === block)
+                    muya.withPreservedSelection(replace);
+                else
+                    muya.transact(replace);
+
+                return null;
+            }
+
+            case 'order-list':
+                // fall through
+            case 'bullet-list':
+                // fall through
+            case 'task-list':
+                return this._turnIntoList(label, block, oldState);
+
+            default:
+                return null;
+        }
+    }
+
+    private _turnIntoList(label: string, block: Parent, oldState: TState) {
+        const { muya } = this;
+        const { editor } = muya;
+        const { bulletListMarker, orderListDelimiter } = muya.options;
+
+        if (!isAnyListState(oldState))
+            return null;
+
+        // Clicking the active list type toggles the list off,
+        // unwrapping every item back into plain paragraphs (matches
+        // the command-palette/menu `reset-to-paragraph` behaviour).
+        if (block.blockName === label) {
+            muya.resetToParagraph(block);
+
+            return null;
+        }
+
+        // The conversion between order/bullet/task lists re-shapes both
+        // the parent `meta` and each item's `meta` (only task-list-items
+        // carry meta). Rebuild a fresh state of the target shape rather
+        // than mutating the old one in place — the in-place form requires
+        // discriminant-changing casts that TS can't track.
+        const sourceMeta = oldState.meta;
+        const loose = sourceMeta.loose;
+        const delimiter = 'delimiter' in sourceMeta
+            ? sourceMeta.delimiter
+            : toListDelimiter(orderListDelimiter);
+        const style = 'delimiter' in sourceMeta ? sourceMeta.style : undefined;
+        const marker = 'marker' in sourceMeta
+            ? sourceMeta.marker
+            : bulletListMarker;
+
+        const childContents: TState[][] = oldState.children.map(
+            li => deepClone(li.children),
+        );
+
+        let state: ITaskListState | IOrderListState | IBulletListState;
+        if (label === 'task-list') {
+            state = {
+                name: 'task-list',
+                meta: { marker: marker ?? bulletListMarker, loose: !!loose },
+                children: childContents.map(children => ({
+                    name: 'task-list-item',
+                    meta: { checked: false },
+                    children,
+                })),
+            };
+        }
+        else if (label === 'order-list') {
+            state = {
+                name: 'order-list',
+                meta: { delimiter, ...(style ? { style } : {}), loose: !!loose, start: 1 },
+                children: childContents.map(children => ({
+                    name: 'list-item',
+                    children,
+                })),
+            };
+        }
+        else {
+            state = {
+                name: 'bullet-list',
+                meta: { marker: marker ?? bulletListMarker, loose: !!loose },
+                children: childContents.map(children => ({
+                    name: 'list-item',
+                    children,
+                })),
+            };
+        }
+        // TODO: @JOCS, remove use this.selection directly.
+        const { anchorPath, anchor, focus, isSelectionInSameBlock }
+            = editor.selection;
+        const listBlock = ScrollPage.loadBlock(label).create(muya, state);
+        block.replaceWith(listBlock);
+        const guessCursorBlock
+            = muya.editor.scrollPage?.queryBlock(anchorPath);
+        if (guessCursorBlock && isSelectionInSameBlock) {
+            const begin = Math.min(anchor!.offset, focus!.offset);
+            const end = Math.max(anchor!.offset, focus!.offset);
+            // Make guessCursorBlock active. queryBlock returns the
+            // closest block at the given path; for an inline path
+            // it's a Content leaf (which has setCursor).
+            (guessCursorBlock as Content).setCursor(begin, end, true);
+
+            return null;
+        }
+
+        return listBlock.firstContentInDescendant();
+    }
+}

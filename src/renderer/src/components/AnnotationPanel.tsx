@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import { ANNOTATION_KIND_LABELS, type Annotation, type AnnotationKind, type DocContent } from '@shared/types'
 import { scrollToEl } from '../utils/scroll'
 import { findAnnotationRange, scrollToRange, setTextHighlight } from '../utils/textRanges'
+import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
 
 function fmtTime(s: string): string {
   try {
@@ -62,54 +63,28 @@ export function scrollToHeading(entry: TocEntry): Element | null {
   return el
 }
 
-/** 编辑模式：编辑器随内容自增高（无内部滚动），按行号滚动外层 .reader-body */
-function scrollSourceLine(textarea: HTMLTextAreaElement, line: number): void {
-  const body = textarea.closest<HTMLElement>('.reader-body')
-  const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 24
-  const padTop = Number.parseFloat(getComputedStyle(textarea).paddingTop) || 0
-  if (body) {
-    const taTop = textarea.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop
-    body.scrollTop = Math.max(0, taTop + padTop + line * lineHeight - body.clientHeight / 3)
-  } else {
-    textarea.scrollTop = Math.max(0, line * lineHeight - textarea.clientHeight / 3)
-  }
-}
-
-/** 编辑模式：源码文本起点在 .reader-body 内容坐标中的偏移 + 行高 */
-function sourceTextOrigin(textarea: HTMLTextAreaElement): { top: number; lineHeight: number } {
-  const body = textarea.closest<HTMLElement>('.reader-body')
-  const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 24
-  const padTop = Number.parseFloat(getComputedStyle(textarea).paddingTop) || 0
-  const top = body
-    ? textarea.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop + padTop
-    : textarea.scrollTop + padTop
-  return { top, lineHeight }
-}
-
-/** 编辑模式：把源码编辑器滚动到标题行并选中该行（滚动在外层 .reader-body） */
+/** 源码目录仍按真实行号定位，由编辑器负责滚动外层阅读区。 */
 export function scrollToSourceHeading(entry: TocEntry): boolean {
-  const textarea = document.querySelector<HTMLTextAreaElement>('.editor-plain')
-  if (!textarea || entry.line === undefined) return false
-  const lines = textarea.value.split('\n')
+  const runtime = getMarkdownEditor()
+  if (runtime?.kind !== 'source' || entry.line === undefined) return false
+  const lines = runtime.getValue().split('\n')
   let start = 0
   for (let i = 0; i < entry.line; i++) start += lines[i].length + 1
   const end = start + (lines[entry.line]?.length ?? 0)
-  textarea.focus()
-  textarea.setSelectionRange(start, end)
-  scrollSourceLine(textarea, entry.line)
+  runtime.setSelectionOffsets(start, end)
+  runtime.scrollToLine(entry.line)
   return true
 }
 
-/** 编辑模式：在源码中定位标签引用文本，选中并滚动 */
+/** 在源码中定位标签引用文本，保留原有 quote 数据，不迁移批注库。 */
 function locateInSource(quote: string): boolean {
-  const textarea = document.querySelector<HTMLTextAreaElement>('.editor-plain')
-  if (!textarea) return false
-  const idx = textarea.value.indexOf(quote)
-  if (idx < 0) return false
-  textarea.focus()
-  textarea.setSelectionRange(idx, idx + quote.length)
-  const line = textarea.value.slice(0, idx).split('\n').length - 1
-  scrollSourceLine(textarea, line)
+  const runtime = getMarkdownEditor()
+  if (runtime?.kind !== 'source') return false
+  const value = runtime.getValue()
+  const index = value.indexOf(quote)
+  if (index < 0) return false
+  runtime.setSelectionOffsets(index, index + quote.length)
+  runtime.scrollToLine(value.slice(0, index).split('\n').length - 1)
   return true
 }
 
@@ -159,13 +134,10 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
     const update = (): void => {
       raf = 0
       if (mode === 'source') {
-        const textarea = document.querySelector<HTMLTextAreaElement>('.editor-plain')
-        if (!textarea) return
-        // 自增高编辑器：滚动量在 .reader-body 上，换算回源码行号
-        const { top: textTop, lineHeight } = sourceTextOrigin(textarea)
-        const cur = Math.floor((body.scrollTop + body.clientHeight / 2 - textTop) / lineHeight)
+        const currentLine = getMarkdownEditor()?.viewportLine()
+        if (currentLine === null || currentLine === undefined) return
         let current = 0
-        toc.forEach((h, index) => { if (h.line !== undefined && h.line <= cur) current = index })
+        toc.forEach((h, index) => { if (h.line !== undefined && h.line <= currentLine) current = index })
         if (activeRef.current !== current) { activeRef.current = current; setActiveIndex(current) }
         return
       }

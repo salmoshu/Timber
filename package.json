@@ -1,6 +1,6 @@
 {
   "name": "timber",
-  "version": "0.6.14",
+  "version": "0.7.0",
   "description": "Timber —— 项目理解工具：Git 历史 × 架构图 × 代码阅读 × 文档渲染，看清每一次提交如何塑造你的项目",
   "author": "Winchell.Hu <winchell.hu@outlook.com>",
   "license": "MIT",
@@ -9,12 +9,12 @@
   "packageManager": "pnpm@11.15.1",
   "main": "./out/main/index.js",
   "scripts": {
-    "postinstall": "node scripts/install-native.mjs && node scripts/copy-vditor-libs.mjs",
+    "postinstall": "node scripts/install-native.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs",
-    "predev": "node scripts/install-native.mjs && node scripts/copy-vditor-libs.mjs && node scripts/build-sidecar.mjs",
+    "predev": "node scripts/install-native.mjs && node scripts/build-sidecar.mjs",
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
-    "prebuild": "node scripts/copy-vditor-libs.mjs && node scripts/build-sidecar.mjs",
+    "prebuild": "node scripts/build-sidecar.mjs",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "test:markdown": "node scripts/test-markdown.mjs",
@@ -25,6 +25,8 @@
     "gen:icon": "node scripts/gen-icon.mjs"
   },
   "dependencies": {
+    "@muyajs/core": "file:./vendor/marktext-muya",
+    "codemirror": "^5.65.20",
     "docx": "^9.15.0",
     "electron-updater": "^6.8.9",
     "highlight.js": "^11.10.0",
@@ -34,11 +36,17 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.0",
     "remark-gfm": "^4.0.1",
-    "vditor": "^4.0.0",
     "xlsx": "^0.18.5",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@types/codemirror": "^5.60.15",
+    "@types/katex": "^0.16.8",
+    "@types/plantuml-encoder": "^1.4.2",
+    "@types/prismjs": "^1.26.6",
+    "@types/turndown": "^5.0.6",
+    "@types/underscore": "^1.13.0",
+    "@types/webfontloader": "^1.6.38",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

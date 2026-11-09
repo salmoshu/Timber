@@ -17,6 +17,7 @@ import {
 import { applyAppearance, loadSettings, saveSettings, type AppSettings } from './utils/settings'
 import { pruneRecentFiles, pushRecentFile, remapRecentFiles } from './utils/local-store'
 import { DOC_FORMAT_GROUPS } from '@shared/types'
+import { flushMarkdownEditor } from './utils/markdownEditorRuntime'
 
 /** 当前设置选中的扩展名列表（拼到 tree/rescan/search 请求） */
 function extsList(): string[] {
@@ -170,7 +171,7 @@ function stripBom(s: string): string {
 }
 
 /** 修改判定用的规范化：剥 BOM + 统一换行（CRLF/CR → LF）。
- *  Markdown 编辑器（Lute/Vditor）序列化恒为 LF 且无 BOM，磁盘原文在这些不可见
+ *  Markdown 编辑器（Muya/CodeMirror）序列化为 LF 且无 BOM，磁盘原文在这些不可见
  *  字符上与序列化输出的差异不应被当成「已修改」（v0.6.3 修复无操作却标脏误报）。 */
 function normalizeDocText(s: string): string {
   return stripBom(s).replace(/\r\n?/g, '\n')
@@ -1326,6 +1327,8 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async saveDoc(options) {
+    const pending = flushMarkdownEditor()
+    if (pending !== undefined && get().draft !== pending) get().setDraft(pending)
     const s = get()
     if (!s.activeDoc || !s.activeProjectId || !s.activeTabId || !s.dirty || s.saving) return
     if (autoSaveTimer) {

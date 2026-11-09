@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import { documentStats, type MarkdownCommand } from '../utils/markdownEditing'
 import { MARKDOWN_COMMAND_EVENT, runMarkdownCommand } from '../utils/markdownCommands'
 import { useWritingPreferences, toggleWritingPreference } from '../utils/writingPreferences'
+import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
 
 interface InsertItem { label: string; keywords: string; command: MarkdownCommand; markdown?: string }
 const INSERT_ITEMS: InsertItem[] = [
@@ -48,7 +49,7 @@ export function MarkdownWritingToolbar() {
   const search = useRef<HTMLInputElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const items = INSERT_ITEMS.filter((item) => `${item.label} ${item.keywords}`.toLowerCase().includes(query.toLowerCase().trim()))
-  const close = (): void => { setOpen(false); document.querySelector<HTMLElement>('.reader-body .editor-plain, .reader-body .markdown-editor .prose')?.focus({ preventScroll: true }) }
+  const close = (): void => { setOpen(false); getMarkdownEditor()?.focus() }
   const show = (): void => {
     const rect = trigger.current?.getBoundingClientRect()
     setPosition({ left: Math.max(8, Math.min(rect?.left ?? 120, window.innerWidth - 352)), top: Math.max(8, Math.min((rect?.bottom ?? 90) + 6, window.innerHeight - 420)) })
@@ -122,20 +123,25 @@ export function WritingStatus() {
     let frame = 0
     const update = (): void => {
       frame = 0
-      const ta = document.querySelector<HTMLTextAreaElement>('.resource-reader .editor-plain')
-      if (ta && document.activeElement === ta) {
-        const prefix = ta.value.slice(0, ta.selectionStart)
-        setCursor({ line: prefix.split('\n').length, column: [...prefix.slice(prefix.lastIndexOf('\n') + 1)].length + 1 })
-        setSelection(ta.value.slice(ta.selectionStart, ta.selectionEnd))
-      } else {
-        const current = window.getSelection()
-        setSelection(current && document.querySelector('.resource-reader .reader-body')?.contains(current.anchorNode) ? current.toString() : '')
+      const runtime = getMarkdownEditor()
+      const current = runtime?.getCursor()
+      if (!runtime || !current || !runtime.root.isConnected) {
+        setSelection('')
+        return
       }
+      if (runtime.kind === 'source') setCursor({ line: current.line, column: current.column })
+      setSelection(current.selectedText)
     }
     const schedule = (): void => { if (!frame) frame = requestAnimationFrame(update) }
     document.addEventListener('selectionchange', schedule)
     document.addEventListener('keyup', schedule)
-    return () => { cancelAnimationFrame(frame); document.removeEventListener('selectionchange', schedule); document.removeEventListener('keyup', schedule) }
+    window.addEventListener('timber:editor-runtime-changed', schedule)
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('selectionchange', schedule)
+      document.removeEventListener('keyup', schedule)
+      window.removeEventListener('timber:editor-runtime-changed', schedule)
+    }
   }, [])
   const selected = useMemo(() => selection ? documentStats(selection) : null, [selection])
   return <div className="writing-status" aria-label="文档统计">

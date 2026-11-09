@@ -28,3 +28,23 @@ export async function saveMarkdownImages(files: File[], projectId: string, docPa
   }
   return result.join('\n\n') + '\n'
 }
+
+function dataUrlToFile(src: string, alt: string): File {
+  const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,(.+)$/i.exec(src)
+  if (!match) throw new Error('仅支持 PNG、JPEG、GIF、WebP 图片数据')
+  const binary = atob(match[2])
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const extension = match[1].toLowerCase() === 'image/jpeg' ? 'jpg' : match[1].split('/')[1]
+  const name = (alt.replace(/[\\/:*?"<>|\r\n]/g, '').trim() || 'pasted-image') + `.${extension}`
+  return new File([bytes], name, { type: match[1].toLowerCase() })
+}
+
+/** Muya imageAction hook: serialize only the project-relative asset path. */
+export async function saveMarkdownImageSource(src: string, alt: string, projectId: string, docPath: string): Promise<string> {
+  if (!src.startsWith('data:')) return src
+  const markdown = await saveMarkdownImages([dataUrlToFile(src, alt)], projectId, docPath)
+  const path = /\]\(([^)]+)\)/.exec(markdown)?.[1]
+  if (!path) throw new Error('图片保存后未返回有效的相对路径')
+  return path
+}

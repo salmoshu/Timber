@@ -70,40 +70,14 @@
 }
 .prose pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
 
-.prose pre.vditor-wysiwyg__pre:has(> code.language-mermaid) {
-  margin: 22px 0; padding: 22px 24px;
-  background: var(--Bg-Secondary); color: var(--ink);
-  border: 1px solid var(--line); border-radius: var(--radius-card);
-  box-shadow: var(--shadow-xs); overflow-x: auto;
-  white-space: normal; text-align: center;
-}
-.prose pre.vditor-wysiwyg__pre > code.language-mermaid {
-  display: block; margin: 0; padding: 0;
-  background: transparent; color: var(--ink); white-space: normal;
-  font-family: sans-serif;
-}
 .prose code.language-mermaid > svg {
   display: block; max-width: 100%; height: auto; margin: 0 auto;
   border-radius: 10px; cursor: zoom-in;
-  /* 首帧即使用当前主题纸色；SVG 内联样式随后由 styleMermaidSvgs 同步。 */
   background: var(--paper) !important;
 }
 
-/* 进入代码块 / HTML 块编辑时，Vditor 会同时显示可编辑源码 pre 与渲染预览 pre，
-   两块等高堆叠在纸张正文里表现为一块多余的同高空白区。编辑态（源码 pre 带
-   display:block 内联样式）隐藏预览副本，只留可编辑源码；失焦后自动还原。 */
-.markdown-editor .vditor-wysiwyg__block:has(> pre:not(.vditor-wysiwyg__preview)[style*='block'])
-  > .vditor-wysiwyg__preview { display: none; }
-
-/* HTML 块的预览承载真实渲染的 HTML：用纸张底色与正文墨色，而非代码块暗色面板——
-   否则用户 HTML 自带浅色背景时，文字继承暗面板的浅色，糊成一片看不清 */
-.prose .vditor-wysiwyg__block[data-type='html-block'] > pre.vditor-wysiwyg__preview {
-  background: var(--paper); color: var(--ink); border-color: var(--line);
-}
-
-/* 表格自适应铺满页面左右（v0.6.4）：display:table 让列分摊满宽（Vditor 默认
-   display:block 只会让内部匿名表格收缩到内容宽，右侧留大片空白） */
-.vditor-reset.prose table {
+/* Muya 表格沿用 Timber 排版：铺满正文、允许换行，并统一明暗主题边框与斑马纹。 */
+.prose table {
   border-collapse: collapse; display: table; width: 100%; margin: 16px 0;
   font-size: var(--md-B3-font-size); line-height: 1.6;
 }
@@ -119,34 +93,28 @@
   background: var(--sb-thumb-hover);
 }
 .prose table::-webkit-scrollbar-track, .prose pre::-webkit-scrollbar-track { background: transparent; }
-/* 覆盖 Vditor 内置表格的硬编码浅色（行底 / 斑马纹 / 边框），统一走主题令牌。
-   注意斑马纹要压过 vditor 的 `.vditor-reset table tbody tr:nth-child(2n)`
-   （specificity (0,2,3)），行底规则必须带 tbody 且至少三层类名。 */
-.vditor-reset.prose table tr { background-color: transparent; border-top: 1px solid var(--line); }
-.vditor-reset.prose table td, .vditor-reset.prose table th { border: 1px solid var(--line); }
+.prose table tr { background-color: transparent; border-top: 1px solid var(--line); }
+.prose table td, .prose table th { border: 1px solid var(--line); }
 .prose th, .prose td { border: 1px solid var(--line); padding: 7px 11px; text-align: left; vertical-align: top; }
 .prose th { background: var(--Fills-F1); font-weight: var(--font-weight-semibold); white-space: nowrap; }
-.vditor-reset.prose table tbody tr:nth-child(2n) {
+.prose table tbody tr:nth-child(2n) {
   background-color: color-mix(in srgb, var(--Labels-Primary) 3%, transparent);
 }
-/* 列宽/行高：表格自适应铺满页面左右（v0.6.4，display:table 让列分摊满宽），
-   单元格允许换行、列宽以内容为上限封顶——拖拽列宽后由 inline colgroup 接管 */
-.vditor-reset.prose table { table-layout: auto; }
-.vditor-reset.prose table.an-col-resized { table-layout: fixed; }
-.vditor-reset.prose table td {
+.prose table { table-layout: auto; }
+.prose table.an-col-resized { table-layout: fixed; }
+.prose table td {
   white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
-  max-width: 36em; /* 最宽列 ≈ 36 字宽：更长的内容换行，行数与表宽折中 */
+  max-width: 36em;
 }
-.vditor-reset.prose table th {
+.prose table th {
   white-space: normal;
   word-break: break-word;
   max-width: 18em;
 }
-/* 拖拽调列宽时（v0.6.4）：固定布局下解除内容封顶，宽度完全交给 colgroup */
-.vditor-reset.prose table.an-col-resized td,
-.vditor-reset.prose table.an-col-resized th { max-width: none; }
+.prose table.an-col-resized td,
+.prose table.an-col-resized th { max-width: none; }
 
 .prose img { max-width: 100%; border-radius: var(--radius-xl); }
 .prose hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }

@@ -1,4 +1,4 @@
-// Runs the actual Reader + Vditor in an isolated Electron profile and a temporary project.
+// Runs Reader + Muya + CodeMirror in an isolated Electron profile and temporary project.
 // Build first: pnpm build. No installed app, real project or saved preferences are accessed.
 const fs = require('node:fs')
 const path = require('node:path')
@@ -7,11 +7,13 @@ const { createRequire } = require('node:module')
 const root = path.resolve(__dirname, '..')
 const temp = path.join(root, 'tmp', 'markdown-smoke-' + (process.env.TIMBER_SMOKE_ID || Date.now()))
 
-if (!process.versions.electron) {
+if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
   fs.mkdirSync(temp, { recursive: true })
+  const env = { ...process.env, TIMBER_SMOKE_ID: path.basename(temp).replace('markdown-smoke-', '') }
+  delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(require('electron'), [__filename], {
     cwd: root, windowsHide: true,
-    env: { ...process.env, TIMBER_SMOKE_ID: path.basename(temp).replace('markdown-smoke-', '') },
+    env,
     stdio: ['ignore', 'pipe', 'pipe']
   })
   let diagnostics = ''
@@ -21,7 +23,7 @@ if (!process.versions.electron) {
   child.on('exit', code => {
     const report = path.join(temp, 'result.json')
     if (fs.existsSync(report)) console.log(fs.readFileSync(report, 'utf8'))
-    if (code && diagnostics) console.error(diagnostics.slice(-12000))
+    if (code && diagnostics) console.error(diagnostics.slice(-16000))
     process.exitCode = code || 0
   })
 } else {
@@ -39,31 +41,51 @@ if (!process.versions.electron) {
     const checks = []
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
     const check = (condition, message) => { if (!condition) throw new Error(message) }
-    const wait = async (predicate, message, timeout = 12000) => {
+    const wait = async (predicate, message, timeout = 15000) => {
       const end = Date.now() + timeout
-      while (Date.now() < end) { if (predicate()) return; await pause(30) }
+      while (Date.now() < end) { if (predicate()) return; await pause(40) }
       throw new Error(message)
     }
-    const setValue = (element, value) => {
+    const runtime = () => window.__writer.runtime()
+    const value = () => window.__writer.value()
+    const setValue = (element, next) => {
       const prototype = element.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
-      Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value)
+      Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, next)
       element.dispatchEvent(new Event('input', { bubbles: true }))
     }
     const key = (element, value, options = {}) => element.dispatchEvent(new KeyboardEvent('keydown', { key: value, code: value, bubbles: true, cancelable: true, ...options }))
     const documentWith = async (markdown, mode = 'source') => {
       window.__writer.setDocument(markdown, mode)
-      await pause(160)
-      await wait(() => mode === 'source' ? !!document.querySelector('.editor-plain') : !!document.querySelector('.prose[contenteditable="true"]'), 'editor did not initialize')
-      await pause(80)
-      return document.querySelector(mode === 'source' ? '.editor-plain' : '.prose[contenteditable="true"]')
+      await wait(() => {
+        const current = runtime()
+        return current && current.kind === (mode === 'source' ? 'source' : 'muya') && current.root.isConnected
+      }, mode + ' editor did not initialize')
+      await wait(() => mode === 'source' ? !!document.querySelector('.CodeMirror') : !!document.querySelector('.prose.mu-editor .mu-container'), 'editor DOM did not render')
+      await pause(140)
+      check(!window.__writer.dirty(), 'editor initialization marked the document dirty')
+      return runtime().root
     }
-    const selectSource = (ta, start = ta.value.length, end = start) => { ta.focus(); ta.setSelectionRange(start, end); document.dispatchEvent(new Event('selectionchange')) }
-    const selectText = (prose, text) => {
-      const walker = document.createTreeWalker(prose, NodeFilter.SHOW_TEXT)
+    const selectSource = (_root, start = value().length, end = start) => {
+      window.__writer.selectSource(start, end)
+      document.dispatchEvent(new Event('selectionchange'))
+    }
+    const visibleTextNodes = prose => {
+      const walker = document.createTreeWalker(prose, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          const parent = node.parentElement
+          if (!parent || parent.closest('.mu-hide, .mu-remove, .mu-copy-header-link, .mu-fold-toggle, .mu-inline-image, .mu-image-container, .mu-math-render, .mu-ruby-render, .mu-code-line-numbers, .mu-language-input, [aria-hidden="true"]')) return NodeFilter.FILTER_REJECT
+          return NodeFilter.FILTER_ACCEPT
+        }
+      })
+      const nodes = []
       let node
-      while ((node = walker.nextNode())) {
+      while ((node = walker.nextNode())) nodes.push(node)
+      return nodes
+    }
+    const selectText = (prose, text, occurrence = 0) => {
+      for (const node of visibleTextNodes(prose)) {
         const index = node.data.indexOf(text)
-        if (index < 0) continue
+        if (index < 0 || occurrence-- > 0) continue
         prose.focus()
         const range = document.createRange()
         range.setStart(node, index); range.setEnd(node, index + text.length)
@@ -73,53 +95,78 @@ if (!process.versions.electron) {
       }
       throw new Error('text missing from editor: ' + text)
     }
+    const selectAcross = (prose, startText, endText) => {
+      const nodes = visibleTextNodes(prose)
+      let start
+      let end
+      for (const node of nodes) {
+        const first = node.data.indexOf(startText)
+        const last = node.data.indexOf(endText)
+        if (!start && first >= 0) start = { node, offset: first }
+        if (start && last >= 0) { end = { node, offset: last + endText.length }; break }
+      }
+      check(start && end, 'cross-block selection endpoints missing')
+      const range = document.createRange()
+      range.setStart(start.node, start.offset); range.setEnd(end.node, end.offset)
+      window.getSelection().removeAllRanges(); window.getSelection().addRange(range)
+      document.dispatchEvent(new Event('selectionchange'))
+    }
     const clickText = text => {
       const button = [...document.querySelectorAll('button')].find(element => element.textContent.trim() === text)
       check(button, 'button missing: ' + text); button.click()
     }
-    let ta = await documentWith('- task')
-    selectSource(ta)
-    key(ta, 'Enter')
-    check(ta.value === '- task\n- ', 'source list continuation failed: ' + ta.value)
-    key(ta, 'Enter')
-    check(ta.value === '- task\n', 'empty source list did not exit')
+    const replaceSource = next => {
+      selectSource(runtime().root, 0, value().length)
+      runtime().execute({ command: 'paragraph', markdown: next })
+    }
+
+    let source = await documentWith('- task')
+    let input = window.__writer.sourceInput()
+    selectSource(source)
+    key(input, 'Enter')
+    check(value() === '- task\n- ', 'source list continuation failed: ' + value())
+    key(input, 'Enter')
+    check(value() === '- task\n', 'empty source list did not exit')
     checks.push('source list continuation and exit')
 
-    ta = await documentWith('hello')
-    selectSource(ta, 0, 5)
-    key(ta, 'b', { code: 'KeyB', ctrlKey: true })
-    check(ta.value === '**hello**', 'source Ctrl+B did not format selection')
-    document.execCommand('undo')
+    source = await documentWith('hello')
+    input = window.__writer.sourceInput()
+    selectSource(source, 0, 5)
+    key(input, 'b', { code: 'KeyB', ctrlKey: true })
+    check(value() === '**hello**', 'source Ctrl+B did not format selection')
+    window.__writer.undo()
     await pause(60)
-    check(ta.value === 'hello', 'source formatting could not be undone')
-    selectSource(ta)
-    key(ta, '(' , { code: 'Digit9', shiftKey: true })
-    check(ta.value === 'hello()', 'shifted bracket was not paired')
-    key(ta, ')', { code: 'Digit0', shiftKey: true })
-    check(ta.value === 'hello()' && ta.selectionStart === 7, 'closing bracket was duplicated')
+    check(value() === 'hello', 'source formatting could not be undone: ' + value())
+    selectSource(source)
+    key(input, '(', { code: 'Digit9', shiftKey: true })
+    check(value() === 'hello()', 'shifted bracket was not paired')
+    key(input, ')', { code: 'Digit0', shiftKey: true })
+    check(value() === 'hello()' && runtime().getSelectionOffsets().start === 7, 'closing bracket was duplicated')
     checks.push('source formatting, undo and paired punctuation')
 
-    ta = await documentWith('one\ntwo')
-    selectSource(ta, 0, 7)
-    key(ta, 'Tab')
-    check(ta.value === '  one\n  two', 'source multi-line indent failed')
-    key(ta, 'Tab', { shiftKey: true })
-    check(ta.value === 'one\ntwo', 'source multi-line outdent failed')
+    source = await documentWith('one\ntwo')
+    input = window.__writer.sourceInput()
+    selectSource(source, 0, 7)
+    key(input, 'Tab')
+    check(value() === '  one\n  two', 'source multi-line indent failed')
+    key(input, 'Tab', { shiftKey: true })
+    check(value() === 'one\ntwo', 'source multi-line outdent failed')
     checks.push('multi-line Tab and Shift+Tab')
 
-    ta = await documentWith('mode switch', 'source')
-    setValue(ta, 'mode switch edited')
+    source = await documentWith('mode switch', 'source')
+    replaceSource('mode switch edited')
     await wait(() => window.__writer.draft() === 'mode switch edited', 'source draft did not update before mode switch')
     window.__writer.mode('read')
-    await wait(() => !!document.querySelector('.prose[contenteditable="true"]'), 'read mode did not mount after source edit')
+    await wait(() => runtime()?.kind === 'muya', 'read mode did not mount after source edit')
     check(window.__writer.draft() === 'mode switch edited', 'mode switch lost source draft')
     window.__writer.mode('source')
-    await wait(() => document.querySelector('.editor-plain')?.value === 'mode switch edited', 'source mode did not restore draft')
+    await wait(() => runtime()?.kind === 'source' && value().trim() === 'mode switch edited', 'source mode did not restore draft')
     checks.push('source and reading mode preserve draft')
 
-    ta = await documentWith('')
-    selectSource(ta)
-    key(ta, '/')
+    source = await documentWith('')
+    input = window.__writer.sourceInput()
+    selectSource(source)
+    key(input, '/')
     await wait(() => !!document.querySelector('.writing-insert-palette'), 'slash palette did not open')
     setValue(document.querySelector('[aria-label="搜索插入格式"]'), '表格')
     setValue(document.querySelector('[aria-label="表格数据行数"]'), '4')
@@ -127,87 +174,126 @@ if (!process.versions.electron) {
     await pause(60)
     document.querySelector('.writing-insert-list button').click()
     await pause(60)
-    check(ta.value.split('\n').filter(Boolean).length === 6 && ta.value.split('\n')[0].split('|').length === 7, 'configured table dimensions were not used')
+    check(value().split('\n').filter(Boolean).length === 6 && value().split('\n')[0].split('|').length === 7, 'configured table dimensions were not used')
     checks.push('slash insertion and configurable tables')
 
     let prose = await documentWith('hello world\n', 'read')
     selectText(prose, 'hello')
     window.__writer.command('bold')
-    await wait(() => window.__writer.draft().includes('**hello**'), 'WYSIWYG bold did not reach Markdown draft')
+    await wait(() => value().includes('**hello**'), 'WYSIWYG bold did not reach Markdown draft: ' + value())
     const bold = prose.querySelector('b, strong')
     check(bold?.textContent === 'hello' && Number(getComputedStyle(bold).fontWeight) >= 600, 'WYSIWYG bold formatting was not rendered')
-    await wait(() => !!document.querySelector('.vditor-toolbar [data-type="undo"]:not(.vditor-menu--disabled)'), 'WYSIWYG formatting was not recorded in undo history')
-    document.querySelector('.vditor-toolbar [data-type="undo"]').click()
-    await wait(() => !window.__writer.draft().includes('**hello**'), 'WYSIWYG toolbar operation was not undoable')
+    window.__writer.undo()
+    await wait(() => !value().includes('**hello**'), 'WYSIWYG operation was not undoable')
     checks.push('WYSIWYG selection formatting and undo')
 
     prose = await documentWith('Heading target\n', 'read')
     selectText(prose, 'Heading target')
     window.__writer.command('h2')
-    await wait(() => /^## Heading target/m.test(window.__writer.draft()), 'heading transformation was not saved')
+    await wait(() => /^## Heading target/m.test(value()), 'heading transformation was not saved: ' + value())
     checks.push('WYSIWYG heading transformation')
 
     const rich = '---\ntitle: 保留元信息\ntags: [markdown, timber]\n---\n\n# 示例\n\nhello world\n\n- [x] done\n- [ ] todo\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconst n = 1\n```\n\n$$\nE=mc^2\n$$\n\n注释[^note1]\n\n[^note1]: 说明\n'
     prose = await documentWith(rich, 'read')
     selectText(prose, 'hello')
     window.__writer.command('italic')
-    await wait(() => window.__writer.draft().includes('*hello*'), 'rich document did not sync')
-    const roundTrip = window.__writer.draft()
+    await wait(() => value().includes('*hello*'), 'rich document did not sync')
+    const roundTrip = value()
     for (const fragment of ['title: 保留元信息', 'tags: [markdown, timber]', '| A', 'const n = 1', 'E=mc^2', '[^note1]']) check(roundTrip.includes(fragment), 'Markdown round trip lost: ' + fragment)
     check(/^- \[[xX]\] done$/m.test(roundTrip), 'Markdown round trip lost the completed task')
     checks.push('front matter, task, table, code, math and footnote round trip')
+
+    prose = await documentWith('```cpp\n#include <vector>\nint main() { return 0; }\n```\n', 'read')
+    await wait(() => !!prose.querySelector('.mu-code-block .token'), 'lazy C++ Prism grammar did not highlight the code block')
+    check(value().includes('#include <vector>'), 'lazy grammar loading changed the code source')
+    checks.push('lazy Prism grammar loading preserves code and dependency order')
 
     prose = await documentWith('**hello** HELLO other\n', 'read')
     key(prose, 'h', { code: 'KeyH', ctrlKey: true })
     await wait(() => !!document.querySelector('[aria-label="查找文本"]'), 'Ctrl+H did not open replacement')
     setValue(document.querySelector('[aria-label="查找文本"]'), 'hello')
     setValue(document.querySelector('[aria-label="替换文本"]'), '世界')
-    await pause(200)
+    await pause(240)
     clickText('全部替换')
-    await wait(() => window.__writer.draft().includes('世界') && !/hello/i.test(window.__writer.draft()), 'WYSIWYG replace all failed: ' + window.__writer.draft())
-    check(window.__writer.draft().includes('**世界**'), 'replacement removed existing bold formatting')
+    await wait(() => value().includes('世界') && !/hello/i.test(value()), 'WYSIWYG replace all failed: ' + value())
+    check(value().includes('**世界**'), 'replacement removed existing bold formatting: ' + value())
     document.querySelector('[aria-label="关闭查找"]').click()
     checks.push('WYSIWYG replace all preserves inline formatting')
 
-    ta = await documentWith('Cat cat scatter')
-    key(ta, 'h', { code: 'KeyH', ctrlKey: true })
+    source = await documentWith('Cat cat scatter')
+    input = window.__writer.sourceInput()
+    key(input, 'h', { code: 'KeyH', ctrlKey: true })
     await wait(() => !!document.querySelector('[aria-label="替换文本"]'), 'source replace did not open')
     setValue(document.querySelector('[aria-label="查找文本"]'), 'cat')
     setValue(document.querySelector('[aria-label="替换文本"]'), 'dog')
     document.querySelector('[aria-label="全字匹配"]').click()
     document.querySelector('[aria-label="区分大小写"]').click()
-    await pause(200)
+    await pause(240)
     clickText('全部替换')
-    check(ta.value === 'Cat dog scatter', 'source case-sensitive whole-word replacement failed: ' + ta.value)
+    check(value() === 'Cat dog scatter', 'source case-sensitive whole-word replacement failed: ' + value())
     document.querySelector('[aria-label="关闭查找"]').click()
     checks.push('source find/replace with case and whole-word controls')
+
+    prose = await documentWith('前文 **粗体文字** 与 [链接文字](https://example.com)\n\n第一段落\n\n第二段落\n\n重复目标 中间\n\n重复目标 后缀', 'read')
+    selectText(prose, '粗体文字')
+    const boldAnchor = window.__writer.selectionAnchor()
+    check(boldAnchor?.quote === '粗体文字' && !boldAnchor.prefix.includes('**'), 'bold annotation included Markdown syntax')
+    check(window.__writer.annotationRange(boldAnchor), 'bold annotation did not resolve')
+    selectText(prose, '链接文字')
+    const linkAnchor = window.__writer.selectionAnchor()
+    check(linkAnchor?.quote === '链接文字' && !linkAnchor.suffix.includes('https://'), 'link annotation included the URL')
+    check(window.__writer.annotationRange(linkAnchor), 'link annotation did not resolve')
+    selectAcross(prose, '第一段落', '第二段落')
+    const crossAnchor = window.__writer.selectionAnchor()
+    check(crossAnchor?.quote.includes('第一段落') && crossAnchor.quote.includes('第二段落'), 'cross-paragraph anchor lost text')
+    check(window.__writer.annotationRange(crossAnchor), 'cross-paragraph annotation did not resolve')
+    selectText(prose, '重复目标', 1)
+    const duplicateAnchor = window.__writer.selectionAnchor()
+    const duplicateRange = window.__writer.annotationRange(duplicateAnchor)
+    check(duplicateRange && duplicateRange.comparePoint(window.getSelection().anchorNode, window.getSelection().anchorOffset) === 0, 'duplicate quote context selected the wrong occurrence')
+    selectText(prose, '第一段落')
+    const missingAnchor = window.__writer.selectionAnchor()
+    await documentWith('原文已经删除', 'read')
+    check(!window.__writer.annotationRange(missingAnchor), 'deleted quote unexpectedly resolved')
+    checks.push('Chinese, bold, link, cross-paragraph, duplicate and deleted annotation anchors')
 
     const canvas = document.createElement('canvas')
     canvas.width = canvas.height = 2
     canvas.getContext('2d').fillRect(0, 0, 2, 2)
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
     const file = new File([blob], 'screenshot.png', { type: 'image/png' })
-    ta = await documentWith('图片：\n')
-    selectSource(ta)
+    source = await documentWith('图片：\n')
+    input = window.__writer.sourceInput()
+    selectSource(source)
     let clipboard = new DataTransfer(); clipboard.items.add(file)
-    ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }))
-    await wait(() => /!\[screenshot\]\(assets\/image-[a-f0-9]+\.png\)/.test(ta.value), 'clipboard image did not save as a relative source link')
-    const imageMarkdown = ta.value
+    input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }))
+    await wait(() => /!\[screenshot\]\(assets\/image-[a-f0-9]+\.png\)/.test(value()), 'clipboard image did not save as a relative source link')
+    const imageMarkdown = value()
     prose = await documentWith(imageMarkdown + '\n再次粘贴\n', 'read')
+    await wait(() => {
+      const image = prose.querySelector('.mu-inline-image img[src*="/raw/"]')
+      return image?.complete && image.naturalWidth === 2
+    }, 'local image did not load through the raw display URL')
+    check(!/(?:\/raw\/|file:\/\/)/.test(value()), 'serialized Markdown contains a display-only image URL')
     selectText(prose, '再次粘贴')
     clipboard = new DataTransfer(); clipboard.items.add(file)
     prose.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }))
-    await wait(() => (window.__writer.draft().match(/assets\/image-/g) || []).length === 2, 'WYSIWYG image insertion failed')
-    checks.push('source and WYSIWYG clipboard images saved to project assets')
+    await wait(() => (value().match(/assets\/image-/g) || []).length === 2, 'WYSIWYG image insertion failed: ' + value())
+    clipboard = new DataTransfer(); clipboard.items.add(file)
+    prose.dispatchEvent(new DragEvent('drop', { dataTransfer: clipboard, bubbles: true, cancelable: true }))
+    await wait(() => (value().match(/assets\/image-/g) || []).length === 3, 'WYSIWYG image drop failed: ' + value())
+    checks.push('source paste, WYSIWYG paste/drop and raw-only display image URLs')
 
-    const exportSource = imageMarkdown + '\n```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```\n\n$$\nE=mc^2\n$$\n'
+    const exportSource = '---\ntitle: 导出元信息\n---\n\n' + imageMarkdown + '\n```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```\n\n$$\nE=mc^2\n$$\n\n脚注[^n]\n\n[^n]: 内容\n'
     const html = await window.__writer.exportHtml(exportSource, 'HTML <标题>')
     check(html.includes('data:image/png;base64,'), 'HTML did not embed local images')
     check(html.includes('<svg'), 'HTML did not render Mermaid as a static SVG')
+    check(html.includes('katex'), 'HTML did not render math')
+    check(html.includes('导出元信息'), 'HTML lost front matter')
     check(!html.includes(window.__writer.apiBase + '/raw/'), 'HTML contains a live local image URL')
     check(html.includes('HTML &lt;标题&gt;'), 'HTML title was not escaped')
     check(!/<script\b/i.test(html), 'HTML export contains application scripts')
-    checks.push('portable HTML embeds images and static diagrams')
+    checks.push('portable HTML embeds images, math, front matter and static diagrams')
 
     const long = Array.from({ length: 50 }, (_, i) => '# Heading ' + i + '\n\nParagraph ' + i).join('\n\n')
     prose = await documentWith(long, 'read')
@@ -232,18 +318,23 @@ if (!process.versions.electron) {
     check(!document.documentElement.classList.contains('writing-immersive'), 'Escape did not leave immersive mode')
     checks.push('focus and immersive modes')
 
-    ta = await documentWith(Array.from({ length: 45 }, (_, i) => '第 ' + i + ' 行内容').join('\n'))
-    selectSource(ta, ta.value.indexOf('第 30 行'))
+    source = await documentWith(Array.from({ length: 45 }, (_, i) => '第 ' + i + ' 行内容').join('\n'))
+    selectSource(source, value().indexOf('第 30 行'))
     window.__writer.toggle('typewriter')
     await wait(() => !!document.querySelector('.resource-reader.writing-typewriter'), 'typewriter mode did not activate')
     await pause(60)
-    ta.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }))
-    await pause(120)
-    const caret = window.__writer.caret(ta)
-    const body = ta.closest('.reader-body').getBoundingClientRect()
+    window.__writer.sourceInput().dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight', bubbles: true }))
+    await pause(140)
+    const caret = window.__writer.caret()
+    const body = source.closest('.reader-body').getBoundingClientRect()
     check(caret.top > body.top + body.height * .30 && caret.top < body.top + body.height * .65, 'typewriter caret was not centered: ' + JSON.stringify({ caretTop: caret.top, bodyTop: body.top, bodyHeight: body.height }))
     window.__writer.toggle('typewriter')
-    checks.push('typewriter centering with real textarea line geometry')
+    checks.push('typewriter centering with CodeMirror geometry')
+
+    check(window.__writer.resolveLink('notes/a.md', '../assets/p.png', '\\\\wsl.localhost\\Ubuntu-20.04\\home\\me\\e-wagon') === 'assets/p.png', 'WSL UNC project root was not resolved')
+    check(window.__writer.resolveLink('notes/a.md', '/home/me/e-wagon/assets/p.png', '\\\\wsl.localhost\\Ubuntu-20.04\\home\\me\\e-wagon') === 'assets/p.png', 'absolute WSL project image was not resolved')
+    checks.push('WSL path resolution fixtures (not a live remote-agent test)')
+
     await documentWith(rich + '\n' + imageMarkdown, 'read')
     return checks
   }
@@ -266,37 +357,61 @@ if (!process.versions.electron) {
       if (!response.ok) throw new Error('smoke project registration failed: ' + await response.text())
       const project = await response.json()
       const { build } = createRequire(require.resolve('vite'))('esbuild')
-      const luteFile = fs.readdirSync(path.join(root, 'out/renderer/assets')).find(name => name.startsWith('lute.min-') && name.endsWith('.js'))
-      if (!luteFile) throw new Error('Build first: pnpm build')
       const fixture = `
         import { createRoot } from 'react-dom/client'
         import Reader from './src/renderer/src/components/Reader'
         import { useStore } from './src/renderer/src/store'
         import { runMarkdownCommand } from './src/renderer/src/utils/markdownCommands'
         import { toggleWritingPreference } from './src/renderer/src/utils/writingPreferences'
-        import { textareaCaretRect } from './src/renderer/src/utils/editorGeometry'
+        import { getMarkdownEditor } from './src/renderer/src/utils/markdownEditorRuntime'
         import { renderMarkdownForExport, portableDocumentHtml } from './src/renderer/src/utils/documentExport'
+        import MarkdownView, { selectionAnchor, resolveDocLink } from './src/renderer/src/components/MarkdownView'
+        import { findAnnotationRange } from './src/renderer/src/utils/textRanges'
         const project = window.__smokeProject
+        let tabSequence = 0
         window.__writer = {
           setDocument(markdown, mode) {
             const doc = { path: 'note.md', ext: 'md', content: markdown, size: markdown.length, mtime: Date.now() }
+            const tabId = 'smoke-tab-' + (++tabSequence)
             const settings = { ...useStore.getState().settings, autoSaveDelayMs: 600000 }
-            useStore.setState({ ready: true, activeProjectId: project.id, projects: [project], activeTabId: 'smoke-tab', activeDoc: doc, draft: markdown, mode, dirty: false, saving: false, docLoading: false, annotations: [], composeQuote: null, settings, tabs: [{ id: 'smoke-tab', path: 'note.md', mode, pinned: true, draft: markdown, dirty: false, scrollTop: 0, doc }] })
+            useStore.setState({ ready: true, activeProjectId: project.id, projects: [project], activeTabId: tabId, activeDoc: doc, draft: markdown, mode, dirty: false, saving: false, docLoading: false, annotations: [], composeQuote: null, settings, tabs: [{ id: tabId, path: 'note.md', mode, pinned: true, draft: markdown, dirty: false, scrollTop: 0, doc }] })
           },
           draft: () => useStore.getState().draft,
+          dirty: () => useStore.getState().dirty,
           mode: mode => useStore.getState().setMode(mode),
           theme: theme => useStore.getState().setSetting('theme', theme),
-          command: runMarkdownCommand, toggle: toggleWritingPreference, caret: textareaCaretRect,
+          command: runMarkdownCommand,
+          toggle: toggleWritingPreference,
+          runtime: getMarkdownEditor,
+          value: () => getMarkdownEditor()?.getValue(),
+          sourceInput: () => getMarkdownEditor()?.root.querySelector('textarea'),
+          selectSource(start, end) { const editor = getMarkdownEditor(); editor.focus(); editor.setSelectionOffsets(start, end) },
+          undo: () => getMarkdownEditor()?.undo(),
+          caret: () => getMarkdownEditor()?.caretRect(),
+          selectionAnchor: () => selectionAnchor(document.querySelector('.prose')),
+          annotationRange(anchor) { return anchor && findAnnotationRange(document.querySelector('.prose'), anchor) },
+          resolveLink: resolveDocLink,
           apiBase: window.__smokeApi.base,
           async exportHtml(markdown, title) { return portableDocumentHtml(await renderMarkdownForExport(markdown, 'note.md', project.id), title, project.id) }
         }
         window.__writer.setDocument('# Smoke\\n', 'read')
         createRoot(document.getElementById('root')).render(<div className="app"><div className="app-body"><aside className="project-sidebar" style={{width:140}}>Smoke project</aside><main className="reader-wrap"><Reader /></main></div></div>)
       `
-      const bundle = (await build({ stdin: { contents: fixture, resolveDir: root, loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
-        loader: { '.css': 'empty', '.svg': 'dataurl', '.png': 'dataurl' }, tsconfig: path.join(root, 'tsconfig.json'),
+      const bundle = (await build({
+        stdin: { contents: fixture, resolveDir: root, loader: 'tsx' }, bundle: true, write: false, format: 'iife', platform: 'browser', jsx: 'automatic',
+        loader: { '.css': 'empty', '.svg': 'dataurl', '.png': 'dataurl', '.jpg': 'dataurl', '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl' }, tsconfig: path.join(root, 'tsconfig.json'),
         define: { __APP_VERSION__: JSON.stringify(require('../package.json').version), 'process.env.NODE_ENV': '"production"' },
-        plugins: [{ name: 'lute-url', setup(build) { build.onResolve({ filter: /\?url$/ }, args => ({ path: args.path, namespace: 'lute-url' })); build.onLoad({ filter: /.*/, namespace: 'lute-url' }, () => ({ contents: 'export default ' + JSON.stringify('./assets/' + luteFile), loader: 'js' })) } }]
+        plugins: [{
+          name: 'vite-inline-css',
+          setup(build) {
+            build.onResolve({ filter: /\.css\?inline$/ }, async args => {
+              const request = args.path.replace(/\?inline$/, '')
+              const resolved = await build.resolve(request, { resolveDir: args.resolveDir, kind: args.kind })
+              return { path: resolved.path, namespace: 'vite-inline-css' }
+            })
+            build.onLoad({ filter: /.*/, namespace: 'vite-inline-css' }, args => ({ contents: 'export default ' + JSON.stringify(fs.readFileSync(args.path, 'utf8')), loader: 'js' }))
+          }
+        }]
       })).outputFiles[0].text
       fs.writeFileSync(generated[1], bundle)
       let html = fs.readFileSync(path.join(root, 'out/renderer/index.html'), 'utf8').replace(/<script\b[^>]*src="[^"]+"[^>]*><\/script>/g, '')
@@ -304,20 +419,24 @@ if (!process.versions.electron) {
       html = html.replace('</body>', `<script>${bootstrap}</script><script src="./__smoke-reader.js"></script></body>`)
       fs.writeFileSync(generated[0], html)
       win = new BrowserWindow({ show: false, width: 1440, height: 1000, webPreferences: { backgroundThrottling: false, offscreen: true } })
-      win.webContents.on('console-message', (_event, level, message) => { if (level >= 3) failures.push(message) })
+      win.webContents.on('console-message', (_event, level, message, line, sourceId) => { if (level >= 3) failures.push(`${message} (${sourceId}:${line})`) })
       await win.loadFile(generated[0])
       const checks = await win.webContents.executeJavaScript('(' + runBrowserChecks.toString() + ')()', true)
       const imageFiles = fs.readdirSync(path.join(projectDir, 'assets')).length
-      if (imageFiles !== 2) throw new Error('expected two independently saved images, got ' + imageFiles)
+      if (imageFiles !== 3) throw new Error('expected three independently saved images, got ' + imageFiles)
       for (const theme of ['light', 'dark']) {
         await win.webContents.executeJavaScript(`(async () => {
           window.__writer.theme(${JSON.stringify(theme)})
           const deadline = Date.now() + 5000
-          while (!document.querySelector(${JSON.stringify(theme === 'dark' ? '.vditor--dark .prose' : '.vditor:not(.vditor--dark) .prose')})) {
+          while (!document.querySelector('.timber-muya .mu-container')) {
             if (Date.now() > deadline) throw new Error('Editor did not apply ${theme} theme')
             await new Promise(resolve => setTimeout(resolve, 30))
           }
           document.querySelector('.reader-body').scrollTop = 0
+          await new Promise(resolve => setTimeout(resolve, 300))
+          const image = document.querySelector('.timber-muya .mu-inline-image img')
+          if (!image?.complete || image.naturalWidth !== 2) throw new Error('Image failed after ${theme} theme initialization')
+          if (window.__writer.dirty()) throw new Error('${theme} theme initialization marked a pristine document dirty')
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
         })()`)
         fs.writeFileSync(path.join(temp, theme + '.png'), (await win.webContents.capturePage()).toPNG())
@@ -335,12 +454,12 @@ if (!process.versions.electron) {
       const editorState = win && !win.isDestroyed() ? await win.webContents.executeJavaScript(`({
         draft: window.__writer?.draft(),
         prose: document.querySelector('.prose')?.innerHTML,
-        source: document.querySelector('.editor-plain')?.value,
+        source: window.__writer?.value(),
         selection: window.getSelection()?.toString()
       })`).catch(() => null) : null
       fs.writeFileSync(report, JSON.stringify({ passed: false, error: String(error.stack || error), editorState, consoleErrors: failures, diagnostics: temp }, null, 2))
       sidecar?.kill()
-      for (const file of generated) { if (fs.existsSync(file)) fs.unlinkSync(file) }
+      // Keep the generated fixture on failure so syntax and runtime errors can be inspected.
       app.exit(1)
     }
   })

@@ -1,10 +1,9 @@
-import Vditor from 'vditor'
+import { MarkdownToHtml, embeddedKatexCss } from '@muyajs/core'
 import hljs from 'highlight.js/lib/common'
 import { origProjectId, rawBaseFor, useStore } from '../store'
 import { resolveDocLink, wrapSoftBreaks } from '../components/MarkdownView'
 import { sanitizeRenderedHtml, upgradeInlineHtml } from './sanitizeHtml'
 import { applyImageMetas } from './imageSizes'
-import { renderMermaidBlocks } from './mermaid'
 import { askConfirm, askPath } from './dialogs'
 import { htmlToDocxBase64 } from './docxExport'
 
@@ -89,35 +88,30 @@ function escapeHtml(value: string): string {
 }
 
 export async function renderMarkdownForExport(markdown: string, docPath: string, projectId: string): Promise<string> {
-  let body = await Vditor.md2html(markdown, {
-    cdn: 'vditor-libs',
-    mode: 'light',
-    hljs: { enable: false },
-    theme: { current: '' },
-    markdown: {
-      sanitize: false,
-      mark: true,
-      sub: true,
-      sup: true,
-      footnotes: true,
-      gfmAutoLink: true,
-      callout: true,
-      mathBlockPreview: true,
-      codeBlockPreview: true
-    }
-  })
+  const project = useStore.getState().projects.find((item) => item.id === projectId)
+  let body = await new MarkdownToHtml(markdown, undefined, {
+    frontMatter: true,
+    footnote: true,
+    cjkEmphasis: true,
+    superSubScript: true,
+    texMathDollars: true,
+    texMathGfm: true,
+    highlightSyntax: true,
+    githubAlerts: true,
+    multilineBlockquote: true,
+    fancyLists: true
+  }).renderHtml()
   body = wrapSoftBreaks(body)
   const template = document.createElement('template')
   template.innerHTML = body
   sanitizeRenderedHtml(template.content)
   upgradeInlineHtml(template.content)
-  // Mermaid 块渲染为 SVG（v0.6.10：md2html 只产出静态源码，此前分页预览/导出
-  // 不渲染图）；先渲染，宽度/对齐元数据随后才能命中 svg。
-  // 测量宽度固定为 A4 内容宽：gantt 等按可用宽排版的图才与分页尺寸一致
-  await renderMermaidBlocks(template.content, false, A4_CONTENT_WIDTH)
+  // Muya 已将 Mermaid 和其他图表渲染为静态 SVG；补齐 Timber 的分页与尺寸元数据类名。
+  template.content.querySelectorAll<HTMLElement>('.mermaid').forEach((element) => element.classList.add('mermaid-doc', 'language-mermaid'))
   applyImageMetas(template.content, projectId, docPath)
   markTallMermaidPageBreaks(template.content)
   template.content.querySelectorAll<HTMLElement>('pre code').forEach((code) => {
+    if (code.querySelector('.token')) return
     const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9)
     try {
       if (language && hljs.getLanguage(language)) hljs.highlightElement(code)
@@ -130,11 +124,11 @@ export async function renderMarkdownForExport(markdown: string, docPath: string,
   template.content.querySelectorAll('img').forEach((img) => {
     const src = img.getAttribute('src') ?? ''
     if (!src || /^(https?:|data:|blob:)/i.test(src)) return
-    const resolved = resolveDocLink(docPath, src)
+    const resolved = resolveDocLink(docPath, src, project?.path)
     if (!resolved) return
     img.setAttribute('src', `${base}/raw/${pid}/${resolved.split('/').map(encodeURIComponent).join('/')}`)
   })
-  return `<div class="vditor-reset prose">${template.innerHTML}</div>`
+  return `<div class="prose">${template.innerHTML}</div>`
 }
 
 export async function waitForHtmlImages(html: string): Promise<void> {
@@ -148,7 +142,7 @@ export async function waitForHtmlImages(html: string): Promise<void> {
 }
 
 function continuousHtml(body: string, title: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}.export-document{width:794px;margin:0 auto;padding:42px 48px;background:#fff;}</style></head><body><main class="export-document">${body}</main></body></html>`
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${embeddedKatexCss()}\n.export-document{width:794px;margin:0 auto;padding:42px 48px;background:#fff;}</style></head><body><main class="export-document">${body}</main></body></html>`
 }
 
 function staticPagedDocument(pagesHtml: string, title: string): string {
@@ -163,7 +157,7 @@ function staticPagedDocument(pagesHtml: string, title: string): string {
     .pagedjs_page .mermaid-doc svg { max-height: 900px; }
     .pagedjs_page .mermaid-page-break { break-before: auto !important; page-break-before: auto !important; }
   `
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${generatedCss}\n${printCss}</style></head><body>${pagesHtml}</body></html>`
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${embeddedKatexCss()}\n${generatedCss}\n${printCss}</style></head><body>${pagesHtml}</body></html>`
 }
 
 async function ensurePagedPreview(): Promise<void> {
@@ -211,22 +205,9 @@ export async function portableDocumentHtml(body: string, title: string, projectI
     image.removeAttribute('data-an-orig-src')
     image.removeAttribute('data-an-display-src')
   }))
-  let mathCss = ''
-  if (template.content.querySelector('.katex')) {
-    const stylesheetUrl = new URL('vditor-libs/dist/js/katex/katex.min.css', document.baseURI)
-    const response = await fetch(stylesheetUrl)
-    if (!response.ok) throw new Error('公式样式读取失败')
-    mathCss = await response.text()
-    const resources = [...new Set([...mathCss.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1]))]
-    await Promise.all(resources.map(async (resource) => {
-      const url = new URL(resource.replace(/["']/g, ''), stylesheetUrl)
-      const font = await fetch(url)
-      if (!font.ok) throw new Error('公式字体读取失败')
-      mathCss = mathCss.split(`url(${resource})`).join(`url("${await blobDataUrl(await font.blob())}")`)
-    }))
-  }
+  const mathCss = template.content.querySelector('.katex') ? embeddedKatexCss() : ''
   // No application scripts, editor controls, token-bearing URLs or live diagram dependencies.
-  template.content.querySelectorAll('script, .vditor-copy, .vditor-anchor').forEach((element) => element.remove())
+  template.content.querySelectorAll('script, .mu-copy-header-link, .mu-code-copy').forEach((element) => element.remove())
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${mathCss}\n.export-document{max-width:960px;margin:0 auto;padding:36px clamp(16px,5vw,60px)}pre{overflow-x:auto!important}table{max-width:100%}</style></head><body><main class="export-document">${template.innerHTML}</main></body></html>`
 }
 

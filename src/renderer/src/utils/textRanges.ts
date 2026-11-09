@@ -13,9 +13,18 @@ export function setTextHighlight(name: string, ranges: Range[]): void {
 }
 
 export function collectText(root: HTMLElement) {
+  const muya = root.classList.contains('mu-editor')
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => node.parentElement?.closest('script, style, textarea, [aria-hidden="true"], [style*="display: none"], [style*="display:none"]')
-      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    acceptNode: (node) => {
+      const parent = node.parentElement
+      if (!parent || parent.closest('script, style, textarea, [aria-hidden="true"], [style*="display: none"], [style*="display:none"], [style*="visibility: hidden"]'))
+        return NodeFilter.FILTER_REJECT
+      // Muya keeps Markdown markers and alternate render copies in the DOM. They are
+      // zero-sized or visually replaced, so including them breaks quote/prefix/suffix anchors.
+      if (muya && parent.closest('.mu-hide, .mu-remove, .mu-copy-header-link, .mu-fold-toggle, .mu-inline-image, .mu-image-container, .mu-math-render, .mu-ruby-render, .mu-code-line-numbers, .mu-language-input'))
+        return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    }
   })
   const nodes: Text[] = []
   const starts: number[] = []

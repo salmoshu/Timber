@@ -1,0 +1,879 @@
+import type { Muya } from '../../../index';
+import type { CodeEmojiMathToken, HTMLTagToken, ImageToken, LinkToken, ReferenceLinkToken, Token } from '../../../inline/model/types';
+import type { IRenderCursor } from '../../../selection/types';
+import type {
+    IBlockQuoteState,
+    IBulletListState,
+    IListItemState,
+    IOrderListState,
+    IParagraphState,
+    ITaskListItemState,
+    ITaskListState,
+} from '../../../state/types';
+import type { Nullable } from '../../../types';
+import type { GithubAlertType } from '../../../utils/githubAlerts';
+import type Parent from '../../base/parent';
+import type BulletList from '../../commonMark/bulletList';
+import type Paragraph from '../../commonMark/paragraph';
+import { HTML_TAGS, VOID_HTML_TAGS } from '../../../config';
+import { tokenEvents } from '../../../inline/model/traversal';
+import { parseInline } from '../../../inline/parser/lexer';
+import { isListItemState, isTaskListItemState } from '../../../state/types';
+import { ChangeSource } from '../../../types';
+import { firstWordOfInfo, isKeyboardEvent, isLengthEven, parseFenceLine } from '../../../utils';
+import { createDiagramState, diagramTypeOfLang } from '../../../utils/diagram/fence';
+import { matchGithubAlertMarker } from '../../../utils/githubAlerts';
+import logger from '../../../utils/logger';
+import Format from '../../base/format';
+import BlockQuote from '../../commonMark/blockQuote';
+import OrderList from '../../commonMark/orderList';
+import TaskList from '../../gfm/taskList';
+import { convertGithubAlert } from '../../githubAlerts';
+import { moveListItems } from '../../listOperations';
+import { convertIndentedParagraphs } from '../../paragraphIndentation';
+import { ScrollPage } from '../../scrollPage';
+
+enum UnindentType {
+    INDENT,
+    REPLACEMENT,
+}
+
+function isListItemBlock(block: Nullable<Parent>): block is Parent {
+    return block?.blockName === 'list-item' || block?.blockName === 'task-list-item';
+}
+
+function isListBlock(block: Nullable<Parent>): block is Parent {
+    return block?.blockName === 'bullet-list'
+        || block?.blockName === 'order-list'
+        || block?.blockName === 'task-list';
+}
+
+const debug = logger('paragraph:content');
+
+const HTML_BLOCK_REG = /^<([a-z\d-]+)(?=\s|>)[^<>]*>$/i;
+const MATH_BLOCK_REG = /^\$\$[ \t]*$/;
+const MULTILINE_BLOCKQUOTE_REG = /^>>>[ \t]*$/;
+// eslint-disable-next-line regexp/no-super-linear-backtracking
+const TABLE_BLOCK_REG = /^\|.*?(\\*)\|.*?(\\*)\|/;
+
+type BlockConversion
+    = | { kind: 'math' }
+        | { kind: 'code'; lang: string; fenceChar: '`' | '~' }
+        | { kind: 'table' }
+        | { kind: 'html'; tagName: string }
+        | { kind: 'multiline-blockquote' }
+        | { kind: 'github-alert'; type: GithubAlertType };
+
+function matchBlockConversion(
+    text: string,
+    texMathDollars: boolean,
+    multilineBlockquote: boolean,
+    githubAlerts: boolean,
+): BlockConversion | null {
+    const alertType = githubAlerts ? matchGithubAlertMarker(text) : null;
+    if (alertType)
+        return { kind: 'github-alert', type: alertType };
+
+    if (multilineBlockquote && MULTILINE_BLOCKQUOTE_REG.test(text))
+        return { kind: 'multiline-blockquote' };
+
+    // A `$$` paragraph only becomes a math block while the dollar syntax is
+    // recognised; otherwise the block would serialize to markdown this editor
+    // no longer reads back (#5446).
+    if (texMathDollars && MATH_BLOCK_REG.test(text))
+        return { kind: 'math' };
+
+    const fence = parseFenceLine(text);
+    if (fence)
+        return { kind: 'code', lang: firstWordOfInfo(fence.info), fenceChar: fence.fenceChar };
+
+    const tableMatch = TABLE_BLOCK_REG.exec(text);
+    if (tableMatch && isLengthEven(tableMatch[1]) && isLengthEven(tableMatch[2]))
+        return { kind: 'table' };
+
+    const htmlMatch = HTML_BLOCK_REG.exec(text);
+    const tagName = htmlMatch && htmlMatch[1] && HTML_TAGS.find(t => t === htmlMatch[1]);
+    if (tagName && VOID_HTML_TAGS.every(tag => tag !== tagName))
+        return { kind: 'html', tagName };
+
+    return null;
+}
+
+const BOTH_SIDES_FORMATS = [
+    'strong',
+    'em',
+    'inline_code',
+    'image',
+    'link',
+    'reference_image',
+    'reference_link',
+    'emoji',
+    'del',
+    'html_tag',
+    'inline_math',
+];
+
+interface IEndFormatHit {
+    offset: number;
+}
+
+type TEndFormatHandler = (token: Token, offset: number) => Nullable<IEndFormatHit>;
+
+function endHitStrongLike(token: Token, offset: number): Nullable<IEndFormatHit> {
+    const { end } = token.range;
+    const { marker } = token as CodeEmojiMathToken;
+    if (marker && offset === end - marker.length)
+        return { offset: marker.length };
+
+    return null;
+}
+
+function endHitImageLink(token: Token, offset: number): Nullable<IEndFormatHit> {
+    const { end } = token.range;
+    const { backlash } = token as ImageToken;
+    const srcAndTitle = (token as ImageToken).srcAndTitle;
+    const hrefAndTitle = (token as LinkToken).hrefAndTitle;
+    const linkTitleLen = (srcAndTitle || hrefAndTitle).length;
+    const secondLashLen
+        = backlash && backlash.second ? backlash.second.length : 0;
+    if (offset === end - 3 - (linkTitleLen + secondLashLen))
+        return { offset: 2 };
+    if (offset === end - 1)
+        return { offset: 1 };
+
+    return null;
+}
+
+function endHitReference(token: Token, offset: number): Nullable<IEndFormatHit> {
+    const { end } = token.range;
+    const { backlash, isFullLink, label } = token as ReferenceLinkToken;
+    const labelLen = label ? label.length : 0;
+    const secondLashLen
+        = backlash && backlash.second ? backlash.second.length : 0;
+    if (isFullLink) {
+        if (offset === end - 3 - labelLen - secondLashLen)
+            return { offset: 2 };
+        if (offset === end - 1)
+            return { offset: 1 };
+        return null;
+    }
+    if (offset === end - 1)
+        return { offset: 1 };
+
+    return null;
+}
+
+function endHitHtmlTag(token: Token, offset: number): Nullable<IEndFormatHit> {
+    const { end } = token.range;
+    const { closeTag } = token as HTMLTagToken;
+    if (closeTag && offset === end - closeTag.length)
+        return { offset: closeTag.length };
+
+    return null;
+}
+
+const END_FORMAT_HANDLERS: Record<string, TEndFormatHandler> = {
+    strong: endHitStrongLike,
+    em: endHitStrongLike,
+    inline_code: endHitStrongLike,
+    emoji: endHitStrongLike,
+    del: endHitStrongLike,
+    inline_math: endHitStrongLike,
+    image: endHitImageLink,
+    link: endHitImageLink,
+    reference_image: endHitReference,
+    reference_link: endHitReference,
+    html_tag: endHitHtmlTag,
+};
+
+function parseTableHeader(text: string) {
+    const rowHeader = [];
+    const len = text.length;
+    let i;
+
+    for (i = 0; i < len; i++) {
+        const char = text[i];
+        if (/^[^|]$/.test(char))
+            rowHeader[rowHeader.length - 1] += char;
+
+        if (/\\/.test(char))
+            rowHeader[rowHeader.length - 1] += text[++i];
+
+        if (/\|/.test(char) && i !== len - 1)
+            rowHeader.push('');
+    }
+
+    return rowHeader;
+}
+
+class ParagraphContent extends Format {
+    public override parent: Nullable<Paragraph> = null;
+
+    static override blockName = 'paragraph.content';
+
+    static create(muya: Muya, text: string) {
+        const content = new ParagraphContent(muya, text);
+
+        return content;
+    }
+
+    constructor(muya: Muya, text: string) {
+        super(muya, text);
+
+        this.classList = [...this.classList, 'mu-paragraph-content'];
+        this.attributes['empty-hint'] = muya.i18n.t('Type / to insert...');
+        this.createDomNode();
+    }
+
+    override getAnchor() {
+        return this.parent;
+    }
+
+    override update(cursor?: IRenderCursor, highlights = []) {
+        this.inlineEngine.patch(this, cursor, highlights);
+        const { label } = this.inlineEngine.getLabelInfo(this);
+
+        if (this.scrollPage && label)
+            this.scrollPage.updateRefLinkAndImage(label);
+    }
+
+    override backspaceHandler(event: Event) {
+        const { start, end } = this.getCursor()!;
+        const { eventCenter } = this.muya;
+        if (start.offset !== 0 || end.offset !== 0) {
+            super.backspaceHandler(event);
+            eventCenter.emit('content-change', { block: this });
+            return;
+        }
+
+        event.preventDefault();
+        const type = this._paragraphParentType();
+
+        switch (type) {
+            case 'block-quote':
+                return this._handleBackspaceInBlockQuote();
+
+            case 'github-alert':
+                return this._handleBackspaceInGithubAlert(event);
+
+            case 'paragraph':
+                return this._handleBackspaceInParagraph();
+
+            case 'footnote':
+                return this._handleBackspaceInFootnote();
+
+            case 'list-item': // fall through
+            case 'task-list-item':
+                return this._handleBackspaceInList();
+
+            default:
+                debug.error('Unknown backspace type');
+                break;
+        }
+    }
+
+    override inputHandler(event: Event) {
+        super.inputHandler(event);
+        const { eventCenter } = this.muya;
+
+        eventCenter.emit('content-change', { block: this });
+    }
+
+    private _enterConvert(event: KeyboardEvent, match: BlockConversion | null) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (!match)
+            return super.enterHandler(event);
+
+        switch (match.kind) {
+            case 'github-alert':
+                convertGithubAlert(this.parent!.parent!, `github-alert ${match.type}`);
+                break;
+
+            case 'math': {
+                const state = {
+                    name: 'math-block',
+                    text: '',
+                    meta: {
+                        mathStyle: '',
+                    },
+                };
+                const mathBlock = ScrollPage.loadBlock('math-block').create(
+                    this.muya,
+                    state,
+                );
+                this.parent!.replaceWith(mathBlock);
+                mathBlock.firstContentInDescendant().setCursor(0, 0);
+                break;
+            }
+
+            case 'code': {
+                const { lang, fenceChar } = match;
+                const diagramType = diagramTypeOfLang(lang);
+                if (diagramType) {
+                    const state = createDiagramState(diagramType);
+                    const diagramBlock = ScrollPage.loadBlock(state.name).create(
+                        this.muya,
+                        state,
+                    );
+
+                    this.parent!.replaceWith(diagramBlock);
+
+                    diagramBlock.firstContentInDescendant().setCursor(0, 0, true);
+                }
+                else {
+                    const state = {
+                        name: 'code-block',
+                        meta: {
+                            lang,
+                            type: 'fenced',
+                            fenceChar,
+                        },
+                        text: '',
+                    };
+                    const codeBlock = ScrollPage.loadBlock(state.name).create(
+                        this.muya,
+                        state,
+                    );
+
+                    this.parent!.replaceWith(codeBlock);
+
+                    codeBlock.lastContentInDescendant().setCursor(0, 0);
+                }
+                break;
+            }
+
+            case 'table': {
+                const tableHeader = parseTableHeader(this.text);
+                // The registry’s common constructor type does not expose the table-specific factory.
+                const tableCtor = ScrollPage.loadBlock('table') as {
+                    createWithHeader?: (muya: Muya, header: string[]) => Parent;
+                };
+                const tableBlock = tableCtor.createWithHeader!(this.muya, tableHeader);
+
+                this.parent!.replaceWith(tableBlock);
+
+                const tableBody = tableBlock.firstChild as Parent;
+                const secondRow = tableBody.find(1) as Parent;
+                secondRow.firstContentInDescendant()?.setCursor(0, 0, true);
+                break;
+            }
+
+            case 'html': {
+                const { tagName } = match;
+                const state = {
+                    name: 'html-block',
+                    text: `<${tagName}>\n\n</${tagName}>`,
+                };
+                const htmlBlock = ScrollPage.loadBlock('html-block').create(
+                    this.muya,
+                    state,
+                );
+                this.parent!.replaceWith(htmlBlock);
+                const offset = tagName.length + 3;
+                htmlBlock.firstContentInDescendant().setCursor(offset, offset);
+                break;
+            }
+
+            case 'multiline-blockquote': {
+                const state: IBlockQuoteState = {
+                    name: 'block-quote',
+                    meta: { style: 'fenced' },
+                    children: [{ name: 'paragraph', text: '' }],
+                };
+                const blockQuote = ScrollPage.loadBlock('block-quote').create(
+                    this.muya,
+                    state,
+                );
+                this.parent!.replaceWith(blockQuote);
+                blockQuote.firstContentInDescendant().setCursor(0, 0, true);
+                break;
+            }
+        }
+    }
+
+    private _enterInBlockQuote(event: KeyboardEvent) {
+        if (this.text.length !== 0)
+            return super.enterHandler(event);
+        event.preventDefault();
+        event.stopPropagation();
+        const paragraph = this.parent!;
+        const container = paragraph.parent!;
+        const offset = container.offset(paragraph);
+        const outside = paragraph.clone() as Parent;
+        const state = container.getState();
+        if (!('children' in state))
+            return;
+        const tail = state.children.slice(offset + 1);
+        if (offset === 0) {
+            container.parent!.insertBefore(outside, container);
+        }
+        else {
+            container.parent!.insertAfter(outside, container);
+            if (tail.length) {
+                const sibling = ScrollPage.loadBlock(state.name).create(this.muya, { ...state, children: tail });
+                container.parent!.insertAfter(sibling, outside);
+                container.forEachAt(offset + 1, undefined, node => node.remove());
+            }
+        }
+        paragraph.remove();
+        if (!container.length())
+            container.remove();
+        outside.firstContentInDescendant()?.setCursor(0, 0, true);
+    }
+
+    private _enterInListItem(event: KeyboardEvent) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const { text, parent, muya } = this;
+        const { start, end } = this.getCursor()!;
+        const listItem = parent!.parent!;
+        const list = listItem!.parent! as BulletList | OrderList | TaskList;
+
+        if (text.length === 0) {
+            if (parent!.isOnlyChild()) {
+                switch (true) {
+                    case listItem.isOnlyChild(): {
+                        const newParagraph = parent!.clone() as Paragraph;
+                        list.replaceWith(newParagraph);
+                        newParagraph?.firstContentInDescendant()?.setCursor(0, 0);
+                        break;
+                    }
+
+                    case listItem.isFirstChild(): {
+                        const newParagraph = parent!.clone() as Paragraph;
+                        listItem.remove();
+                        list.parent!.insertBefore(newParagraph, list);
+                        newParagraph?.firstContentInDescendant()?.setCursor(0, 0);
+                        break;
+                    }
+
+                    case listItem.isLastChild(): {
+                        const newParagraph = parent!.clone() as Paragraph;
+                        listItem.remove();
+                        list.parent!.insertAfter(newParagraph, list);
+                        newParagraph?.firstContentInDescendant()?.setCursor(0, 0);
+                        break;
+                    }
+
+                    default: {
+                        const newParagraph = parent!.clone() as Paragraph;
+                        const newListState: IBulletListState | IOrderListState | ITaskListState
+                            = list instanceof TaskList
+                                ? { name: 'task-list', meta: { ...list.meta }, children: [] }
+                                : list instanceof OrderList
+                                    ? { name: 'order-list', meta: { ...list.meta }, children: [] }
+                                    : { name: 'bullet-list', meta: { ...list.meta }, children: [] };
+                        const offset = list.offset(listItem);
+                        list.forEachAt(offset + 1, undefined, (node) => {
+                            if (node.isParent()) {
+                                const childState = node.getState();
+                                if (newListState.name === 'task-list') {
+                                    if (isTaskListItemState(childState))
+                                        newListState.children.push(childState);
+                                }
+                                else if (isListItemState(childState)) {
+                                    newListState.children.push(childState);
+                                }
+                            }
+                            node.remove();
+                        });
+                        const newList = ScrollPage.loadBlock(newListState.name).create(
+                            this.muya,
+                            newListState,
+                        );
+                        list.parent!.insertAfter(newParagraph, list);
+                        list.parent!.insertAfter(newList, newParagraph);
+                        listItem.remove();
+                        newParagraph?.firstContentInDescendant()?.setCursor(0, 0);
+                        break;
+                    }
+                }
+            }
+            else {
+                const newListItemState: IListItemState | ITaskListItemState
+                    = listItem.blockName === 'task-list-item'
+                        ? { name: 'task-list-item', meta: { checked: false }, children: [] }
+                        : { name: 'list-item', children: [] };
+
+                const offset = listItem.offset(parent!);
+                // Splitting from index 0 would empty the original list item,
+                // leaving a childless list-item that breaks arrow navigation
+                // (#4644). Keep the empty first paragraph and split below it.
+                const from = offset === 0 ? 1 : offset;
+                listItem.forEachAt(from, undefined, (node) => {
+                    if (node.isParent())
+                        newListItemState.children.push(node.getState());
+                    node.remove();
+                });
+
+                const newListItem = ScrollPage.loadBlock(newListItemState.name).create(
+                    this.muya,
+                    newListItemState,
+                );
+                list.insertAfter(newListItem, listItem);
+
+                newListItem.firstContentInDescendant().setCursor(0, 0);
+            }
+        }
+        else {
+            if (parent!.isOnlyChild()) {
+                this.text = text.substring(0, start.offset);
+                const paragraphChild: IParagraphState = {
+                    name: 'paragraph',
+                    text: text.substring(end.offset),
+                };
+                const newNodeState: IListItemState | ITaskListItemState
+                    = listItem.blockName === 'task-list-item'
+                        ? { name: 'task-list-item', meta: { checked: false }, children: [paragraphChild] }
+                        : { name: 'list-item', children: [paragraphChild] };
+
+                const newListItem = ScrollPage.loadBlock(newNodeState.name).create(
+                    muya,
+                    newNodeState,
+                );
+
+                list.insertAfter(newListItem, listItem);
+
+                this.update();
+                newListItem.firstContentInDescendant().setCursor(0, 0, true);
+            }
+            else {
+                super.enterHandler(event);
+            }
+        }
+    }
+
+    private _matchBlockConversion(event: KeyboardEvent): BlockConversion | null {
+        const conversion = matchBlockConversion(
+            this.text,
+            this.muya.options.texMathDollars,
+            this.muya.options.multilineBlockquote,
+            this.muya.options.githubAlerts,
+        );
+        if (conversion?.kind !== 'github-alert')
+            return conversion;
+
+        const container = this.parent?.parent;
+        const cursor = this.getCursor();
+        if (event.shiftKey || event.isComposing || !(container instanceof BlockQuote)
+            || !container.parent?.isScrollPage || container.meta?.style === 'fenced'
+            || this.parent !== container.firstChild || !cursor?.isCollapsed
+            || cursor.start.offset !== this.text.length) {
+            return null;
+        }
+        return conversion;
+    }
+
+    override enterHandler(event: Event) {
+        if (!isKeyboardEvent(event))
+            return;
+
+        if (event.shiftKey && !this.dropSoftBreakBeforeCursor())
+            return this.shiftEnterHandler(event);
+
+        // Match before quote/list Enter handling so nested block syntax converts
+        // without splitting its enclosing container (#2276).
+        const conversion = this._matchBlockConversion(event);
+        if (conversion)
+            return this._enterConvert(event, conversion);
+
+        const type = this._paragraphParentType();
+
+        if (type === 'block-quote' || type === 'github-alert')
+            this._enterInBlockQuote(event);
+        else if (type === 'list-item' || type === 'task-list-item')
+            this._enterInListItem(event);
+        else
+            this._enterConvert(event, null);
+    }
+
+    private _paragraphParentType() {
+        if (this.blockName !== 'paragraph.content') {
+            debug.warn('Only paragraph content can call _paragraphParentType');
+
+            return;
+        }
+
+        // Only the container that holds this paragraph counts: the handlers
+        // edit `this.parent.parent` as that container, so a list item or quote
+        // further up (around a footnote) must not decide the handling.
+        const container = this.parent?.parent?.blockName;
+
+        switch (container) {
+            case 'github-alert':
+            case 'block-quote':
+            case 'list-item':
+            case 'task-list-item':
+            case 'footnote':
+                return container;
+
+            default:
+                return 'paragraph';
+        }
+    }
+
+    private _handleBackspaceInBlockQuote() {
+        const paragraph = this.parent!;
+        const quote = paragraph.parent!;
+        if (!paragraph.isFirstChild())
+            return this._handleBackspaceInParagraph();
+        if (paragraph.isOnlyChild()) {
+            quote.replaceWith(paragraph);
+            paragraph.firstContentInDescendant()?.setCursor(0, 0, true);
+        }
+        else {
+            const outside = paragraph.clone() as Parent;
+            quote.parent!.insertBefore(outside, quote);
+            paragraph.remove();
+            outside.firstContentInDescendant()?.setCursor(0, 0, true);
+        }
+    }
+
+    private _handleBackspaceInGithubAlert(event: Event) {
+        if (!this.parent!.isFirstChild()
+            || (isKeyboardEvent(event) && (event.metaKey || event.ctrlKey || event.altKey))) {
+            return this._handleBackspaceInParagraph();
+        }
+        event.stopPropagation();
+        convertGithubAlert(this.parent!.parent!, 'block-quote');
+    }
+
+    private _handleBackspaceInParagraph(this: ParagraphContent) {
+        const previousContentBlock = this.previousContentInContext();
+        if (!previousContentBlock)
+            return;
+
+        const { text: oldText } = previousContentBlock;
+        const offset = oldText.length;
+        previousContentBlock.text += this.text;
+        this.parent!.remove();
+        previousContentBlock.setCursor(offset, offset, true);
+    }
+
+    // Backspace at the start of a footnote definition removes the definition,
+    // not its text: every block it held takes its place.
+    private _handleBackspaceInFootnote() {
+        const parent = this.parent!;
+        const footnote = parent.parent!;
+
+        if (!parent.isFirstChild())
+            return this._handleBackspaceInParagraph();
+
+        const blocks: Parent[] = [];
+        footnote.forEach((node) => {
+            const block = (node as Parent).clone() as Parent;
+            footnote.parent!.insertBefore(block, footnote);
+            blocks.push(block);
+        });
+
+        footnote.remove();
+        blocks[0]?.firstContentInDescendant()?.setCursor(0, 0, true);
+    }
+
+    private _handleBackspaceInList() {
+        const parent = this.parent!;
+        const listItem = parent.parent!;
+        const list = listItem.parent!;
+
+        if (!parent.isFirstChild())
+            return this._handleBackspaceInParagraph();
+
+        if (listItem.isOnlyChild()) {
+            listItem.forEach((node, i: number) => {
+                const paragraph = (node as Parent).clone() as Parent;
+                list.parent!.insertBefore(paragraph, list);
+                if (i === 0)
+                    paragraph?.firstContentInDescendant()?.setCursor(0, 0, true);
+            });
+
+            list.remove();
+        }
+        else if (listItem.isFirstChild()) {
+            listItem.forEach((node, i: number) => {
+                const paragraph = (node as Parent).clone() as Parent;
+                list.parent!.insertBefore(paragraph, list);
+                if (i === 0)
+                    paragraph?.firstContentInDescendant()?.setCursor(0, 0, true);
+            });
+
+            listItem.remove();
+        }
+        else {
+            const previousListItem = listItem.prev;
+            listItem.forEach((node, i: number) => {
+                const paragraph = (node as Parent).clone() as Parent;
+                previousListItem!.append(paragraph, ChangeSource.User);
+                if (i === 0)
+                    paragraph?.firstContentInDescendant()?.setCursor(0, 0, true);
+            });
+
+            listItem.remove();
+        }
+    }
+
+    private _getUnindentType(): Nullable<UnindentType> {
+        if (!this.isCollapsed)
+            return null;
+
+        const { parent } = this;
+        const listItem = parent!.parent;
+        const list = listItem?.parent;
+        const listParent = list?.parent;
+
+        // Only a paragraph of a nested list item can be outdented. Checking the
+        // great-grandparent alone also matched `list item > quote > quote`,
+        // and "outdenting" that moved the inner quote into the outer list
+        // (#5342).
+        if (!isListItemBlock(listItem) || !isListBlock(list) || !isListItemBlock(listParent))
+            return null;
+
+        return list.prev ? UnindentType.INDENT : UnindentType.REPLACEMENT;
+    }
+
+    private _canIndentListItem() {
+        const { parent } = this;
+        if (parent!.blockName !== 'paragraph' || !parent!.parent)
+            return false;
+
+        const listItem = parent?.parent;
+        const list = listItem?.parent;
+
+        if (listItem == null || list == null)
+            return false;
+
+        if (
+            (listItem.blockName !== 'list-item'
+                && listItem.blockName !== 'task-list-item')
+            || !this.isCollapsed
+        ) {
+            return false;
+        }
+
+        return list && /ol|ul/.test(list.tagName) && listItem.prev;
+    }
+
+    private _placeCursorIn(block: Nullable<Parent>, startOffset: number, endOffset: number) {
+        block?.firstContentInDescendant()?.setCursor(startOffset, endOffset, true);
+    }
+
+    private _unindentListItem(type: UnindentType) {
+        const { parent } = this;
+        const listItem = parent?.parent;
+        const list = listItem?.parent;
+        const listParent = list?.parent;
+        const cursor = this.getCursor();
+
+        if (
+            parent == null
+            || listItem == null
+            || list == null
+            || listParent == null
+            || cursor == null
+        ) {
+            return;
+        }
+
+        const { start, end } = cursor;
+
+        if (type === UnindentType.REPLACEMENT) {
+            const paragraph = parent.clone() as Paragraph;
+            listParent.insertBefore(paragraph, list);
+
+            if (listItem.isOnlyChild())
+                list.remove();
+            else
+                listItem.remove();
+
+            this._placeCursorIn(paragraph, start.offset, end.offset);
+        }
+        else if (type === UnindentType.INDENT) {
+            const replacements = moveListItems([listItem], 'outdent');
+            replacements?.get(this)?.setCursor(start.offset, end.offset, true);
+        }
+    }
+
+    private _indentListItem() {
+        const listItem = this.parent?.parent;
+        const cursor = this.getCursor();
+        if (!listItem || !cursor)
+            return;
+        const replacements = moveListItems([listItem], 'indent');
+        replacements?.get(this)?.setCursor(cursor.start.offset, cursor.end.offset, true);
+    }
+
+    private _checkCursorAtEndFormat(): Nullable<{ offset: number }> {
+        const { offset } = this.getCursor()!.start;
+        const { muya, text } = this;
+        const tokens = parseInline(text, {
+            profile: 'inline',
+            options: muya.options,
+        });
+        for (const { token, exiting } of tokenEvents(tokens)) {
+            if (exiting)
+                continue;
+            const { type, range: { start, end } } = token;
+            if (BOTH_SIDES_FORMATS.includes(type) && offset > start && offset < end) {
+                const handler = END_FORMAT_HANDLERS[type];
+                const hit = handler ? handler(token, offset) : null;
+                if (hit)
+                    return hit;
+            }
+        }
+
+        return null;
+    }
+
+    override tabHandler(event: Event) {
+        event.preventDefault();
+
+        if (!isKeyboardEvent(event))
+            return;
+
+        const { start, end } = this.getCursor()!;
+        if (!start || !end)
+            return;
+
+        if (event.shiftKey) {
+            const unindentType = this._getUnindentType();
+            const lineStart = start.offset === 0 ? 0 : this.text.lastIndexOf('\n', start.offset - 1) + 1;
+            const isInLeadingWhitespace = /^[ \t]*$/.test(this.text.slice(lineStart, start.offset));
+
+            if (unindentType != null) {
+                this._unindentListItem(unindentType);
+            }
+            else if (!this.isCollapsed || isInLeadingWhitespace) {
+                this.insertTab(true);
+                convertIndentedParagraphs([this], this.getCursor()!);
+            }
+
+            return;
+        }
+
+        if (this.isCollapsed) {
+            const atEnd = this._checkCursorAtEndFormat();
+
+            if (atEnd) {
+                const offset = start.offset + atEnd.offset;
+
+                this.setCursor(offset, offset, true);
+                return;
+            }
+        }
+
+        if (start.offset === 0 && this._canIndentListItem()) {
+            this._indentListItem();
+            return;
+        }
+
+        if (this.isCollapsed && start.offset === 0 && isListItemBlock(this.parent?.parent))
+            return;
+
+        this.insertTab();
+        convertIndentedParagraphs([this], this.getCursor()!);
+    }
+}
+
+export default ParagraphContent;

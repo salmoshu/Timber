@@ -15,6 +15,7 @@ import { exportActiveDocument, type DocumentExportKind } from '../utils/document
 import { IconAnnotation, IconExport } from './icons'
 import { InlineFormatButtons, MarkdownWritingToolbar, WritingStatus } from './WritingTools'
 import { useWritingExperience } from '../utils/useWritingExperience'
+import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
 
 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico']
 
@@ -216,11 +217,13 @@ export default function Reader() {
     }
     const wrap = proseWrapRef.current
     if (!wrap) return
-    // 编辑模式：从源码 textarea 的选区取锚点（气泡挂在鼠标位置上方）
+    // 源码模式从统一编辑器接口取选区，避免依赖 CodeMirror 内部 textarea。
     if (useStore.getState().mode === 'source') {
-      const textarea = wrap.querySelector<HTMLTextAreaElement>('.editor-plain')
-      if (!textarea) return
-      const { selectionStart: s, selectionEnd: en, value } = textarea
+      const runtime = getMarkdownEditor()
+      const selection = runtime?.getSelectionOffsets()
+      if (!runtime || !selection) return
+      const { start: s, end: en } = selection
+      const value = runtime.getValue()
       const quote = value.slice(s, en)
       if (s === en || !quote.trim()) {
         setPop(null)

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useWritingPreferences, toggleWritingPreference } from './writingPreferences'
-import { textareaCaretRect } from './editorGeometry'
+import { getMarkdownEditor } from './markdownEditorRuntime'
 
 export function useWritingExperience(enabled: boolean, paged: boolean): string {
   const { focus, typewriter, distractionFree } = useWritingPreferences()
@@ -30,14 +30,19 @@ export function useWritingExperience(enabled: boolean, paged: boolean): string {
       frame = 0
       const body = document.querySelector<HTMLElement>('.resource-reader .document-workspace > .reader-body')
       if (!body) return
-      const ta = body.querySelector<HTMLTextAreaElement>('.editor-plain')
+      const runtime = getMarkdownEditor()
       let caret: DOMRect | null = null
-      if (ta && document.activeElement === ta) {
-        caret = textareaCaretRect(ta)
-        const first = ta.selectionStart === ta.selectionEnd ? caret : textareaCaretRect(ta, ta.selectionStart)
-        ta.style.setProperty('--source-focus-top', `${first.top - ta.getBoundingClientRect().top + ta.scrollTop}px`)
-        ta.style.setProperty('--source-focus-height', `${caret.bottom - first.top}px`)
-        if (ta.selectionStart !== ta.selectionEnd) shouldCenter = false
+      body.querySelectorAll('.writing-current-block, .writing-current-line').forEach((node) => node.classList.remove('writing-current-block', 'writing-current-line'))
+      if (runtime?.kind === 'source' && runtime.root.contains(document.activeElement)) {
+        const offsets = runtime.getSelectionOffsets()
+        caret = runtime.caretRect()
+        const first = offsets && offsets.start !== offsets.end ? runtime.caretRect(offsets.start) : caret
+        if (caret && first) {
+          const rootRect = runtime.root.getBoundingClientRect()
+          runtime.root.style.setProperty('--source-focus-top', `${first.top - rootRect.top + runtime.root.scrollTop}px`)
+          runtime.root.style.setProperty('--source-focus-height', `${Math.max(caret.height, caret.bottom - first.top)}px`)
+        }
+        if (offsets && offsets.start !== offsets.end) shouldCenter = false
       } else {
         const prose = body.querySelector<HTMLElement>('.markdown-editor .prose')
         const selection = window.getSelection()
@@ -45,16 +50,17 @@ export function useWritingExperience(enabled: boolean, paged: boolean): string {
           const range = selection.getRangeAt(0)
           const element = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer as Element
           let block = element as HTMLElement | null
-          while (block?.parentElement && block.parentElement !== prose) block = block.parentElement
-          body.querySelectorAll('.writing-current-block, .writing-current-line').forEach((node) => node.classList.remove('writing-current-block', 'writing-current-line'))
-          if (block && block !== prose) block.classList.add('writing-current-block')
+          const container = prose.querySelector(':scope > .mu-container')
+          const boundary = container ?? prose
+          while (block?.parentElement && block.parentElement !== boundary) block = block.parentElement
+          if (block && block !== prose && block !== container) block.classList.add('writing-current-block')
           element?.closest('li')?.classList.add('writing-current-line')
-          caret = range.getBoundingClientRect()
-          if (!caret.height && block) caret = block.getBoundingClientRect()
+          caret = runtime?.caretRect() ?? range.getBoundingClientRect()
+          if (!caret?.height && block) caret = block.getBoundingClientRect()
           if (!range.collapsed) shouldCenter = false
         }
       }
-      if (typewriter && shouldCenter && caret?.height) body.scrollTop += caret.top - body.getBoundingClientRect().top - body.clientHeight * 0.45
+      if (typewriter && shouldCenter && caret) body.scrollTop += caret.top - body.getBoundingClientRect().top - body.clientHeight * 0.45
       shouldCenter = false
     }
     const schedule = (event?: Event): void => {
@@ -66,6 +72,7 @@ export function useWritingExperience(enabled: boolean, paged: boolean): string {
     document.addEventListener('input', schedule)
     document.addEventListener('keyup', schedule)
     window.addEventListener('markdown-rendered', schedule)
+    window.addEventListener('timber:editor-runtime-changed', schedule)
     schedule()
     return () => {
       cancelAnimationFrame(frame)
@@ -73,6 +80,7 @@ export function useWritingExperience(enabled: boolean, paged: boolean): string {
       document.removeEventListener('input', schedule)
       document.removeEventListener('keyup', schedule)
       window.removeEventListener('markdown-rendered', schedule)
+      window.removeEventListener('timber:editor-runtime-changed', schedule)
       document.querySelectorAll('.writing-current-block, .writing-current-line').forEach((node) => node.classList.remove('writing-current-block', 'writing-current-line'))
     }
   }, [enabled, paged, focus, typewriter])

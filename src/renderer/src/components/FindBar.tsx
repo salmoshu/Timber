@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
-import { textMatches, type TextMatch } from '../utils/markdownEditing'
-import { applyTextareaEdit } from '../utils/markdownCommands'
-import { textareaCaretRect } from '../utils/editorGeometry'
+import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
 import { IconChevronDown, IconChevronUp } from './icons'
 
 interface Props { onClose(): void; replace?: boolean }
 
-/** Search stays outside the editor DOM; replacements use native undo and text nodes. */
+/** Markdown editors own search and replacement; read-only text keeps the Range fallback. */
 export default function FindBar({ onClose, replace = false }: Props) {
   const [query, setQuery] = useState('')
   const [replacement, setReplacement] = useState('')
@@ -19,110 +17,94 @@ export default function FindBar({ onClose, replace = false }: Props) {
   const [current, setCurrent] = useState(-1)
   const currentRef = useRef(-1)
   const rangesRef = useRef<Range[]>([])
-  const sourceMatches = useRef<TextMatch[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const docPath = useStore((state) => state.activeDoc?.path)
   const draft = useStore((state) => state.draft)
   const mode = useStore((state) => state.mode)
 
-  const search = useCallback((reset = false): void => {
-    const textarea = document.querySelector<HTMLTextAreaElement>('.reader-body .editor-plain')
-    const root = document.querySelector<HTMLElement>('.reader-body .prose, .reader-body .txt-view, .cv-body .cv-content')
-    const ranges = !textarea && root && query ? findTextRanges(root, query, caseSensitive, wholeWord) : []
-    const matches = textarea && query ? textMatches(textarea.value, query, caseSensitive, wholeWord) : []
-    rangesRef.current = ranges
-    sourceMatches.current = matches
-    const total = textarea ? matches.length : ranges.length
-    const next = total ? Math.max(0, Math.min(reset ? 0 : currentRef.current, total - 1)) : -1
-    currentRef.current = next
+  const updateResult = (total: number, index: number): void => {
+    currentRef.current = index
     setCount(total)
-    setCurrent(next)
+    setCurrent(index)
+  }
+
+  const search = useCallback((reset = false): void => {
+    const runtime = getMarkdownEditor()
+    if (runtime) {
+      rangesRef.current = []
+      setTextHighlight('find-hit', [])
+      setTextHighlight('find-current', [])
+      const result = runtime.search(query, { caseSensitive, wholeWord })
+      updateResult(result.count, result.index)
+      return
+    }
+    const root = document.querySelector<HTMLElement>('.reader-body .txt-view, .cv-body .cv-content')
+    const ranges = root && query ? findTextRanges(root, query, caseSensitive, wholeWord) : []
+    rangesRef.current = ranges
+    const next = ranges.length ? Math.max(0, Math.min(reset ? 0 : currentRef.current, ranges.length - 1)) : -1
+    updateResult(ranges.length, next)
     setTextHighlight('find-hit', ranges)
     setTextHighlight('find-current', next < 0 ? [] : ranges.slice(next, next + 1))
   }, [query, caseSensitive, wholeWord])
 
   const locate = (index: number): void => {
-    const ta = document.querySelector<HTMLTextAreaElement>('.reader-body .editor-plain')
-    const match = sourceMatches.current[index]
-    if (ta && match) {
-      ta.setSelectionRange(match.start, match.end)
-      const body = ta.closest<HTMLElement>('.reader-body')
-      if (body) body.scrollTop += textareaCaretRect(ta, match.start).top - body.getBoundingClientRect().top - body.clientHeight / 2
-    } else if (rangesRef.current[index]) {
-      setTextHighlight('find-current', [rangesRef.current[index]])
-      scrollToRange(rangesRef.current[index])
-    }
+    const range = rangesRef.current[index]
+    if (!range) return
+    setTextHighlight('find-current', [range])
+    scrollToRange(range)
   }
+
   const nav = (direction: 1 | -1): void => {
     if (!count) return
+    const runtime = getMarkdownEditor()
+    if (runtime) {
+      const result = runtime.find(direction)
+      updateResult(result.count, result.index)
+      return
+    }
     const next = currentRef.current < 0 ? 0 : (currentRef.current + direction + count) % count
-    currentRef.current = next
-    setCurrent(next)
+    updateResult(count, next)
     locate(next)
   }
 
   const replaceText = (all: boolean): void => {
     if (!count || count >= 10000) return
-    const ta = document.querySelector<HTMLTextAreaElement>('.reader-body .editor-plain')
-    if (ta) {
-      const matches = sourceMatches.current
-      const match = matches[currentRef.current]
-      if (!match) return
-      if (all) {
-        let value = ta.value
-        for (const item of [...matches].reverse()) value = value.slice(0, item.start) + replacement + value.slice(item.end)
-        const caret = Math.min(value.length, match.start + replacement.length)
-        applyTextareaEdit(ta, { start: 0, end: ta.value.length, text: value, selectionStart: caret, selectionEnd: caret })
-      } else applyTextareaEdit(ta, { start: match.start, end: match.end, text: replacement, selectionStart: match.start + replacement.length, selectionEnd: match.start + replacement.length })
-    } else {
-      const prose = document.querySelector<HTMLElement>('.reader-body .prose[contenteditable="true"]')
-      if (!prose) return
-      const selection = window.getSelection()
-      if (!selection) return
-      prose.focus({ preventScroll: true })
-      let range = rangesRef.current[currentRef.current]
-      if (!range || !prose.contains(range.commonAncestorContainer)) return
-      if (all) {
-        const clone = prose.cloneNode(true) as HTMLElement
-        for (const match of findTextRanges(clone, query, caseSensitive, wholeWord).reverse()) {
-          match.deleteContents()
-          match.insertNode(document.createTextNode(replacement))
-        }
-        range = document.createRange()
-        range.selectNodeContents(prose)
-        selection.removeAllRanges()
-        selection.addRange(range)
-        document.execCommand('insertHTML', false, clone.innerHTML)
-      } else {
-        selection.removeAllRanges()
-        selection.addRange(range)
-        document.execCommand('insertText', false, replacement)
-      }
-      prose.dispatchEvent(new InputEvent('input', { inputType: 'insertReplacementText', bubbles: true }))
-    }
-    search()
+    const runtime = getMarkdownEditor()
+    if (!runtime) return
+    const replaced = all ? count : 1
+    const result = runtime.replace(replacement, all)
+    updateResult(result.count, result.index)
     inputRef.current?.focus({ preventScroll: true })
-    useStore.getState().toast('ok', all ? `已替换 ${count} 处` : '已替换当前匹配')
+    useStore.getState().toast('ok', all ? `已替换 ${replaced} 处` : '已替换当前匹配')
   }
 
   useEffect(() => { if (replace) setShowReplace(true) }, [replace])
   useEffect(() => {
     inputRef.current?.focus()
     inputRef.current?.select()
-    return () => { setTextHighlight('find-hit', []); setTextHighlight('find-current', []) }
+    return () => {
+      getMarkdownEditor()?.clearSearch()
+      setTextHighlight('find-hit', [])
+      setTextHighlight('find-current', [])
+    }
   }, [])
   useEffect(() => {
-    const timer = window.setTimeout(() => { search(true); locate(0) }, 120)
+    const timer = window.setTimeout(() => { search(true); if (!getMarkdownEditor()) locate(0) }, 120)
     return () => clearTimeout(timer)
   }, [query, caseSensitive, wholeWord, docPath, mode])
   useEffect(() => {
     const refresh = (): void => search()
     const timer = window.setTimeout(refresh, 100)
     window.addEventListener('markdown-rendered', refresh)
-    return () => { clearTimeout(timer); window.removeEventListener('markdown-rendered', refresh) }
+    window.addEventListener('timber:editor-runtime-changed', refresh)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('markdown-rendered', refresh)
+      window.removeEventListener('timber:editor-runtime-changed', refresh)
+    }
   }, [search, draft])
 
-  const editable = mode === 'source' || !!document.querySelector('.reader-body .prose[contenteditable="true"]')
+  const editable = !!getMarkdownEditor()
   return (
     <div className="find-panel" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
       <div className="find-bar">

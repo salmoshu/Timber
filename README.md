@@ -34,14 +34,14 @@ AI 助手二选一后端：在 设置 → AI 配置 OpenAI 兼容接口（API �
 
 ## Markdown 写作
 
-v0.6.14 参考 MarkText 增加快速插入（空行 `/` / `Ctrl+/`）、选区格式操作、源码智能续行与配对、专注 / 打字机 / 沉浸模式、字词与任务统计、图片粘贴和查找替换。支持将文档导出为内嵌本地图片及静态图表的 HTML。快捷键、图片保存规则及功能对应说明见 [Markdown 写作指南](docs/markdown-writing.md)。
+v0.7.0 将所见即所得编辑迁移到内置 MarkText/Muya 源码，保留 Timber 的目录、批注、自动保存与图片相对路径。源码模式使用 CodeMirror 5，继续提供智能续行、配对、快速插入、查找替换、专注 / 打字机 / 沉浸模式及字词统计。HTML、PDF、Word、长图和 A4 分页共用同一 Markdown 草稿。详见 [Markdown 写作指南](docs/markdown-writing.md)。
 
 ## 技术架构
 
 | 层 | 技术 | 说明 |
 | --- | --- | --- |
 | 桌面壳 | Electron 33 + electron-vite | 单实例、外链浮层、自动更新 |
-| 前端 | React 18 + Zustand + Vditor | 三视图切换；可纯 Web 预览（`pnpm dev:web`） |
+| 前端 | React 18 + Zustand + Muya + CodeMirror 5 | 三视图切换；Muya 源码内置于 `vendor/marktext-muya`；可纯 Web 预览（`pnpm dev:web`） |
 | 本地服务 | Go（timberd sidecar） | Git 历史提取、仓库静态分析（目录→组件、import→连接）、文档扫描/批注/搜索、WSL/SSH 远端接入 |
 | 架构渲染 | [Archify](https://github.com/tt-a1i/archify)（vendor 于 `vendor/archify`，MIT） | JSON IR → 自包含交互 HTML；`architecture-delta` 计算两版本架构差异 |
 
@@ -50,7 +50,7 @@ v0.6.14 参考 MarkText 增加快速插入（空行 `/` / `Ctrl+/`）、选区�
 ## 开发
 
 ```bash
-pnpm install        # 安装依赖（含 sidecar 构建与 vditor 离线库注入）
+pnpm install        # 安装依赖并准备 Electron 原生运行时
 pnpm dev            # Electron 开发模式
 pnpm dev:web        # 纯 Web 预览（需先手动启动 sidecar）
 pnpm build          # 构建
@@ -59,4 +59,4 @@ pnpm dist           # 打包 NSIS 安装包
 
 ## 许可
 
-MIT。架构图渲染基于 MIT 许可的 [Archify](https://github.com/tt-a1i/archify)（见 `vendor/archify/LICENSE` 与 `THIRD_PARTY_NOTICES.md`）。
+MIT。架构图渲染基于 MIT 许可的 [Archify](https://github.com/tt-a1i/archify)（见 `vendor/archify/LICENSE` 与 `THIRD_PARTY_NOTICES.md`）。Markdown 引擎来自 MIT 许可的 [MarkText/Muya](https://github.com/marktext/marktext)，许可证、来源与本地改动见 `vendor/marktext-muya/LICENSE` 和 `UPSTREAM.md`。

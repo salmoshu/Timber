@@ -1,0 +1,197 @@
+import type Content from '../block/base/content';
+import type Format from '../block/base/format';
+import type { Nullable } from '../types';
+import type Clipboard from './index';
+import { CLASS_NAMES } from '../config';
+import { getUniqueId } from '../utils';
+import { getImageInfo, imageToMarkdown } from '../utils/image';
+import { readFileAsDataURL, resolveClipboardImagePath } from '../utils/paste';
+
+// Replace the current range with image Markdown and return the inserted text.
+// Escape the source so path delimiters survive Markdown parsing.
+function insertImageText(anchorBlock: Content, src: string, alt = ''): string {
+    const cursor = anchorBlock.getCursor();
+    if (!cursor)
+        return '';
+
+    const { start, end } = cursor;
+    const { text: content } = anchorBlock;
+    const imageText = imageToMarkdown({ alt, src });
+
+    anchorBlock.text
+        = content.substring(0, start.offset)
+            + imageText
+            + content.substring(end.offset);
+
+    const offset = start.offset + imageText.length;
+    anchorBlock.setCursor(offset, offset, true);
+
+    return imageText;
+}
+
+// Resolve a loading placeholder and place the caret after the final image.
+function replacePlaceholderImage(
+    anchorBlock: Content,
+    placeholderText: string,
+    src: string,
+): void {
+    const index = anchorBlock.text.indexOf(placeholderText);
+    if (index === -1)
+        return;
+
+    const imageText = imageToMarkdown({ src });
+
+    anchorBlock.text
+        = anchorBlock.text.substring(0, index)
+            + imageText
+            + anchorBlock.text.substring(index + placeholderText.length);
+
+    const offset = index + imageText.length;
+    anchorBlock.setCursor(offset, offset, true);
+}
+
+// Apply the host's imageAction preference to a file path or data URL.
+// Show a loading placeholder while the hook resolves; insert directly when no hook exists.
+export async function insertImageSrc(
+    clipboard: Clipboard,
+    anchorBlock: Content,
+    src: string,
+): Promise<void> {
+    if (clipboard.muya.isReadOnly || !clipboard.muya.isBlockInDocument(anchorBlock))
+        return;
+    const { imageAction } = clipboard.muya.options;
+
+    if (!imageAction) {
+        insertImageText(anchorBlock, src);
+
+        return;
+    }
+
+    const id = `loading-${getUniqueId()}`;
+    const placeholderText = insertImageText(anchorBlock, src, id);
+
+    let finalSrc = src;
+    const resolved = await imageAction({ src, alt: '', title: '' });
+    if (clipboard.muya.isReadOnly || !clipboard.muya.isBlockInDocument(anchorBlock))
+        return;
+    if (resolved)
+        finalSrc = resolved;
+
+    replacePlaceholderImage(anchorBlock, placeholderText, finalSrc);
+}
+
+// Resolve a pasted image to an `src`: a clipboard FILE path (via the
+// `clipboardFilePath` hook) first, then an in-memory bitmap File read as a
+// base64 `data:` URL. Returns null when the clipboard carries no image.
+export async function resolveImageSrc(
+    clipboard: Clipboard,
+    imageFile: Nullable<File>,
+): Promise<string | null> {
+    const imagePath = await resolveClipboardImagePath(
+        clipboard.muya.options.clipboardFilePath,
+    );
+    if (imagePath)
+        return imagePath;
+
+    if (imageFile)
+        return readFileAsDataURL(imageFile);
+
+    return null;
+}
+
+// Insert a file path or data URL through imageAction. Fall back to the cached
+// active block when a menu/IPC round-trip loses focus; no-op without a source or target.
+export async function pasteImageSrc(
+    clipboard: Clipboard,
+    src: string,
+): Promise<void> {
+    if (!src)
+        return;
+
+    const anchorBlock
+        = clipboard.selection.getTextSelection()?.anchor.block
+            ?? clipboard.muya.editor.activeContentBlock;
+    if (!anchorBlock)
+        return;
+
+    await insertImageSrc(clipboard, anchorBlock, src);
+}
+
+// Replace [start, end) directly: a DOM selection clamps across atomic images
+// and can leave part of a resized HTML image tag behind.
+function spliceImageText(
+    block: Content,
+    range: { start: number; end: number },
+    src: string,
+    alt = '',
+): string {
+    const imageText = imageToMarkdown({ alt, src });
+
+    block.text
+        = block.text.substring(0, range.start)
+            + imageText
+            + block.text.substring(range.end);
+
+    const offset = range.start + imageText.length;
+    block.setCursor(offset, offset, true);
+
+    return imageText;
+}
+
+function findImageWrapper(block: Format, startOffset: number): Nullable<HTMLElement> {
+    const { domNode } = block;
+    if (domNode == null)
+        return null;
+
+    const images = domNode.querySelectorAll<HTMLElement>(`.${CLASS_NAMES.MU_INLINE_IMAGE}`);
+    let wrapper: Nullable<HTMLElement> = images[images.length - 1] ?? null;
+    for (const image of images) {
+        if (getImageInfo(image).token.range.start === startOffset) {
+            wrapper = image;
+            break;
+        }
+    }
+
+    return wrapper;
+}
+
+function reselectImageAt(clipboard: Clipboard, block: Format, startOffset: number): void {
+    const wrapper = findImageWrapper(block, startOffset);
+    if (wrapper == null)
+        return;
+    clipboard.selection.selectImage({
+        ...getImageInfo(wrapper),
+        block,
+    });
+    block.update();
+}
+
+// Apply imageAction to the replacement and leave it selected so controls follow it.
+export async function replaceImageAt(
+    clipboard: Clipboard,
+    block: Format,
+    range: { start: number; end: number },
+    src: string,
+): Promise<void> {
+    const { imageAction } = clipboard.muya.options;
+
+    if (!imageAction) {
+        spliceImageText(block, range, src);
+        reselectImageAt(clipboard, block, range.start);
+
+        return;
+    }
+
+    const id = `loading-${getUniqueId()}`;
+    const placeholderText = spliceImageText(block, range, src, id);
+
+    let finalSrc = src;
+    const resolved = await imageAction({ src, alt: '', title: '' });
+    if (clipboard.muya.isReadOnly || !clipboard.muya.isBlockInDocument(block))
+        return;
+    if (resolved)
+        finalSrc = resolved;
+
+    replacePlaceholderImage(block, placeholderText, finalSrc);
+    reselectImageAt(clipboard, block, range.start);
+}

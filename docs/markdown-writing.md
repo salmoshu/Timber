@@ -1,10 +1,10 @@
-# Markdown 写作（v0.6.14）
+# Markdown 写作（v0.7.0）
 
-本版参考 [MarkText](https://github.com/marktext/marktext) 的[编辑体验](https://marktext.me/docs/editing)，在 Timber 的资源阅读区补齐常用写作能力。继续使用现有 Markdown 文件、编辑器、批注及导出管线，无需迁移文档。
+本版将 Timber 的所见即所得编辑迁移到内置 [MarkText/Muya](https://github.com/marktext/marktext) 源码，源码模式使用 CodeMirror 5。React/Zustand 项目架构、Markdown 文件、目录、批注数据、图片相对路径、自动保存及导出流程保持兼容，无需迁移文档。
 
 ## 入口
 
-打开 Markdown 文档后，面包屑下方显示写作工具。阅读模式保留实时排版及原有格式栏；源码模式提供直接编辑和相同的格式操作。选中文字时，浮层同时提供格式按钮和「添加标签」。
+打开 Markdown 文档后，面包屑下方显示写作工具。阅读模式由 Muya 提供实时排版、选区格式浮层和块级工具；源码模式提供直接编辑和相同的格式操作。选中文字时，仍可使用 Timber 的「添加标签」批注。
 
 空行输入 `/`，或按 `Ctrl+/`，即可搜索插入格式。面板支持中文与英文关键词、上下方向键、回车确认及 Esc 取消。表格可设置 1–50 个数据行和 1–20 列，另有一行表头。
 
@@ -49,21 +49,22 @@ macOS 对应使用 Cmd。源码编辑的 Tab / Shift+Tab 可缩进或反缩进�
 
 HTML 导出包含排版样式、本地图片和静态 Mermaid 图表，可在关闭 Timber 后查看；网络图片保留原链接，需要网络访问。PDF、Word、长图和 A4 分页仍使用同一份 Markdown 草稿。
 
-## 与 MarkText 的对应关系
+## Muya 与 Timber 的边界
 
 | 体验 | Timber 的处理 |
 | --- | --- |
-| 实时排版、CommonMark/GFM、公式、代码高亮 | 沿用并验证现有能力 |
-| 源码 / 阅读模式 | 共用草稿、快捷操作及自动保存 |
-| 选区格式浮层、快速插入、表情 | 本版新增，并保留划词批注 |
-| 智能续行、配对、缩进 | 本版增强源码编辑，阅读模式继续使用实时编辑 |
-| 专注、打字机、沉浸、统计 | 本版新增，可组合使用 |
-| 图片粘贴 / 拖入 / 文件选择 | 保存到本地或远程项目的文档附件目录 |
-| 查找替换、HTML 导出 | 本版新增并加入回归检查 |
-| 图片缩放对齐、表格行列操作、图表预览 | 沿用 Timber 现有工具 |
+| 实时排版、CommonMark/GFM、公式、代码高亮 | 使用内置 Muya，启用 Front Matter、脚注、提示块和 CJK 强调 |
+| 源码 / 阅读模式 | Muya 与 CodeMirror 共用草稿、快捷操作及自动保存 |
+| 选区格式浮层、快速插入、表情 | 使用 Muya 工具并保留 Timber 划词批注 |
+| 智能续行、配对、缩进 | CodeMirror 源码模式保留 Timber 的 Markdown 上下文处理 |
+| 专注、打字机、沉浸、统计 | 保留 Timber 写作体验设置，可组合使用 |
+| 图片粘贴 / 拖入 / 文件选择 | 保存到本地或远程项目的文档附件目录；编辑时通过 `/raw/` 显示，Markdown 仅保存相对路径 |
+| 查找替换、HTML 导出 | 保留 Timber 查找界面；导出嵌入本地图片、KaTeX 字体和静态 Mermaid SVG |
+| 图片缩放对齐、表格行列操作、图表预览 | 使用 Muya 内置工具及 Timber 灯箱 |
+| 右侧短目录线与批注面板 | 继续读取真实标题 DOM 和现有 quote/prefix/suffix 锚点，不迁移 `.timber/annotations.json` |
 
-这是针对 Timber 的体验实现，没有引入或复制 MarkText 的 Muya 编辑引擎。MarkText 项目按 [MIT 许可证](https://github.com/marktext/marktext/blob/develop/LICENSE) 开源；本版参考其公开功能和交互设计。完整引擎迁移、云图床、拼写检查及 MarkText 的全部偏好选项不属于本版支持范围。
+Muya 源码位于 `vendor/marktext-muya`，按 MIT 许可证内置。上游版本、许可证及 Timber 本地改动见该目录的 `UPSTREAM.md`。云图床、拼写检查及 MarkText 应用本身的全部偏好选项不属于本版支持范围。
 
 ## 验证
 
-`pnpm test:markdown` 检查文本转换、列表与代码上下文、查找、统计及 Unicode 边界；`cd sidecar && go test ./...` 检查图片内容、路径越界、不覆盖与鉴权；`pnpm build && pnpm test:markdown:ui` 使用独立 Electron 配置和临时项目验证实际 Vditor、源码编辑、撤销、图片插入和 HTML 导出。发布流程在上传安装包前执行这些检查。
+`pnpm test:markdown` 检查文本转换、列表与代码上下文、查找、统计及 Unicode 边界；`cd sidecar && go test ./...` 检查图片内容、路径越界、不覆盖与鉴权；`pnpm build && pnpm test:markdown:ui` 使用独立 Electron 配置和临时项目验证实际 Muya、CodeMirror、撤销、批注锚点、图片粘贴与拖放、明暗主题及 HTML 导出。WSL 用例验证 UNC／绝对路径解析，不等同于真实远程项目连接测试。发布流程在上传安装包前执行这些检查。
