@@ -25,7 +25,7 @@ export const EXPORT_PAGE_CSS = `
   .prose p { margin: 10px 0; }
   .prose ul, .prose ol { margin: 8px 0 12px; padding-left: 26px; }
   .prose li { margin: 4px 0; }
-  .prose a { color: #1783ff; text-decoration: none; }
+  .prose a { color: #3f87a6; text-decoration: none; }
   .prose blockquote { margin: 14px 0; padding: 12px 18px; border-left: 3px solid #1783ff; background: #1783ff12; color: #555; }
   .prose blockquote p { margin: 3px 0; }
   .prose code { font-family: Consolas, monospace; font-size: 0.9em; background: #00000008; padding: 1.5px 6px; border-radius: 4px; color: #b83a32; }

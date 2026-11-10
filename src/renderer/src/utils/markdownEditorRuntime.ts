@@ -16,6 +16,12 @@ export interface EditorCursor {
   selectedText: string
 }
 
+export interface EditorTocEntry {
+  level: number
+  text: string
+  index: number
+}
+
 /** The host UI talks to this contract instead of editor-private DOM nodes. */
 export interface MarkdownEditorRuntime {
   readonly kind: 'muya' | 'source'
@@ -24,6 +30,7 @@ export interface MarkdownEditorRuntime {
   flush(): void
   focus(): void
   execute(request: MarkdownCommandRequest): void
+  getToc?(): EditorTocEntry[]
   getSelectionOffsets(): { start: number; end: number } | null
   setSelectionOffsets(start: number, end: number): void
   search(query: string, options: EditorSearchOptions): EditorSearchResult

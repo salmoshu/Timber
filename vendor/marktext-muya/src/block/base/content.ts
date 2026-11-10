@@ -444,6 +444,16 @@ class Content extends TreeNode {
             if (event.shiftKey && this.selection.anchorBlock !== this)
                 return;
 
+            // Timber: the browser has already placed a caret at the clicked
+            // position. `selectionchange` reaches Muya's cache asynchronously, so
+            // re-applying `getCursor()` here can restore a stale offset (typically
+            // 0) and make the caret jump to the start of the line. Only restore
+            // when the native caret is not inside this content (e.g. a click on
+            // the block's padding).
+            const native = document.getSelection();
+            if (native?.rangeCount && native.isCollapsed && native.anchorNode && this.domNode?.contains(native.anchorNode))
+                return;
+
             const cursor = this.getCursor();
             if (!cursor)
                 return;

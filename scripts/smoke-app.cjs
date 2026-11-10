@@ -116,6 +116,20 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       key('A', ['control'])
       await win.webContents.insertText('# edited-native\n')
       await wait(() => evaluate("document.querySelector('.CodeMirror')?.textContent.includes('edited-native')"), 'Native source input did not reach the editor')
+      check(await evaluate("document.querySelector('.titlebar').getBoundingClientRect().height === 44"), 'Titlebar does not use the standard 44px height')
+      check(await evaluate(`(() => {
+        const preview = document.querySelector('.reader-preview-button').getBoundingClientRect()
+        return [...document.querySelectorAll('.tabs-actions .rt-btn')].every(button => {
+          const rect = button.getBoundingClientRect()
+          return rect.width === preview.width && rect.height === preview.height
+        })
+      })()`), 'Export and annotation buttons do not match the page-preview button size')
+      check(await evaluate(`(() => {
+        const name = document.querySelector('.doc-tab.active .tab-name').getBoundingClientRect()
+        const dot = document.querySelector('.doc-tab.active .tab-close.dirty .tc-dot').getBoundingClientRect()
+        return Math.abs((name.top + name.height / 2) - (dot.top + dot.height / 2)) <= 1
+      })()`), 'Dirty dot is not vertically centered with the tab filename')
+      checks.push('standard titlebar, matching tab action sizes and centered dirty indicator')
       key('Z', ['control'])
       await wait(() => evaluate("document.querySelector('.CodeMirror')?.textContent.includes('first-open')"), 'Native Ctrl+Z failed')
       key('Y', ['control'])
@@ -132,6 +146,18 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => evaluate("!document.querySelector('.rf-item')"), 'Removing a recent entry did not refresh the list')
       check(fs.existsSync(first), 'Removing a recent entry deleted the document')
       checks.push('recent-file context menu and removal without deleting the file')
+
+      await evaluate("document.querySelector('.proj-import').click()")
+      await wait(() => evaluate("!!document.querySelector('.remote-dialog .rd-choice')"), 'Add-project choices did not open')
+      await evaluate("document.querySelector('.remote-dialog .rd-choice').click()")
+      await wait(() => evaluate("!!document.querySelector('.local-path-picker .path-selection')"), 'Local project directory picker did not open')
+      check(await evaluate("document.querySelector('.path-list-head')?.textContent.includes('子文件夹') && !!document.querySelector('.path-folder-icon svg') && !!document.querySelector('.path-selection-meta')"), 'Directory picker is missing its structured list, icons or selection metadata')
+      await screenshot('project-directory-picker.png')
+      await evaluate("document.querySelector('.local-path-picker [data-cancel]').click()")
+      await wait(() => evaluate("!document.querySelector('.local-path-picker')"), 'Directory picker did not close')
+      await evaluate("document.querySelector('.remote-dialog .st-close')?.click()")
+      await wait(() => evaluate("!document.querySelector('.remote-dialog')"), 'Add-project dialog did not close')
+      checks.push('structured project directory picker with folder counts and current selection')
 
       await evaluate("document.querySelector('.tb-set[title=\"设置\"]').click()")
       await wait(() => evaluate("!!document.querySelector('.theme-picker')"), 'Appearance settings did not open')

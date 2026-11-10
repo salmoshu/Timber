@@ -2,6 +2,7 @@ import { askConfirm } from '../utils/dialogs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { ANNOTATION_KIND_LABELS, type Annotation, type AnnotationKind, type DocContent } from '@shared/types'
+import { parseInline, tokensToPlainText } from '@muyajs/core'
 import { scrollToEl } from '../utils/scroll'
 import { findAnnotationRange, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
@@ -27,15 +28,20 @@ export interface TocEntry {
   line?: number
 }
 
+function tocPlainText(source: string, profile: 'atx-heading' | 'setext-heading'): string {
+  return tokensToPlainText(parseInline(source, { profile })).trim()
+}
+
 /** 从已渲染的 .prose 提取标题目录（阅读模式） */
 export function buildToc(): TocEntry[] {
+  const editorToc = getMarkdownEditor()?.getToc?.()
+  if (editorToc) return editorToc
   const prose = document.querySelector('.prose')
   if (!prose) return []
-  return [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el, index) => ({
-    index,
-    level: Number(el.tagName.slice(1)),
-    text: (el.textContent ?? '').trim()
-  }))
+  return [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el, index) => {
+    const profile = el.querySelector('.mu-setextheading-content') ? 'setext-heading' : 'atx-heading'
+    return { index, level: Number(el.tagName.slice(1)), text: tocPlainText(el.textContent ?? '', profile) }
+  })
 }
 
 /** 从 Markdown 源码提取标题目录（编辑模式）：标题行 #.. 逐行扫描，
@@ -47,7 +53,7 @@ export function buildTocFromSource(src: string): TocEntry[] {
     if (/^\s*(```|~~~)/.test(raw)) fence = !fence
     if (fence) return
     const m = /^(#{1,6})\s+(.*)$/.exec(raw)
-    if (m) out.push({ level: m[1].length, text: m[2].trim(), line })
+    if (m) out.push({ level: m[1].length, text: tocPlainText(m[0], 'atx-heading'), line })
   })
   return out
 }

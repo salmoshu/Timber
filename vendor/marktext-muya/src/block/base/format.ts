@@ -580,8 +580,20 @@ class Format extends Content {
 
             const needRender = this.checkNeedRender(cursor)
                 || (this.selection.anchorBlock === this && this.checkNeedRender());
-            if (needRender)
+            if (needRender) {
                 this.update(cursor);
+                // Rebuilding the inline DOM can collapse the native range to the
+                // start of this content. Always restore the clicked raw offset in
+                // that case; an intact native range is not a valid caret signal.
+                this.setCursor(currentCursor.anchor.offset, currentCursor.focus.offset);
+                return;
+            }
+
+            // Without a rebuild, keep the caret Chromium placed for the click.
+            // Re-applying a cached offset can otherwise undo the native placement.
+            const native = document.getSelection();
+            if (native?.rangeCount && native.isCollapsed && native.anchorNode && this.domNode?.contains(native.anchorNode))
+                return;
 
             this.setCursor(currentCursor.anchor.offset, currentCursor.focus.offset);
         });

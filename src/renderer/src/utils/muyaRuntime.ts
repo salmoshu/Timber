@@ -95,6 +95,7 @@ export function createMuyaRuntime(muya: Muya): MarkdownEditorRuntime {
     flush: () => muya.flush(),
     focus: () => muya.focus(),
     execute: (request) => executeMuyaCommand(muya, request),
+    getToc: () => muya.getTOC().map((item, index) => ({ level: item.lvl, text: item.content, index })),
     getSelectionOffsets: () => null,
     setSelectionOffsets: () => undefined,
     search: (query, options) => {

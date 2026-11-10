@@ -4,6 +4,7 @@ import type { RemoteConfig, RemoteKind } from '@shared/types'
 import { useStore } from '../store'
 import { api } from '../api'
 import { fsList, type FsEntry, type LogLine } from '../utils/remote'
+import { IconFolder, IconRemote } from './icons'
 
 type Mode = 'choose' | 'kind' | 'config' | 'connecting' | 'browse'
 
@@ -204,12 +205,12 @@ export default function AddProjectDialog() {
         {mode === 'choose' && (
           <div className="rd-choose">
             <button className="rd-choice" onClick={() => void onPickLocal()}>
-              <span className="rd-choice-icon">📁</span>
+              <span className="rd-choice-icon"><IconFolder size={19} /></span>
               <span className="rd-choice-name">本地文件夹</span>
               <span className="rd-choice-desc">导入本机目录（含 WSL/网络路径可直接粘贴）</span>
             </button>
             <button className="rd-choice" onClick={() => setMode('kind')}>
-              <span className="rd-choice-icon">🌐</span>
+              <span className="rd-choice-icon"><IconRemote size={19} /></span>
               <span className="rd-choice-name">远程连接</span>
               <span className="rd-choice-desc">WSL / SSH 自动接入，Docker / 自定义 timberd 直连</span>
             </button>

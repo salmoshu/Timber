@@ -22,6 +22,8 @@ export type {
     TSelectionState,
 } from './selection/types';
 export type { ITocItem } from './state/getTOC';
+export { parseInline } from './inline/parser/lexer';
+export { tokensToPlainText } from './inline/projection';
 export { embeddedKatexCss, MarkdownToHtml } from './state/markdownToHtml';
 export type { IExportHeading, IHtmlExport, IHtmlExportOptions } from './state/markdownToHtml';
 export { renderToStaticHTML } from './state/renderToStaticHTML';

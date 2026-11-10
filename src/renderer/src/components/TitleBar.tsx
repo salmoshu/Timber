@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore, type AppView } from '../store'
 import Logo from './Logo'
-import { IconMaximize, IconPanelLeft, IconPanelRight, IconRestore } from './icons'
+import { IconClose, IconMaximize, IconMinimize, IconPanelLeft, IconPanelRight, IconRestore, IconSettings } from './icons'
 
 const VIEWS: { key: AppView; label: string }[] = [
   { key: 'resources', label: '资源' },
@@ -56,7 +56,7 @@ export default function TitleBar() {
   return (
     <header className="titlebar">
       <div className="tb-drag">
-        <Logo size={18} />
+        <Logo size={20} animated={false} />
         <span className="tb-name">Timber</span>
         {version && <span className="tb-version">{`v${version}`}</span>}
         {/* 主视图切换（文档/代码/架构/历史）：左侧挨着版本号；位于拖拽区内需 no-drag */}
@@ -95,15 +95,15 @@ export default function TitleBar() {
           onClick={() => (settingsOpen ? closeSettings() : openSettings())}
           title={settingsOpen ? '返回主界面' : '设置'}
         >
-          ⚙
+          <IconSettings />
         </button>
         {b && (
           <>
-            <button onClick={() => b.winMinimize()} title="最小化">—</button>
-            <button onClick={() => b.winToggleMaximize()} title={maximized ? '还原' : '最大化'}>
+            <button className="tb-window" onClick={() => b.winMinimize()} title="最小化"><IconMinimize /></button>
+            <button className="tb-window" onClick={() => b.winToggleMaximize()} title={maximized ? '还原' : '最大化'}>
               {maximized ? <IconRestore /> : <IconMaximize />}
             </button>
-            <button className="tb-close" onClick={() => b.winClose()} title="关闭">✕</button>
+            <button className="tb-window tb-close" onClick={() => b.winClose()} title="关闭"><IconClose /></button>
           </>
         )}
       </div>

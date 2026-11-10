@@ -342,13 +342,67 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     await wait(() => /^## Heading target/m.test(value()), 'heading transformation was not saved: ' + value())
     checks.push('WYSIWYG heading transformation')
 
+    const heading = prose.querySelector('h2')
+    const headingRect = heading.getBoundingClientRect()
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: headingRect.left + 24, clientY: headingRect.top + 12 }))
+    await wait(() => {
+      const button = document.querySelector('.mu-front-button-wrapper')
+      return button && getComputedStyle(button).opacity === '1' && button.getBoundingClientRect().top > -1000
+    }, 'heading syntax button did not appear')
+    const headingLineCenter = heading.querySelector('.mu-content').getBoundingClientRect().top + parseFloat(getComputedStyle(heading).lineHeight) / 2
+    const headingControls = {
+      syntax: document.querySelector('.mu-front-button-wrapper .mu-front-button'),
+      copy: heading.querySelector('.mu-copy-header-link'),
+      fold: heading.querySelector('.mu-fold-toggle')
+    }
+    for (const [name, control] of Object.entries(headingControls)) {
+      const rect = control.getBoundingClientRect()
+      check(Math.abs(rect.top + rect.height / 2 - headingLineCenter) <= 1.1, `${name} control is not centered on the H2 text line: ${JSON.stringify({ controlCenter: rect.top + rect.height / 2, headingLineCenter })}`)
+    }
+    checks.push('H2 syntax, copy-link and fold controls align with the text line')
+
+    prose = await documentWith('Before **ABCD** after\n', 'read')
+    const boldText = visibleTextNodes(prose).find(node => node.data === 'ABCD')
+    check(boldText, 'bold fixture did not render its visible text')
+    const boldContent = boldText.parentElement.closest('.mu-content')
+    const boldBlock = boldContent.__MUYA_BLOCK__
+    const clickVisibleCaret = async (node, offset) => {
+      const range = document.createRange()
+      range.setStart(node, offset)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection.removeAllRanges()
+      selection.addRange(range)
+      document.dispatchEvent(new Event('selectionchange'))
+      await pause(30)
+      node.parentElement.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await pause(100)
+    }
+    const boldMarkersHidden = () => [...boldContent.querySelectorAll('.mu-hide')].some(element => element.textContent.includes('**'))
+    await clickVisibleCaret(boldText, 2)
+    check(boldBlock.getCursor()?.anchor.offset === 11, 'caret after B in **ABCD** jumped to the wrong raw offset: ' + boldBlock.getCursor()?.anchor.offset)
+    check(!boldMarkersHidden(), 'clicking inside bold did not reveal its markers')
+    document.execCommand('insertText', false, 'X')
+    await wait(() => value().includes('**ABXCD**'), 'typing after B did not edit the bold content: ' + value())
+    window.__writer.undo()
+    await wait(() => value().includes('**ABCD**') && !value().includes('**ABXCD**'), 'bold caret edit was not undoable')
+    for (let index = 0; index < 6; index++) {
+      const plainText = visibleTextNodes(boldContent).find(node => node.data.startsWith('Before'))
+      await clickVisibleCaret(plainText, 2)
+      check(boldMarkersHidden(), 'bold markers remained visible after leaving bold at iteration ' + index)
+      const currentBoldText = visibleTextNodes(boldContent).find(node => node.data === 'ABCD')
+      await clickVisibleCaret(currentBoldText, 2)
+      check(boldBlock.getCursor()?.anchor.offset === 11, 'bold caret drifted after repeated clicks at iteration ' + index)
+    }
+    checks.push('bold caret placement and marker visibility survive repeated enter/leave clicks')
+
     const rich = '---\ntitle: 保留元信息\ntags: [markdown, timber]\n---\n\n# 示例\n\nhello world\n\n- [x] done\n- [ ] todo\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```js\nconst n = 1\n```\n\n$$\nE=mc^2\n$$\n\n注释[^note1]\n\n[^note1]: 说明\n'
     prose = await documentWith(rich, 'read')
     const taskBoxes = prose.querySelectorAll('li.mu-task-list-item > input[type="checkbox"], li.mu-task-list-item > span.mu-task-list-checkbox')
     check(taskBoxes.length === 2, 'task list checkboxes are missing')
     for (const box of taskBoxes) {
       const shape = getComputedStyle(box, '::before')
-      check(shape.width === shape.height && parseFloat(shape.borderTopLeftRadius) <= 3 && !shape.borderTopLeftRadius.includes('%'), 'Markdown task checkbox is still circular')
+      check(shape.width === '15px' && shape.height === '15px' && parseFloat(shape.borderTopWidth) >= 1 && parseFloat(shape.borderTopWidth) <= 1.6 && parseFloat(shape.borderTopLeftRadius) <= 3 && !shape.borderTopLeftRadius.includes('%'), 'Markdown task checkbox does not use the compact 15px square style: ' + JSON.stringify({ width: shape.width, height: shape.height, border: shape.borderTopWidth, radius: shape.borderTopLeftRadius }))
     }
     taskBoxes[1].click()
     await wait(() => /^- \[[xX]\] todo$/m.test(value()), 'square task checkbox did not toggle the Markdown task state')
@@ -454,6 +508,16 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     check(html.includes('HTML &lt;标题&gt;'), 'HTML title was not escaped')
     check(!/<script\b/i.test(html), 'HTML export contains application scripts')
     checks.push('portable HTML embeds images, math, front matter and static diagrams')
+
+    prose = await documentWith('# **Bold** [link](https://example.com)\n\n> quoted text\n', 'read')
+    await wait(() => document.querySelector('.toc-flyout-label')?.textContent === 'Bold link', 'rendered outline leaked Markdown heading or emphasis markers')
+    check(getComputedStyle(prose.querySelector('h1 .mu-link')).color === 'rgb(63, 135, 166)', 'Markdown link did not use the muted lake-blue color')
+    const quote = prose.querySelector('blockquote')
+    check(getComputedStyle(quote, '::before').content === 'none' && parseFloat(getComputedStyle(quote).borderLeftWidth) > 0, 'blockquote still renders two left borders')
+    window.__writer.mode('source')
+    await wait(() => runtime()?.kind === 'source', 'source mode did not mount for outline checks')
+    await wait(() => document.querySelector('.toc-flyout-label')?.textContent === 'Bold link', 'source outline leaked Markdown heading or emphasis markers')
+    checks.push('plain-text outline, muted links and a single blockquote border in both editor modes')
 
     const long = Array.from({ length: 50 }, (_, i) => '# Heading ' + i + '\n\nParagraph ' + i).join('\n\n')
     prose = await documentWith(long, 'read')

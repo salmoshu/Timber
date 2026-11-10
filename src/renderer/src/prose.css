@@ -26,11 +26,18 @@
   font-size: 1.75em; line-height: 1.4;
   margin: 0 0 20px; padding-bottom: 14px; letter-spacing: 0.3px;
 }
+/* 上方间距只用 margin：Muya 的标题控件以边框顶部为首行基准，
+   padding-top 会让语法图标、折叠箭头和复制链接一起相对文字上移。 */
 .prose h2 {
   font-size: 1.45em; line-height: 1.4;
-  margin: 36px 0 12px; padding-top: 12px;
+  margin: 48px 0 12px; padding-top: 0;
 }
+/* h2 章节标记。Muya 编辑器的 .mu-content 是块级（display:block），::before 若挂在
+   h2 上会独占一行、把标题文字挤到下一行（v0.7.3 修复）——编辑器内改挂到 .mu-content
+   的内联首部，标记与标题同一行；导出 / 分页预览的 h2 直接含行内文本，仍用 h2 规则。 */
 .prose h2::before { content: "§ "; color: var(--accent); font-weight: 400; }
+.timber-muya h2::before { content: none; }
+.timber-muya h2 > .mu-content::before { content: "§ "; color: var(--accent); font-weight: 400; }
 .prose h3 { font-size: 1.25em; margin: 28px 0 8px; }
 .prose h4 { font-size: 1.1em; margin: 22px 0 6px; }
 .prose h5 { font-size: 1em; margin: 18px 0 6px; }
@@ -44,8 +51,8 @@
 .prose li { margin: 4px 0; }
 .prose li::marker { color: var(--accent); }
 .prose strong { color: var(--ink); }
-.prose a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
-.prose a:hover { border-bottom-color: var(--accent); }
+.prose a { color: var(--md-link-color); text-decoration: none; border-bottom: 1px solid transparent; }
+.prose a:hover { color: var(--md-link-hover); border-bottom-color: var(--md-link-hover); }
 
 .prose blockquote {
   margin: 14px 0; padding: 12px 18px;
