@@ -57,13 +57,15 @@ function measureLineTops(codeEl: HTMLElement): number[] {
         while (tops.length < lineStarts.length && lineStarts[tops.length] < nodeEnd) {
             const offsetInNode = lineStarts[tops.length] - nodeStart;
             range.setStart(node, offsetInNode);
-            // A caret position on an empty line has no client rect (#5294), so
-            // an empty line is measured by its own newline.
-            if (node.data.charCodeAt(offsetInNode) === LF)
-                range.setEnd(node, offsetInNode + 1);
-            else
+            if (node.data.charCodeAt(offsetInNode) === LF) {
+                // An empty line has no reliable caret rect: measuring through its
+                // newline can return the following line's top and stack numbers.
+                tops.push(Number.NaN);
+            }
+            else {
                 range.collapse(true);
-            tops.push(range.getBoundingClientRect().top);
+                tops.push(range.getBoundingClientRect().top);
+            }
         }
 
         nodeStart = nodeEnd;
@@ -75,6 +77,30 @@ function measureLineTops(codeEl: HTMLElement): number[] {
     const trailingBreak = codeEl.querySelector(`.${CLASS_NAMES.MU_TRAILING_BREAK}`);
     if (trailingBreak !== null && tops.length === lineStarts.length - 1)
         tops.push(trailingBreak.getBoundingClientRect().top);
+
+    const lineH = Number.parseFloat(getComputedStyle(codeEl).lineHeight) || 24;
+    let index = 0;
+    while (index < tops.length) {
+        if (Number.isFinite(tops[index])) {
+            index++;
+            continue;
+        }
+        const start = index;
+        while (index < tops.length && !Number.isFinite(tops[index])) index++;
+        const previous = start > 0 ? tops[start - 1] : Number.NaN;
+        const next = index < tops.length ? tops[index] : Number.NaN;
+        const count = index - start;
+        for (let empty = start; empty < index; empty++) {
+            if (Number.isFinite(previous) && Number.isFinite(next))
+                tops[empty] = previous + (next - previous) * (empty - start + 1) / (count + 1);
+            else if (Number.isFinite(previous))
+                tops[empty] = previous + lineH * (empty - start + 1);
+            else if (Number.isFinite(next))
+                tops[empty] = next - lineH * (index - empty);
+            else
+                tops[empty] = lineH * empty;
+        }
+    }
 
     return tops;
 }

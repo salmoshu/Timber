@@ -4,7 +4,7 @@ import { DOC_FORMAT_GROUPS } from '@shared/types'
 import { useStore } from '../store'
 import { aiTest } from '../api'
 import { loadUpdaterPrefs, saveUpdaterPrefs } from '../utils/updater-prefs'
-import { THEME_PALETTES, type ThemeId } from '../utils/settings'
+import { DEFAULT_ARCHITECTURE_PROMPT, THEME_PALETTES, type ThemeId } from '../utils/settings'
 import TypographySettings from './TypographySettings'
 import EditorSettings from './EditorSettings'
 
@@ -298,6 +298,24 @@ export default function SettingsView() {
                 />
               </div>
               <div className="st-hint">填写服务商提供的模型名；生成质量随模型能力差异较大</div>
+            </div>
+
+            <div className="st-row">
+              <div className="st-label">一键优化提示词</div>
+              <div className="st-input-wrap">
+                <textarea
+                  className="st-input st-prompt-input"
+                  aria-label="一键优化提示词"
+                  spellCheck={false}
+                  value={ai.architecturePrompt}
+                  onChange={(e) => setSetting('ai', { ...ai, architecturePrompt: e.target.value })}
+                />
+                <div className="st-prompt-actions">
+                  <span>仅用于架构视图的「一键优化」，不影响日常 AI 对话。</span>
+                  <button className="btn-ghost sm" onClick={() => setSetting('ai', { ...ai, architecturePrompt: DEFAULT_ARCHITECTURE_PROMPT })}>恢复默认</button>
+                </div>
+              </div>
+              <div className="st-hint">默认要求完全基于源码、配置和 Git 事实重新生成，不参考现有 AI 画布；可按团队架构规范自行调整。</div>
             </div>
 
             <div className="st-row">

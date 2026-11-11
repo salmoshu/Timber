@@ -258,7 +258,7 @@ export async function archAiGenerate(
   signal: AbortSignal,
   call: ApiCall = api,
   options?: {
-    action: 'edit' | 'ask'
+    action: 'edit' | 'ask' | 'optimize'
     context: import('./components/ArchAiPanel').ArchAiContext
     ai?: import('./utils/settings').AiSettings
     onProgress?: (event: AiArchProgress) => void

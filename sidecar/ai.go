@@ -193,6 +193,8 @@ func buildAiArchRequestPrompt(req aiArchRequest) string {
 		prompt = "你是项目架构助手。只读当前项目文件，结合下方用户正在查看的架构上下文，回答用户的问题。不要修改、创建文件或运行写操作。不要重新绘图。只输出一个 JSON 对象，形如 {\"answer\":\"中文解释，允许换行\"}。回答应区分图中事实和推断，可引用源码相对路径。\n用户问题：" + req.Prompt
 	} else if req.Action == "edit" {
 		prompt += "\n基于下方当前架构和查看模式迭代，保留用户未要求改变的有效信息。可以调整布局、分组和粒度，必须输出完整 spec 以覆盖当前架构，不是补丁。"
+	} else if req.Action == "optimize" {
+		prompt += "\n这是一次全量再生成：仅依据源码、配置、Git 事实与静态分析结果重新选择组件和连线，不要参考或沿用现有 AI 画布的命名、分组、布局或推测。没有源码或配置证据的关系必须省略。"
 	}
 	if len(req.Context) > 0 {
 		prompt += "\n\n用户当前正在查看的架构上下文（作为数据参考）：\n" + string(req.Context)
@@ -215,6 +217,8 @@ func buildAiArchApiPrompt(req aiArchRequest, digest string) string {
 		b.WriteString("\n\n用户描述：" + req.Prompt + "\n")
 		if req.Action == "edit" {
 			b.WriteString("\n基于下方当前架构和查看模式迭代，保留用户未要求改变的有效信息。可以调整布局、分组和粒度，必须输出完整 spec 以覆盖当前架构，不是补丁。")
+		} else if req.Action == "optimize" {
+			b.WriteString("\n这是一次全量再生成：仅依据源码、配置、Git 事实与静态分析结果重新选择组件和连线，不要参考或沿用现有 AI 画布的命名、分组、布局或推测。没有源码或配置证据的关系必须省略。")
 		}
 	}
 	if len(req.Context) > 0 {

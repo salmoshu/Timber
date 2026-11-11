@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ArchSpec } from '@shared/types'
 import { aiCliStatus, archAiGenerate, type AiArchProgress, type AiArchResult } from '../api'
 import { apiCallFor, useStore } from '../store'
+import { DEFAULT_ARCHITECTURE_PROMPT } from '../utils/settings'
 
 interface AiFailure {
   title: string
@@ -121,6 +122,11 @@ function backendLabel(r: AiArchResult): string {
   return cliName(r.cli)
 }
 
+function inferChatAction(prompt: string): 'edit' | 'ask' {
+  const text = prompt.trim()
+  return /[?？]\s*$/.test(text) || /^(为什么|为何|如何|怎么|什么|哪些|哪个|解释|说明|分析|是否|有没有|能否|请介绍|告诉我)/.test(text) ? 'ask' : 'edit'
+}
+
 export interface ArchAiContext {
   spec?: ArchSpec
   mode: string
@@ -132,15 +138,15 @@ export interface ArchAiContext {
 
 export default function ArchAiPanel(props: {
   projectId: string
-  getContext: () => Promise<ArchAiContext>
+  getContext: (optimize?: boolean) => Promise<ArchAiContext>
   onRendered: (html: string, spec: ArchSpec, prompt: string) => void
 }) {
   const [prompt, setPrompt] = useState('')
-  const [action, setAction] = useState<'edit' | 'ask'>('edit')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [answer, setAnswer] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const lastKindRef = useRef<'chat' | 'optimize'>('chat')
   useEffect(() => () => { abortRef.current?.abort() }, [])
 
   // AI 后端就绪状态：设置页 API 配置（三项齐全）或本机 agent CLI（挂载时探测一次）
@@ -179,9 +185,11 @@ export default function ArchAiPanel(props: {
     setSteps((current) => current.map((step) => step.status === 'running' ? { ...step, status: 'error' } : step))
   }
 
-  const generate = async (): Promise<void> => {
-    const p = prompt.trim()
+  const generate = async (kind: 'chat' | 'optimize' = 'chat'): Promise<void> => {
+    const p = kind === 'optimize' ? (ai.architecturePrompt.trim() || DEFAULT_ARCHITECTURE_PROMPT) : prompt.trim()
     if (!p || busy) return
+    const action = kind === 'optimize' ? 'optimize' : inferChatAction(p)
+    lastKindRef.current = kind
     const ac = new AbortController()
     abortRef.current = ac
     setBusy(true)
@@ -189,9 +197,9 @@ export default function ArchAiPanel(props: {
     setAnswer(null)
     setSteps([])
     setStepsOpen(true)
-    setStatus(action === 'ask' ? '正在阅读当前架构并分析问题…' : '正在基于当前架构调整，通常需要 1～3 分钟…')
+    setStatus(kind === 'optimize' ? '正在仅基于源码与事实重新生成架构…' : action === 'ask' ? '正在阅读当前架构并分析问题…' : '正在基于当前架构调整，通常需要 1～3 分钟…')
     try {
-      const context = await props.getContext()
+      const context = await props.getContext(kind === 'optimize')
       if (ac.signal.aborted) return
       if (context.sourceError) {
         setStatus(null)
@@ -252,7 +260,7 @@ export default function ArchAiPanel(props: {
         return
       }
       props.onRendered(rr.html, spec, p)
-      setStatus(`当前架构已更新 · ${backendLabel(r)}`)
+      setStatus(`${kind === 'optimize' ? '已按源码事实重新生成' : '当前架构已更新'} · ${backendLabel(r)}`)
     } catch (e) {
       if (!ac.signal.aborted) {
         setStatus(null)
@@ -269,9 +277,9 @@ export default function ArchAiPanel(props: {
     }
   }
   return (
-    <aside className="av-ai-panel" aria-label="架构 AI 助手">
-      <div className="av-ai-title">AI 助手</div>
-      <p className="av-ai-intro">围绕左侧当前内容，调整架构、优化表达或解释依赖关系。</p>
+    <aside className="av-ai-panel" aria-label="架构 AI 对话">
+      <div className="av-ai-title">AI 对话</div>
+      <p className="av-ai-intro">直接提问或描述调整；一键优化只依据源码与事实重新生成。</p>
       {/* 后端就绪提示：两项都不可用时给出可操作的指引（v0.6.3） */}
       {hasApi ? (
         <div className="av-ai-backend api" title="在 设置 → AI 中修改">接口：{ai.model}</div>
@@ -284,10 +292,7 @@ export default function ArchAiPanel(props: {
           填写 API 信息，或安装 kimi / codex CLI
         </div>
       ) : null}
-      <div className="seg av-ai-mode">
-        <button disabled={busy} className={action === 'edit' ? 'active' : ''} onClick={() => setAction('edit')}>调整架构</button>
-        <button disabled={busy} className={action === 'ask' ? 'active' : ''} onClick={() => setAction('ask')}>问答解释</button>
-      </div>
+      <button className="av-ai-optimize" disabled={busy} title="忽略当前 AI 画布，完全基于源码、配置和 Git 事实重新生成" onClick={() => void generate('optimize')}>一键优化</button>
       {answer && <div className="av-ai-answer" aria-label="AI 回答">{answer}</div>}
       {steps.length > 0 && (
         <div className="av-ai-steps" data-busy={busy}>
@@ -312,10 +317,10 @@ export default function ArchAiPanel(props: {
         </div>
       )}
       <div className="av-ai-composer">
-        <textarea className="av-ai-input" placeholder={action === 'ask' ? '例如：这些模块之间如何传递数据？' : '例如：突出数据流，将存储层分开展示'} value={prompt} rows={5} disabled={busy} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void generate() } }} />
+        <textarea className="av-ai-input" placeholder="询问模块关系，或描述想如何调整架构…" value={prompt} rows={5} disabled={busy} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void generate() } }} />
         <div className="av-ai-actions">
           <span>Ctrl + Enter</span>
-          {busy ? <button className="av-ai-btn" onClick={() => { abortRef.current?.abort(); setBusy(false); setFailure(null); setStatus('已取消，当前架构已保留') }}>取消</button> : <button className="av-ai-btn primary" disabled={!prompt.trim()} onClick={() => void generate()}>{action === 'ask' ? '提问' : '更新架构'}</button>}
+          {busy ? <button className="av-ai-btn" onClick={() => { abortRef.current?.abort(); setBusy(false); setFailure(null); setStatus('已取消，当前架构已保留') }}>取消</button> : <button className="av-ai-btn primary" disabled={!prompt.trim()} onClick={() => void generate()}>发送</button>}
         </div>
       </div>
       {failure && (
@@ -326,12 +331,11 @@ export default function ArchAiPanel(props: {
           {failure.output && <pre className="av-ai-error-output">{failure.output}</pre>}
           <div className="av-ai-error-actions">
             {failure.showSettings && <button className="av-ai-btn" onClick={() => useStore.getState().openSettings('ai')}>打开 AI 设置</button>}
-            <button className="av-ai-btn primary" onClick={() => void generate()}>重试</button>
+            <button className="av-ai-btn primary" onClick={() => void generate(lastKindRef.current)}>重试</button>
           </div>
         </div>
       )}
       {status && <div className="av-ai-status" role="status">{status}</div>}
-      <p className="av-ai-footnote">成功更新后覆盖当前架构，重新打开项目仍可继续迭代。</p>
     </aside>
   )
 }

@@ -14,6 +14,12 @@ import { useResolvedTheme } from '../utils/useResolvedTheme'
 
 type Mode = 'snapshot' | 'delta' | 'matrix' | 'insights'
 
+const ARCH_LOAD_STAGES = [
+  { label: '正在读取源码与 Git 引用…', percent: 25 },
+  { label: '正在生成架构数据…', percent: 65 },
+  { label: '正在渲染架构图…', percent: 90 }
+]
+
 /** 架构图皮肤（archify HTML 的 data-theme）；矩阵/洞察为 React 渲染，随应用主题，不受此影响 */
 /** arch/spec/insights 错误码 → 空态文案（矩阵/洞察组件共用） */
 const ARCH_ERROR_TEXTS: Record<string, string> = {
@@ -80,6 +86,7 @@ export default function ArchitectureView() {
   const [headRef, setHeadRef] = useState('HEAD')
   const [html, setHtml] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadStage, setLoadStage] = useState(0)
   const [error, setError] = useState<string | null>(null)
   // 矩阵/洞察的刷新代际：点击 ⟳ 自增，子组件据此重拉
   const [refreshSeq, setRefreshSeq] = useState(0)
@@ -109,12 +116,12 @@ export default function ArchitectureView() {
     return () => { stale = true }
   }, [current, activeProjectId])
 
-  const getAiContext = async (): Promise<ArchAiContext> => {
-    const ref = mode === 'delta' ? headRef : snapRef
-    if (displayingCurrent && current) return { spec: current.spec, ref: 'HEAD', mode: 'current' }
+  const getAiContext = async (optimize = false): Promise<ArchAiContext> => {
+    const ref = optimize ? 'HEAD' : mode === 'delta' ? headRef : snapRef
+    if (!optimize && displayingCurrent && current) return { spec: current.spec, ref: 'HEAD', mode: 'current' }
     const result = await ensureArchSpec(ref)
     if (!result.ok) return { ref, mode, sourceError: archErrorText(result.error) }
-    const context: ArchAiContext = { spec: result.spec, ref, mode }
+    const context: ArchAiContext = { spec: result.spec, ref, mode: optimize ? 'current' : mode }
     if (mode === 'delta') {
       const base = await ensureArchSpec(baseRef)
       if (!base.ok) throw new Error(archErrorText(base.error))
@@ -165,6 +172,7 @@ export default function ArchitectureView() {
         return
       }
       setLoading(true)
+      setLoadStage(1)
       setError(null)
       const key = mode === 'snapshot' ? `${id}:${snapRef}` : `${id}:${baseRef}..${headRef}`
       try {
@@ -182,6 +190,7 @@ export default function ArchitectureView() {
             setHtml(null)
             return
           }
+          setLoadStage(2)
           result = await b.archRender(JSON.stringify(r.spec), key)
         } else {
           const [baseR, headR] = await Promise.all([ensureArchSpec(baseRef), ensureArchSpec(headRef)])
@@ -196,6 +205,7 @@ export default function ArchitectureView() {
             setHtml(null)
             return
           }
+          setLoadStage(2)
           result = await b.archDelta(JSON.stringify(baseR.spec), JSON.stringify(headR.spec), key)
         }
         if (stale()) return
@@ -204,6 +214,7 @@ export default function ArchitectureView() {
           setHtml(null)
           return
         }
+        setLoadStage(3)
         // 写入 store HTML 缓存（不可变更新；缓存的是原始 HTML，主题在 srcDoc 前套用）
         const next = new Map(useStore.getState().archHtmlCache)
         next.set(key, result.html)
@@ -215,7 +226,10 @@ export default function ArchitectureView() {
           setHtml(null)
         }
       } finally {
-        if (!stale()) setLoading(false)
+        if (!stale()) {
+          setLoading(false)
+          setLoadStage(0)
+        }
       }
     },
     [activeProjectId, mode, snapRef, baseRef, headRef, ensureArchSpec, displayingCurrent]
@@ -319,7 +333,13 @@ export default function ArchitectureView() {
           aiThemedHtml ? <iframe className="av-frame" sandbox="allow-scripts" srcDoc={aiThemedHtml} title="当前架构图" /> : <div className="hv-loading">{error ?? '当前架构加载中…'}</div>
         ) : (
           <>
-            {loading && <div className="hv-loading">架构图渲染中…</div>}
+            {loading && (
+              <div className="hv-loading av-load-progress" role="progressbar" aria-label="架构初始化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}>
+                <div className="av-load-progress-label">{ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].label}</div>
+                <div className="av-load-progress-track"><span style={{ width: `${ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}%` }} /></div>
+                <div className="av-load-progress-meta">第 {loadStage} / 3 阶段 · {ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}%</div>
+              </div>
+            )}
             {!loading && error && <div className="hv-empty">{error}</div>}
             {!loading && !error && themedHtml && <iframe className="av-frame" sandbox="allow-scripts" srcDoc={themedHtml} title="架构图" />}
           </>

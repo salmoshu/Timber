@@ -134,3 +134,15 @@ func TestWithAiCliPathPrependsRuntimeDirectory(t *testing.T) {
 		t.Fatalf("missing PATH fallback: %#v", env)
 	}
 }
+
+func TestArchitectureOptimizeRequiresSourceFacts(t *testing.T) {
+	context := json.RawMessage(`{"mode":"current","spec":{"components":[{"id":"old_ai_layout"}]}}`)
+	req := aiArchRequest{Action: "optimize", Prompt: "完全基于源码重新生成", Context: context}
+	for _, prompt := range []string{buildAiArchRequestPrompt(req), buildAiArchApiPrompt(req, "\n\n项目结构上下文：源码静态分析")} {
+		for _, text := range []string{"全量再生成", "源码、配置、Git 事实", "不要参考或沿用现有 AI 画布", "没有源码或配置证据"} {
+			if !strings.Contains(prompt, text) {
+				t.Errorf("optimize prompt missing %q", text)
+			}
+		}
+	}
+}

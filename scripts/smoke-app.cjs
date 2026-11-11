@@ -2,7 +2,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
-const { spawn } = require('node:child_process')
+const { spawn, spawnSync } = require('node:child_process')
 const root = path.resolve(__dirname, '..')
 const temp = path.join(root, 'tmp', 'app-smoke-' + (process.env.TIMBER_APP_SMOKE_ID || Date.now()))
 const projectDir = path.join(temp, 'folder with spaces')
@@ -41,6 +41,11 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     fs.mkdirSync(projectDir, { recursive: true })
     fs.writeFileSync(first, '# first-open\n\nAnnotation text.\n')
     fs.writeFileSync(second, '# second-open\n')
+    fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const answer = 42\n')
+    for (const args of [['init'], ['add', '.'], ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com', 'commit', '-m', 'initial']]) {
+      const result = spawnSync('git', args, { cwd: projectDir, stdio: 'pipe' })
+      if (result.status !== 0) throw new Error('Git fixture setup failed: ' + result.stderr)
+    }
     fs.writeFileSync(path.join(temp, 'profile/sidecar-data/projects.json'), JSON.stringify({ projects: [{ id: 'smoke-folder', name: 'Project folder', path: projectDir, addedAt: new Date().toISOString(), docCount: 2 }] }))
   }
   let win
@@ -109,6 +114,23 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       check(await evaluate("document.querySelector('[aria-label=\"源码模式\"]')?.getAttribute('role') === 'switch' && document.querySelector('[aria-label=\"源码模式\"]')?.querySelectorAll('svg').length === 2 && document.querySelector('[aria-label=\"源码模式\"]')?.textContent.trim() === '' && document.querySelector('[aria-label=\"分页预览\"]')?.tagName === 'BUTTON' && document.querySelector('[aria-label=\"分页预览\"]')?.hasAttribute('aria-pressed') && document.querySelector('[aria-label=\"分页预览\"]')?.querySelector('svg') && document.querySelector('[aria-label=\"分页预览\"]')?.textContent.trim() === ''"), 'Read/source switch and page preview are not accessible icon controls')
       checks.push('cold-start file argument with Chinese, spaces and ampersand; single-file feature gates')
 
+      const drag = await evaluate(`(() => {
+        const walker = document.createTreeWalker(document.querySelector('.prose'), NodeFilter.SHOW_TEXT)
+        let node
+        while ((node = walker.nextNode())) if (node.data.includes('first-open')) break
+        const range = document.createRange()
+        range.selectNodeContents(node)
+        const rect = range.getBoundingClientRect()
+        return { startX: Math.round(rect.left + 2), endX: Math.round(rect.right - 2), y: Math.round(rect.top + rect.height / 2) }
+      })()`)
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: drag.startX, y: drag.y, button: 'left', clickCount: 1 })
+      for (let step = 1; step <= 8; step++) win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(drag.startX + (drag.endX - drag.startX) * step / 8), y: drag.y, buttons: 1 })
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: drag.endX, y: drag.y, button: 'left', clickCount: 1 })
+      await wait(() => evaluate("window.getSelection().toString().includes('first-open')"), 'Native drag selection disappeared')
+      await wait(() => evaluate("Number(getComputedStyle(document.querySelector('.mu-format-picker-container')).opacity) === 1"), 'Native drag selection did not show the format toolbar')
+      check(await evaluate("Number(getComputedStyle(document.querySelector('.titlebar')).zIndex) > Number(getComputedStyle(document.querySelector('.tabs-bar')).zIndex)"), 'Block hover controls can overlap the titlebar')
+      checks.push('native drag selection preserves the selected text and format toolbar')
+
       await evaluate("document.querySelector('[aria-label=\"源码模式\"]').click()")
       await wait(() => evaluate("!!document.querySelector('.CodeMirror textarea')"), 'Source switch did not mount CodeMirror')
       win.webContents.focus()
@@ -165,6 +187,18 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await evaluate("[...document.querySelectorAll('.theme-option')].find(button => button.textContent.endsWith('Nord')).click()")
       await wait(() => evaluate("document.documentElement.dataset.palette === 'nord'"), 'Nord palette did not apply')
       await screenshot('settings-nord.png')
+      await evaluate("document.querySelector('[data-section=\"ai\"]').click()")
+      await wait(() => evaluate("!!document.querySelector('[aria-label=\"一键优化提示词\"]')"), 'Architecture optimization prompt is missing from AI settings')
+      const defaultPrompt = await evaluate("document.querySelector('[aria-label=\"一键优化提示词\"]').value")
+      check(defaultPrompt.includes('完全基于当前项目的源码') && defaultPrompt.includes('不要参考现有 AI 画布'), 'Default optimization prompt does not enforce source-backed generation')
+      await evaluate(`(() => {
+        const input = document.querySelector('[aria-label="一键优化提示词"]')
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, '自定义架构提示词')
+        input.dispatchEvent(new Event('input', {bubbles:true}))
+      })()`)
+      await evaluate("[...document.querySelectorAll('.st-prompt-actions button')].find(button => button.textContent === '恢复默认').click()")
+      check(await evaluate("document.querySelector('[aria-label=\"一键优化提示词\"]').value") === defaultPrompt, 'Optimization prompt reset did not restore the default')
+      checks.push('configurable source-backed optimization prompt and reset')
       await evaluate("document.querySelector('[data-section=\"editor\"]').click()")
       await wait(() => evaluate("!!document.querySelector('.editor-settings .typography-settings') && !!document.querySelector('#editor-codeBlockLineNumbers')"), 'Editor settings do not include fonts and behavior controls')
       const fonts = await evaluate('window.timber.listFontFamilies()')
@@ -298,6 +332,19 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
 
       await evaluate("[...document.querySelectorAll('.proj-item')].find(button => button.textContent.includes('Project folder')).click()")
       await wait(() => evaluate("[...document.querySelectorAll('.tb-view')].filter(button => ['架构','历史'].includes(button.textContent)).every(button => !button.disabled)"), 'Project folder did not enable architecture/history')
+      await evaluate(`(() => {
+        window.__archRenderOriginal = window.timber.archRender
+        window.timber.archRender = (...args) => new Promise(resolve => setTimeout(() => resolve(window.__archRenderOriginal(...args)), 900))
+        return undefined
+      })()`)
+      await evaluate("[...document.querySelectorAll('.tb-view')].find(button => button.textContent === '架构').click()")
+      await wait(() => evaluate("document.querySelector('.av-load-progress')?.getAttribute('aria-valuenow') === '65'"), 'Architecture initialization did not reach the data-ready progress stage')
+      check(await evaluate("document.querySelector('.av-load-progress-track span')?.style.width === '65%'"), 'Architecture progress bar is not rendering its stage percentage')
+      check(await evaluate("document.querySelector('.av-ai-title')?.textContent === 'AI 对话' && !!document.querySelector('.av-ai-optimize') && !document.querySelector('.av-ai-footnote') && ![...document.querySelectorAll('.av-ai-mode button')].length"), 'AI panel did not merge into a unified conversation with one-click optimization')
+      await wait(() => evaluate("!!document.querySelector('.av-frame')"), 'Architecture diagram did not render after initialization')
+      await evaluate("window.timber.archRender = window.__archRenderOriginal; undefined")
+      check(await evaluate("!document.querySelector('.av-load-progress')"), 'Architecture progress stayed visible after rendering completed')
+      checks.push('real architecture initialization progress and unified AI conversation')
       await evaluate("[...document.querySelectorAll('.tb-view')].find(button => button.textContent === '历史').click()")
       await wait(() => evaluate("document.querySelector('.tb-view.active')?.textContent === '历史'"), 'Folder history view did not open')
       await evaluate("[...document.querySelectorAll('.proj-item')].find(button => button.textContent.includes('second.markdown')).click()")

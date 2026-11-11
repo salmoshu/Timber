@@ -10,7 +10,15 @@ export interface AiSettings {
   baseUrl: string
   apiKey: string
   model: string
+  architecturePrompt: string
 }
+
+export const DEFAULT_ARCHITECTURE_PROMPT = `完全基于当前项目的源码、配置和 Git 事实重新生成架构图，不要参考现有 AI 画布的命名、分组、布局或推测。
+
+- 先识别系统入口、核心业务模块、数据模型、外部服务和主要调用链，优先保留主流程。
+- 每个组件和连接都必须有源码或配置证据；没有证据的关系省略，不要编造服务、模块或依赖。
+- 以调用方 → 入口 → 核心业务 → 数据/外部依赖组织结构，控制为 4～12 个组件，文字简短，避免交叉与遮挡。
+- 这是全量再生成，不是局部调整。输出完整 archify spec，不输出解释文字。`
 
 export interface AppSettings {
   theme: ThemeId | 'system'
@@ -64,7 +72,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSaveDelayMs: 2000,
   docFormats: ['md', 'html', 'txt'],
   resourceFilterDocsByProject: {},
-  ai: { baseUrl: '', apiKey: '', model: '' }
+  ai: { baseUrl: '', apiKey: '', model: '', architecturePrompt: DEFAULT_ARCHITECTURE_PROMPT }
 }
 
 const SETTINGS_KEY = 'timber-settings'
@@ -104,7 +112,12 @@ export function filterDocsForProject(
 function normalizeAi(raw: unknown): AiSettings {
   const a = (raw && typeof raw === 'object' ? raw : {}) as Partial<AiSettings>
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
-  return { baseUrl: str(a.baseUrl).trim(), apiKey: str(a.apiKey).trim(), model: str(a.model).trim() }
+  return {
+    baseUrl: str(a.baseUrl).trim(),
+    apiKey: str(a.apiKey).trim(),
+    model: str(a.model).trim(),
+    architecturePrompt: str(a.architecturePrompt).trim() || DEFAULT_ARCHITECTURE_PROMPT
+  }
 }
 
 export function loadSettings(): AppSettings {

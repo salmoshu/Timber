@@ -2484,3 +2484,20 @@ body.image-resizing iframe, body.image-resizing webview { pointer-events: none; 
 .rd-choice:hover .rd-choice-icon { background: var(--accent-soft); color: var(--accent); }
 .rd-choice-name { font-weight: 600; }
 .rd-choice-desc { line-height: 1.55; }
+
+/* Muya 的块悬浮按钮位于 body 末端：层级必须低于目录、标签栏和标题栏。 */
+.titlebar { position: relative; z-index: 60; }
+.tabs-bar, .rt-breadcrumb { position: relative; z-index: 40; }
+
+.av-load-progress { flex-direction: column; align-items: stretch; gap: 12px; max-width: 360px; margin: 96px auto 0; color: var(--ink2); }
+.av-load-progress-label { font-size: 13px; text-align: center; }
+.av-load-progress-track { height: 6px; overflow: hidden; border-radius: 999px; background: var(--Fills-F2); }
+.av-load-progress-track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 240ms ease; }
+.av-load-progress-meta { color: var(--ink3); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
+
+.av-ai-optimize { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--accent); font-size: 12px; }
+.av-ai-optimize:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.av-ai-optimize:disabled { opacity: .5; cursor: default; }
+.st-prompt-input { min-height: 156px; resize: vertical; line-height: 1.65; font-family: var(--system-fonts); }
+.st-prompt-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
+.st-prompt-actions > span { color: var(--ink3); font-size: 11px; }

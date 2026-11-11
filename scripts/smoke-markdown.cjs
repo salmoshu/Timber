@@ -336,6 +336,24 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     check(!window.__writer.compose(), 'cross-paragraph selection unexpectedly opened annotation composition')
     checks.push('annotation icon shares normal formatting toolbar visibility; cross-paragraph selection hides the whole toolbar')
 
+    prose = await documentWith('alpha **bold text** omega\n', 'read')
+    for (let index = 0; index < 10; index++) {
+      const target = index % 2 === 0 ? 'alpha' : 'bold text'
+      const textNode = visibleTextNodes(prose).find(node => node.data.includes(target))
+      const targetElement = textNode.parentElement
+      targetElement.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      selectText(prose, target)
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+      targetElement.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await pause(90)
+      check(!window.getSelection().isCollapsed && window.getSelection().toString() === target, 'selection disappeared after mouse completion at iteration ' + index)
+      await wait(() => {
+        const toolbar = document.querySelector('.mu-format-picker-container')
+        return toolbar && Number(getComputedStyle(toolbar).opacity) === 1
+      }, 'format toolbar did not remain visible at iteration ' + index)
+    }
+    checks.push('selection and format toolbar survive repeated mouse completion')
+
     prose = await documentWith('Heading target\n', 'read')
     selectText(prose, 'Heading target')
     window.__writer.command('h2')
@@ -421,6 +439,22 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     await wait(() => !!prose.querySelector('.mu-code-block .token'), 'lazy C++ Prism grammar did not highlight the code block')
     check(value().includes('#include <vector>'), 'lazy grammar loading changed the code source')
     checks.push('lazy Prism grammar loading preserves code and dependency order')
+
+    prose = await documentWith('```text\n静默30分钟后，请完成下面工作：本项目远程库已经更名为Open-GNSS了.\n\n请你同步完成git的更名，然后拉取最新的代码到本地。\n (Please use the /cron skill to create a scheduled task in Catfish.) \n```\n', 'read')
+    await wait(() => {
+      const spans = [...prose.querySelectorAll('.mu-line-numbers-rows > span')]
+      return spans.length === 4 && spans.every(span => span.style.top !== '')
+    }, 'code line numbers were not positioned')
+    const numberTops = [...prose.querySelectorAll('.mu-line-numbers-rows > span')].map(span => parseFloat(span.style.top))
+    check(numberTops.every((top, index) => index === 0 || top > numberTops[index - 1] + 1), 'blank code lines produced overlapping line numbers: ' + numberTops.join(','))
+    const codeRect = prose.querySelector('pre').getBoundingClientRect()
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: codeRect.left + 24, clientY: codeRect.top + 12 }))
+    await wait(() => !!document.querySelector('.mu-front-button-wrapper'), 'block hover button did not mount')
+    const frontButtonZ = Number(getComputedStyle(document.querySelector('.mu-front-button-wrapper')).zIndex)
+    const outlineZ = Number(getComputedStyle(document.querySelector('.document-outline')).zIndex)
+    const tabsZ = Number(getComputedStyle(document.querySelector('.tabs-bar')).zIndex)
+    check(frontButtonZ < outlineZ && outlineZ < tabsZ, 'block hover button can cover the outline or document tabs')
+    checks.push('code line numbers stay separated and block hover controls stay below editor chrome')
 
     prose = await documentWith('**hello** HELLO other\n', 'read')
     key(prose, 'h', { code: 'KeyH', ctrlKey: true })
