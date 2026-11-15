@@ -7,6 +7,7 @@ import type { ArchSpec } from '@shared/types'
 import { aiCliStatus, archAiGenerate, type AiArchProgress, type AiArchResult } from '../api'
 import { apiCallFor, useStore } from '../store'
 import { DEFAULT_ARCHITECTURE_PROMPT } from '../utils/settings'
+import { effectiveArchAgent, loadArchAgentOptions, saveArchAgentOptions, type ArchAgentOptions } from '../utils/archAgentOptions'
 
 interface AiFailure {
   title: string
@@ -142,6 +143,8 @@ export default function ArchAiPanel(props: {
   onRendered: (html: string, spec: ArchSpec, prompt: string) => void
 }) {
   const [prompt, setPrompt] = useState('')
+  const [inputHeight, setInputHeight] = useState(96)
+  const inputResizeRef = useRef<{ y: number; height: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [answer, setAnswer] = useState<string | null>(null)
@@ -153,14 +156,28 @@ export default function ArchAiPanel(props: {
   const ai = useStore((s) => s.settings.ai)
   const hasApi = !!(ai.baseUrl && ai.apiKey && ai.model)
   const [cliReady, setCliReady] = useState<'kimi' | 'codex' | null | undefined>(undefined)
+  const [cliAvailability, setCliAvailability] = useState({ kimi: false, codex: false })
+  const [agentOptions, setAgentOptions] = useState<ArchAgentOptions>(loadArchAgentOptions)
   useEffect(() => {
     let dead = false
     setCliReady(undefined)
-    aiCliStatus(props.projectId, apiCallFor(props.projectId))
-      .then((r) => { if (!dead) setCliReady(r.cli === 'kimi' || r.cli === 'codex' ? r.cli : null) })
+    const call = apiCallFor(props.projectId)
+    Promise.all([aiCliStatus(props.projectId, call, 'kimi'), aiCliStatus(props.projectId, call, 'codex')])
+      .then(([kimi, codex]) => {
+        if (dead) return
+        const availability = { kimi: kimi.cli === 'kimi', codex: codex.cli === 'codex' }
+        setCliAvailability(availability)
+        setCliReady(availability.kimi ? 'kimi' : availability.codex ? 'codex' : null)
+      })
       .catch(() => { if (!dead) setCliReady(null) })
     return () => { dead = true }
   }, [props.projectId])
+  const effectiveAgent = effectiveArchAgent(agentOptions, hasApi, cliReady ?? null)
+  const updateAgentOptions = (patch: Partial<ArchAgentOptions>): void => {
+    const next = { ...agentOptions, ...patch }
+    setAgentOptions(next)
+    saveArchAgentOptions(next)
+  }
 
   const [failure, setFailure] = useState<AiFailure | null>(null)
   const [steps, setSteps] = useState<Array<AiArchProgress & { key: string }>>([])
@@ -213,8 +230,15 @@ export default function ArchAiPanel(props: {
       }
       const r = await archAiGenerate(props.projectId, p, ac.signal, apiCallFor(props.projectId), {
         action,
+        agent: agentOptions.agent,
+        options: {
+          model: agentOptions.model.trim(),
+          effort: agentOptions.effort,
+          speed: agentOptions.speed,
+          permission: agentOptions.permission
+        },
         context,
-        ai: hasApi ? ai : undefined,
+        ai: hasApi ? { ...ai, model: agentOptions.model.trim() || ai.model } : undefined,
         onProgress: appendProgress
       })
       if (ac.signal.aborted) return
@@ -278,64 +302,152 @@ export default function ArchAiPanel(props: {
   }
   return (
     <aside className="av-ai-panel" aria-label="架构 AI 对话">
-      <div className="av-ai-title">AI 对话</div>
-      <p className="av-ai-intro">直接提问或描述调整；一键优化只依据源码与事实重新生成。</p>
-      {/* 后端就绪提示：两项都不可用时给出可操作的指引（v0.6.3） */}
-      {hasApi ? (
-        <div className="av-ai-backend api" title="在 设置 → AI 中修改">接口：{ai.model}</div>
-      ) : cliReady === 'kimi' || cliReady === 'codex' ? (
-        <div className="av-ai-backend cli" title="本机检测到的 agent CLI；配置 设置 → AI 后优先走接口">{cliName(cliReady)} CLI</div>
-      ) : cliReady === null ? (
-        <div className="av-ai-backend none">
-          AI 未配置 —— 在
-          <button className="av-ai-link" onClick={() => useStore.getState().openSettings('ai')}>设置 → AI</button>
-          填写 API 信息，或安装 kimi / codex CLI
-        </div>
-      ) : null}
-      <button className="av-ai-optimize" disabled={busy} title="忽略当前 AI 画布，完全基于源码、配置和 Git 事实重新生成" onClick={() => void generate('optimize')}>一键优化</button>
-      {answer && <div className="av-ai-answer" aria-label="AI 回答">{answer}</div>}
-      {steps.length > 0 && (
-        <div className="av-ai-steps" data-busy={busy}>
-          <button className="av-ai-steps-header" aria-expanded={stepsOpen} onClick={() => setStepsOpen((open) => !open)}>
-            <span className={`av-ai-steps-summary ${busy ? 'running' : ''}`}>{busy ? '◌' : '✓'}</span>
-            <span>{busy ? '执行过程' : '查看步骤'} · {steps.length}</span>
-            <span className={`av-ai-steps-chevron ${stepsOpen ? 'open' : ''}`}>›</span>
-          </button>
-          {stepsOpen && (
-            <div className="av-ai-steps-list">
-              {steps.map((step) => (
-                <div className="av-ai-step" data-status={step.status ?? 'done'} key={step.key}>
-                  <span className="av-ai-step-mark" aria-hidden="true">{step.status === 'running' ? '◌' : step.status === 'error' ? '!' : '✓'}</span>
-                  <div className="av-ai-step-content">
-                    <div className="av-ai-step-label">{step.label}</div>
-                    {step.detail && <pre className="av-ai-step-detail">{step.detail}</pre>}
+      <div className="av-ai-conversation">
+        <div className="av-ai-title">AI 对话</div>
+        <p className="av-ai-intro">直接提问或描述调整；一键优化只依据源码与事实重新生成。</p>
+        {/* 后端就绪提示：两项都不可用时给出可操作的指引（v0.6.3） */}
+        {hasApi ? (
+          <div className="av-ai-backend api" title="在 设置 → AI 中修改">接口：{ai.model}</div>
+        ) : cliReady === 'kimi' || cliReady === 'codex' ? (
+          <div className="av-ai-backend cli" title="本机检测到的 agent CLI；配置 设置 → AI 后优先走接口">{cliName(cliReady)} CLI</div>
+        ) : cliReady === null ? (
+          <div className="av-ai-backend none">
+            AI 未配置 —— 在
+            <button className="av-ai-link" onClick={() => useStore.getState().openSettings('ai')}>设置 → AI</button>
+            填写 API 信息，或安装 kimi / codex CLI
+          </div>
+        ) : null}
+        {answer && <div className="av-ai-answer" aria-label="AI 回答">{answer}</div>}
+        {steps.length > 0 && (
+          <div className="av-ai-steps" data-busy={busy}>
+            <button className="av-ai-steps-header" aria-expanded={stepsOpen} onClick={() => setStepsOpen((open) => !open)}>
+              <span className={`av-ai-steps-summary ${busy ? 'running' : ''}`}>{busy ? '◌' : '✓'}</span>
+              <span>{busy ? '执行过程' : '查看步骤'} · {steps.length}</span>
+              <span className={`av-ai-steps-chevron ${stepsOpen ? 'open' : ''}`}>›</span>
+            </button>
+            {stepsOpen && (
+              <div className="av-ai-steps-list">
+                {steps.map((step) => (
+                  <div className="av-ai-step" data-status={step.status ?? 'done'} key={step.key}>
+                    <span className="av-ai-step-mark" aria-hidden="true">{step.status === 'running' ? '◌' : step.status === 'error' ? '!' : '✓'}</span>
+                    <div className="av-ai-step-content">
+                      <div className="av-ai-step-label">{step.label}</div>
+                      {step.detail && <pre className="av-ai-step-detail">{step.detail}</pre>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {failure && (
+          <div className="av-ai-error" role="alert">
+            <strong>{failure.title}</strong>
+            <div className="av-ai-error-detail">{failure.detail}</div>
+            <p className="av-ai-error-hint">{failure.hint}</p>
+            {failure.output && <pre className="av-ai-error-output">{failure.output}</pre>}
+            <div className="av-ai-error-actions">
+              {failure.showSettings && <button className="av-ai-btn" onClick={() => useStore.getState().openSettings('ai')}>打开 AI 设置</button>}
+              <button className="av-ai-btn primary" onClick={() => void generate(lastKindRef.current)}>重试</button>
             </div>
+          </div>
+        )}
+        {status && <div className="av-ai-status" role="status">{status}</div>}
+      </div>
+      <div className="av-ai-composer">
+        <div
+          className="av-ai-resize-handle"
+          role="separator"
+          aria-label="调整输入框高度"
+          aria-orientation="horizontal"
+          aria-valuemin={64}
+          aria-valuemax={360}
+          aria-valuenow={inputHeight}
+          tabIndex={0}
+          title="拖拽调整输入框高度"
+          onPointerDown={(e) => {
+            e.preventDefault()
+            inputResizeRef.current = { y: e.clientY, height: inputHeight }
+            e.currentTarget.setPointerCapture(e.pointerId)
+          }}
+          onPointerMove={(e) => {
+            const start = inputResizeRef.current
+            if (start) setInputHeight(Math.min(360, Math.max(64, start.height + start.y - e.clientY)))
+          }}
+          onPointerUp={(e) => {
+            inputResizeRef.current = null
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+          }}
+          onPointerCancel={() => { inputResizeRef.current = null }}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown' && e.key !== 'Home' && e.key !== 'End') return
+            e.preventDefault()
+            setInputHeight((height) => e.key === 'Home' ? 64 : e.key === 'End' ? 360 : Math.min(360, Math.max(64, height + (e.key === 'ArrowUp' ? 16 : -16))))
+          }}
+        ><span /></div>
+        <textarea className="av-ai-input" style={{ height: inputHeight }} placeholder="询问模块关系，或描述想如何调整架构…" value={prompt} disabled={busy} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void generate() } }} />
+        <div className="av-ai-actions">
+          <button className="av-ai-icon-button av-ai-optimize" disabled={busy} title="一键优化：完全基于源码、配置和 Git 事实重新生成" aria-label="一键优化" onClick={() => void generate('optimize')}>
+            <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09Z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.87 12.87 0 0 1 22 2c0 2.72-.78 7.5-6.05 11A22.35 22.35 0 0 1 12 15Z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" /></svg>
+            <span className="av-ai-action-label">优化</span>
+          </button>
+          <label className="av-ai-agent-option wide av-ai-agent-select">
+            <span>Agent</span>
+            <select aria-label="架构 Agent" disabled={busy} value={agentOptions.agent} onChange={(e) => {
+              const agent = e.target.value as ArchAgentOptions['agent']
+              updateAgentOptions({ agent, speed: 'default', permission: agent === 'codex' ? 'read-only' : agent === 'kimi' ? 'auto' : agentOptions.permission })
+            }}>
+              <option value="auto">Auto</option>
+              <option value="kimi" disabled={!cliAvailability.kimi}>Kimi{cliAvailability.kimi ? '' : '（未安装）'}</option>
+              <option value="codex" disabled={!cliAvailability.codex}>Codex{cliAvailability.codex ? '' : '（未安装）'}</option>
+              <option value="api" disabled={!hasApi}>自定义 API{hasApi ? '' : '（未配置）'}</option>
+            </select>
+          </label>
+          <div className="av-ai-runtime-tools">
+            <label className="av-ai-agent-option wide av-ai-model-field">
+              <span>模型（留空跟随默认）</span>
+              <input aria-label="架构模型" disabled={busy} value={agentOptions.model} placeholder={effectiveAgent === 'api' ? ai.model : 'CLI 默认模型'} onChange={(e) => updateAgentOptions({ model: e.target.value })} />
+            </label>
+            <label className="av-ai-agent-option av-ai-effort-field">
+              <span>思考强度</span>
+              <select aria-label="思考强度" disabled={busy || effectiveAgent === 'api'} value={agentOptions.effort} onChange={(e) => updateAgentOptions({ effort: e.target.value })}>
+                <option value="">默认</option>
+                {(effectiveAgent === 'kimi' ? [['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '极高'], ['max', '最大']] : [['minimal', '最小'], ['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '极高']]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <details className="av-ai-more" data-disabled={busy}>
+              <summary title="速度与权限">
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63 1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9 1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" /></svg>
+                <span className="av-ai-action-label">设置</span>
+              </summary>
+              <div className="av-ai-more-pop">
+                <label className="av-ai-agent-option">
+                  <span>速度</span>
+                  <select aria-label="速度" title={effectiveAgent === 'codex' ? 'Codex service_tier' : '仅 Codex 支持；Kimi 请通过模型别名选择高速模型'} disabled={busy || effectiveAgent !== 'codex'} value={effectiveAgent === 'codex' ? agentOptions.speed : 'default'} onChange={(e) => updateAgentOptions({ speed: e.target.value })}>
+                    <option value="default">标准</option>
+                    <option value="priority">优先</option>
+                  </select>
+                </label>
+                <label className="av-ai-agent-option">
+                  <span>权限</span>
+                  <select aria-label="权限" title={effectiveAgent === 'codex' ? 'Codex 沙箱权限' : 'Kimi -p 非交互模式固定为 auto 权限'} disabled={busy || effectiveAgent !== 'codex'} value={effectiveAgent === 'codex' ? agentOptions.permission : effectiveAgent === 'kimi' ? 'auto' : 'default'} onChange={(e) => updateAgentOptions({ permission: e.target.value })}>
+                    {effectiveAgent === 'codex' ? <><option value="read-only">只读</option><option value="workspace-write">工作区可写</option><option value="danger-full-access">完全访问</option></> : <option value={effectiveAgent === 'kimi' ? 'auto' : 'default'}>{effectiveAgent === 'kimi' ? '自动（非交互）' : '跟随默认'}</option>}
+                  </select>
+                </label>
+              </div>
+            </details>
+          </div>
+          {busy ? (
+            <button className="av-ai-send" title="取消生成" aria-label="取消生成" onClick={() => { abortRef.current?.abort(); setBusy(false); setFailure(null); setStatus('已取消，当前架构已保留') }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+            </button>
+          ) : (
+            <button className="av-ai-send" title="发送（Ctrl + Enter）" aria-label="发送" disabled={!prompt.trim()} onClick={() => void generate()}>
+              <svg width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5m0 0-6 6m6-6 6 6" /></svg>
+            </button>
           )}
         </div>
-      )}
-      <div className="av-ai-composer">
-        <textarea className="av-ai-input" placeholder="询问模块关系，或描述想如何调整架构…" value={prompt} rows={5} disabled={busy} onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void generate() } }} />
-        <div className="av-ai-actions">
-          <span>Ctrl + Enter</span>
-          {busy ? <button className="av-ai-btn" onClick={() => { abortRef.current?.abort(); setBusy(false); setFailure(null); setStatus('已取消，当前架构已保留') }}>取消</button> : <button className="av-ai-btn primary" disabled={!prompt.trim()} onClick={() => void generate()}>发送</button>}
-        </div>
       </div>
-      {failure && (
-        <div className="av-ai-error" role="alert">
-          <strong>{failure.title}</strong>
-          <div className="av-ai-error-detail">{failure.detail}</div>
-          <p className="av-ai-error-hint">{failure.hint}</p>
-          {failure.output && <pre className="av-ai-error-output">{failure.output}</pre>}
-          <div className="av-ai-error-actions">
-            {failure.showSettings && <button className="av-ai-btn" onClick={() => useStore.getState().openSettings('ai')}>打开 AI 设置</button>}
-            <button className="av-ai-btn primary" onClick={() => void generate(lastKindRef.current)}>重试</button>
-          </div>
-        </div>
-      )}
-      {status && <div className="av-ai-status" role="status">{status}</div>}
     </aside>
   )
 }

@@ -35,10 +35,19 @@ func (c aiConfig) valid() bool {
 	return strings.TrimSpace(c.BaseURL) != "" && strings.TrimSpace(c.APIKey) != "" && strings.TrimSpace(c.Model) != ""
 }
 
+type aiCliOptions struct {
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	Speed      string `json:"speed,omitempty"`
+	Permission string `json:"permission,omitempty"`
+}
+
 type aiArchRequest struct {
 	Prompt  string          `json:"prompt"`
 	Ref     string          `json:"ref,omitempty"`
 	Action  string          `json:"action,omitempty"`
+	Agent   string          `json:"agent,omitempty"`
+	Options aiCliOptions    `json:"options,omitempty"`
 	Context json.RawMessage `json:"context,omitempty"`
 	AI      aiConfig        `json:"ai,omitempty"`
 	Stream  bool            `json:"stream,omitempty"`
@@ -96,15 +105,22 @@ func aiCliCandidates(home, name string) []string {
 	return paths
 }
 
-func detectAiCliAt(home string, lookPath func(string) (string, error)) *aiCli {
-	for _, name := range []string{"kimi", "codex"} {
-		if p, err := lookPath(name); err == nil {
+func detectNamedAiCliAt(home, name string, lookPath func(string) (string, error)) *aiCli {
+	if p, err := lookPath(name); err == nil {
+		return &aiCli{name: name, path: p}
+	}
+	for _, p := range aiCliCandidates(home, name) {
+		if executableAiCli(p) {
 			return &aiCli{name: name, path: p}
 		}
-		for _, p := range aiCliCandidates(home, name) {
-			if executableAiCli(p) {
-				return &aiCli{name: name, path: p}
-			}
+	}
+	return nil
+}
+
+func detectAiCliAt(home string, lookPath func(string) (string, error)) *aiCli {
+	for _, name := range []string{"kimi", "codex"} {
+		if cli := detectNamedAiCliAt(home, name, lookPath); cli != nil {
+			return cli
 		}
 	}
 	return nil
@@ -114,6 +130,11 @@ func detectAiCliAt(home string, lookPath func(string) (string, error)) *aiCli {
 func detectAiCli() *aiCli {
 	home, _ := os.UserHomeDir()
 	return detectAiCliAt(home, exec.LookPath)
+}
+
+func detectNamedAiCli(name string) *aiCli {
+	home, _ := os.UserHomeDir()
+	return detectNamedAiCliAt(home, name, exec.LookPath)
 }
 
 // wrapCmd Windows 上 npm 垫片（.cmd/.bat）无法被 CreateProcess 直接执行，经 cmd /c 启动
@@ -355,17 +376,67 @@ func runAiHttp(ctx context.Context, cfg aiConfig, prompt string) (string, error)
 	return out.Choices[0].Message.Content, nil
 }
 
+func validateAiCliOptions(cliName string, options aiCliOptions) error {
+	effort := strings.ToLower(strings.TrimSpace(options.Effort))
+	if effort != "" {
+		valid := map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true}
+		if cliName == "kimi" {
+			valid["max"] = true
+		} else {
+			valid["minimal"] = true
+		}
+		if !valid[effort] {
+			return fmt.Errorf("%s 不支持思考强度 %q", cliName, options.Effort)
+		}
+	}
+	speed := strings.ToLower(strings.TrimSpace(options.Speed))
+	if speed != "" && speed != "default" && (cliName != "codex" || speed != "priority") {
+		return fmt.Errorf("%s 不支持速度选项 %q", cliName, options.Speed)
+	}
+	permission := strings.ToLower(strings.TrimSpace(options.Permission))
+	if cliName == "kimi" {
+		if permission != "" && permission != "auto" {
+			return fmt.Errorf("kimi 非交互模式只支持 auto 权限")
+		}
+	} else if permission != "" && permission != "read-only" && permission != "workspace-write" && permission != "danger-full-access" {
+		return fmt.Errorf("codex 不支持权限 %q", options.Permission)
+	}
+	return nil
+}
+
 // runAiArchCli 非交互执行 agent CLI：kimi 走 -p argv（shell:false 等价），codex 走 exec -（stdin 传 prompt）。
 // 原始输出与过程事件同时保留；回调在工具开始/结束时触发，无需等待整个进程结束。
-func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string, onProgress func(aiArchProgress)) (string, error) {
+func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string, options aiCliOptions, onProgress func(aiArchProgress)) (string, error) {
 	var cmd *exec.Cmd
+	env := aiCliEnv(cli)
 	if cli.name == "kimi" {
-		cmd = wrapCmd(ctx, cli.path, "-p", prompt, "--output-format", "stream-json")
+		args := []string{"-p", prompt, "--output-format", "stream-json"}
+		if model := strings.TrimSpace(options.Model); model != "" {
+			args = append(args, "--model", model)
+		}
+		cmd = wrapCmd(ctx, cli.path, args...)
+		if effort := strings.ToLower(strings.TrimSpace(options.Effort)); effort != "" {
+			env = append(env, "KIMI_MODEL_THINKING_EFFORT="+effort)
+		}
 	} else {
-		cmd = wrapCmd(ctx, cli.path, "exec", "-", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never")
+		permission := strings.TrimSpace(options.Permission)
+		if permission == "" {
+			permission = "read-only"
+		}
+		args := []string{"exec", "-", "--json", "--sandbox", permission, "--skip-git-repo-check", "--color", "never"}
+		if model := strings.TrimSpace(options.Model); model != "" {
+			args = append(args, "--model", model)
+		}
+		if effort := strings.ToLower(strings.TrimSpace(options.Effort)); effort != "" {
+			args = append(args, "-c", `model_reasoning_effort="`+effort+`"`)
+		}
+		if strings.EqualFold(strings.TrimSpace(options.Speed), "priority") {
+			args = append(args, "-c", `service_tier="priority"`)
+		}
+		cmd = wrapCmd(ctx, cli.path, args...)
 		cmd.Stdin = strings.NewReader(prompt)
 	}
-	cmd.Env = aiCliEnv(cli)
+	cmd.Env = env
 	prepTreeCmd(cmd)
 	// 取消/超时默认只杀直接子进程；cmd /c 垫片会再拖起 node 等孙进程，必须整树终止
 	cmd.Cancel = func() error {
@@ -507,19 +578,38 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "bad-request", Message: "请求体需包含非空 prompt"})
 		return
 	}
-	if req.Action != "" && req.Action != "edit" && req.Action != "ask" {
+	if req.Action != "" && req.Action != "edit" && req.Action != "ask" && req.Action != "optimize" {
 		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "bad-request", Message: "不支持的 AI 操作"})
 		return
 	}
+	agent := strings.ToLower(strings.TrimSpace(req.Agent))
+	if agent != "" && agent != "auto" && agent != "kimi" && agent != "codex" && agent != "api" {
+		writeJSON(w, 200, aiArchResponse{Ok: false, Error: "bad-request", Message: "不支持的 agent：" + agent})
+		return
+	}
+	if model := strings.TrimSpace(req.Options.Model); model != "" {
+		req.AI.Model = model
+	}
 	emitter := newAiArchEmitter(w, req.Stream)
 	emitter.progress(aiArchProgress{Stage: "context", Status: "running", Label: "正在准备项目上下文"})
-	// 后端选择：请求带有效 API 配置 → 接口；否则探测本机 CLI
-	useApi := req.AI.valid()
+	useApi := req.AI.valid() && (agent == "" || agent == "auto" || agent == "api")
+	if agent == "api" && !req.AI.valid() {
+		emitter.result(aiArchResponse{Ok: false, Error: "no-cli", Message: "请先在 设置 → AI 完成 OpenAI 兼容接口配置"})
+		return
+	}
 	var cli *aiCli
 	if !useApi {
-		cli = detectAiCli()
+		if agent == "kimi" || agent == "codex" {
+			cli = detectNamedAiCli(agent)
+		} else {
+			cli = detectAiCli()
+		}
 		if cli == nil {
 			emitter.result(aiArchResponse{Ok: false, Error: "no-cli", Message: "未配置 AI：请在 设置 → AI 配置 OpenAI 兼容接口，或安装并登录 kimi / codex CLI"})
+			return
+		}
+		if err := validateAiCliOptions(cli.name, req.Options); err != nil {
+			emitter.result(aiArchResponse{Ok: false, Error: "bad-request", Message: err.Error()})
 			return
 		}
 	}
@@ -561,7 +651,7 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		emitter.progress(aiArchProgress{Stage: "context", Status: "done", Label: "项目上下文已就绪"})
 		emitter.progress(aiArchProgress{Stage: "agent", Status: "running", Label: aiBackendLabel("cli", cli.name, "") + " 正在分析项目"})
 		var err error
-		raw, err = runAiArchCli(ctx, cli, p.Path, prompt, emitter.progress)
+		raw, err = runAiArchCli(ctx, cli, p.Path, prompt, req.Options, emitter.progress)
 		if ctx.Err() == context.DeadlineExceeded {
 			base.Ok, base.Error, base.Message, base.Output = false, "timeout", "AI 生成超时（180 秒），可简化描述后重试", tailStr(raw, 500)
 			emitter.result(base)
@@ -633,7 +723,14 @@ func (s *server) handleAiTest(w http.ResponseWriter, r *http.Request) {
 
 // handleAiCli AI 后端状态：本机 agent CLI 探测结果（渲染端在 AI 面板提示当前可用后端）
 func (s *server) handleAiCli(w http.ResponseWriter, r *http.Request) {
-	if cli := detectAiCli(); cli != nil {
+	agent := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("agent")))
+	var cli *aiCli
+	if agent == "kimi" || agent == "codex" {
+		cli = detectNamedAiCli(agent)
+	} else {
+		cli = detectAiCli()
+	}
+	if cli != nil {
 		writeJSON(w, 200, map[string]any{"ok": true, "cli": cli.name})
 		return
 	}

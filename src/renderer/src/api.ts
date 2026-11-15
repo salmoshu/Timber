@@ -252,6 +252,13 @@ export interface AiArchResult {
 
 /** AI 生成架构 spec：长请求（读项目再成图），必须可经 signal 取消；
  *  ai 三项齐全时 sidecar 优先走 OpenAI 兼容接口，否则探测本机 CLI */
+export interface AiArchAgentOptions {
+  model?: string
+  effort?: string
+  speed?: string
+  permission?: string
+}
+
 export async function archAiGenerate(
   id: string,
   prompt: string,
@@ -259,6 +266,8 @@ export async function archAiGenerate(
   call: ApiCall = api,
   options?: {
     action: 'edit' | 'ask' | 'optimize'
+    agent?: 'auto' | 'kimi' | 'codex' | 'api'
+    options?: AiArchAgentOptions
     context: import('./components/ArchAiPanel').ArchAiContext
     ai?: import('./utils/settings').AiSettings
     onProgress?: (event: AiArchProgress) => void
@@ -267,7 +276,7 @@ export async function archAiGenerate(
   return call<AiArchResult>(
     'POST',
     `/api/projects/${id}/ai/arch`,
-    { prompt, action: options?.action, context: options?.context, ref: options?.context.ref, ai: options?.ai, stream: true },
+    { prompt, action: options?.action, agent: options?.agent, options: options?.options, context: options?.context, ref: options?.context.ref, ai: options?.ai, stream: true },
     {
       signal,
       onEvent: (event) => {
@@ -293,6 +302,6 @@ export async function aiTest(
 }
 
 /** agent CLI 探测（AI 面板提示当前可用后端；远程项目探测的是远端机器） */
-export async function aiCliStatus(projectId: string, call: ApiCall = api): Promise<{ cli: string | null }> {
-  return call<{ cli: string | null }>('GET', `/api/projects/${projectId}/ai/cli`)
+export async function aiCliStatus(projectId: string, call: ApiCall = api, agent?: 'kimi' | 'codex'): Promise<{ cli: string | null }> {
+  return call<{ cli: string | null }>('GET', `/api/projects/${projectId}/ai/cli${agent ? `?agent=${agent}` : ''}`)
 }

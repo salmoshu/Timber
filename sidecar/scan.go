@@ -277,9 +277,8 @@ func scanTree(root string, exts map[string]bool) (*DocNode, error) {
 					continue
 				}
 				sub := walk(filepath.Join(dir, name), childRel)
-				if len(sub.Children) > 0 {
-					node.Children = append(node.Children, sub)
-				}
+				// 保留空目录（以及暂时没有匹配文件的目录），让新建文件夹后立即可见、可继续操作。
+				node.Children = append(node.Children, sub)
 				continue
 			}
 			ext := strings.ToLower(filepath.Ext(name))

@@ -146,3 +146,41 @@ func TestArchitectureOptimizeRequiresSourceFacts(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateAiCliOptions(t *testing.T) {
+	cases := []struct {
+		name    string
+		cli     string
+		options aiCliOptions
+		valid   bool
+	}{
+		{name: "kimi defaults", cli: "kimi", options: aiCliOptions{}, valid: true},
+		{name: "kimi effort", cli: "kimi", options: aiCliOptions{Effort: "max"}, valid: true},
+		{name: "kimi noninteractive permission", cli: "kimi", options: aiCliOptions{Permission: "auto"}, valid: true},
+		{name: "kimi workspace permission unsupported", cli: "kimi", options: aiCliOptions{Permission: "workspace-write"}, valid: false},
+		{name: "kimi service tier unsupported", cli: "kimi", options: aiCliOptions{Speed: "priority"}, valid: false},
+		{name: "codex effort", cli: "codex", options: aiCliOptions{Effort: "minimal"}, valid: true},
+		{name: "codex effort invalid", cli: "codex", options: aiCliOptions{Effort: "max"}, valid: false},
+		{name: "codex workspace and priority", cli: "codex", options: aiCliOptions{Permission: "workspace-write", Speed: "priority"}, valid: true},
+		{name: "codex permission invalid", cli: "codex", options: aiCliOptions{Permission: "auto"}, valid: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateAiCliOptions(tc.cli, tc.options); (err == nil) != tc.valid {
+				t.Fatalf("unexpected validation result: %v", err)
+			}
+		})
+	}
+}
+
+func TestDetectNamedAiCliAtSelectsRequestedAgent(t *testing.T) {
+	cli := detectNamedAiCliAt(t.TempDir(), "codex", func(name string) (string, error) {
+		if name == "codex" {
+			return "/usr/local/bin/codex", nil
+		}
+		return "", os.ErrNotExist
+	})
+	if cli == nil || cli.name != "codex" || cli.path != "/usr/local/bin/codex" {
+		t.Fatalf("unexpected CLI: %#v", cli)
+	}
+}

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface MenuItem {
   key: string
@@ -47,7 +48,8 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
     }
   }, [onClose])
 
-  return (
+  // 挂载到 body，避免标签栏 / 路径栏等父级层叠上下文裁切或覆盖菜单。
+  return createPortal(
     <div className="ctx-menu" ref={ref} style={{ left: pos.x, top: pos.y }}>
       {items.map((it) => (
         <div key={it.key} className="ctx-sep-wrap">
@@ -63,6 +65,7 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
           </button>
         </div>
       ))}
-    </div>
+    </div>,
+    document.body
   )
 }

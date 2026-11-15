@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useStore } from './store'
 import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
@@ -15,7 +15,24 @@ import AddProjectDialog from './components/AddProjectDialog'
 import Logo from './components/Logo'
 
 export default function App() {
-  const { init, ready, fatalError, annPanelOpen, extPageUrl, closeExtPage, settingsOpen, view, activeProjectId } = useStore()
+  const { init, ready, fatalError, annPanelOpen, annPanelWidth, extPageUrl, closeExtPage, settingsOpen, view, activeProjectId } = useStore()
+  const [archAiHost, setArchAiHost] = useState<HTMLDivElement | null>(null)
+
+  /** 架构 AI 复用右侧栏的宽度偏好与左缘拖拽调宽。 */
+  const startArchAiResize = (e: ReactMouseEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = e.currentTarget.parentElement!.getBoundingClientRect().width
+    const onMove = (ev: MouseEvent): void => useStore.getState().setAnnPanelWidth(startW - ev.clientX + startX)
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('col-resizing')
+    }
+    document.body.classList.add('col-resizing')
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     void init()
@@ -90,10 +107,16 @@ export default function App() {
             <>
               <Sidebar />
               <main className="reader-wrap">
-                {view === 'history' ? <HistoryView /> : view === 'architecture' ? <ArchitectureView key={activeProjectId} /> : <ResourceView />}
+                {view === 'history' ? <HistoryView /> : view === 'architecture' ? <ArchitectureView key={activeProjectId} aiPanelHost={archAiHost} /> : <ResourceView />}
               </main>
               {view === 'resources' && annPanelOpen && <Sidebar section="files" />}
               {view === 'history' && annPanelOpen && <Sidebar section="history" />}
+              {view === 'architecture' && annPanelOpen && activeProjectId && (
+                <aside className="sidebar architecture-sidebar" style={{ width: annPanelWidth }} aria-label="架构 AI 侧栏">
+                  <div className="sb-resizer" onMouseDown={startArchAiResize} title="拖拽调整宽度" />
+                  <div className="architecture-ai-host" ref={setArchAiHost} />
+                </aside>
+              )}
             </>
           )}
         </div>

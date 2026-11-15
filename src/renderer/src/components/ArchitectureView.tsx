@@ -2,6 +2,7 @@
 // 快照与对比把 archify 自包含 HTML 经 iframe 呈现（需 Electron 主进程渲染）；
 // 矩阵与洞察为 React 原生渲染，仅走 sidecar HTTP（dev:web 亦可用）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { ArchRefs } from '@shared/types'
 import { archRefs } from '../api'
 import { apiCallFor, useStore } from '../store'
@@ -72,7 +73,7 @@ export function injectArchChrome(html: string): string {
   return i < 0 ? html + style : `${html.slice(0, i)}${style}\n${html.slice(i)}`
 }
 
-export default function ArchitectureView() {
+export default function ArchitectureView({ aiPanelHost }: { aiPanelHost: HTMLDivElement | null }) {
   const activeProjectId = useStore((s) => s.activeProjectId)
   const ensureArchSpec = useStore((s) => s.ensureArchSpec)
   const archHtmlCache = useStore((s) => s.archHtmlCache)
@@ -271,90 +272,93 @@ export default function ArchitectureView() {
   if (!activeProjectId) return <div className="hv-empty">请先在左侧选择项目</div>
 
   return (
-    <div className="arch-view">
-      <div className="av-toolbar">
-        <div className="av-mode seg">
-          <button className={mode === 'snapshot' ? 'active' : ''} onClick={() => { setMode('snapshot'); setSnapRef('HEAD') }}>
-            当前架构
-          </button>
-          <button className={mode === 'delta' ? 'active' : ''} onClick={() => setMode('delta')}>
-            对比
-          </button>
-          <button className={mode === 'matrix' ? 'active' : ''} onClick={() => setMode('matrix')}>
-            矩阵
-          </button>
-          <button className={mode === 'insights' ? 'active' : ''} onClick={() => setMode('insights')}>
-            洞察
-          </button>
+    <>
+      <div className="arch-view">
+        <div className="av-toolbar">
+          <div className="av-mode seg">
+            <button className={mode === 'snapshot' ? 'active' : ''} onClick={() => { setMode('snapshot'); setSnapRef('HEAD') }}>
+              当前架构
+            </button>
+            <button className={mode === 'delta' ? 'active' : ''} onClick={() => setMode('delta')}>
+              对比
+            </button>
+            <button className={mode === 'matrix' ? 'active' : ''} onClick={() => setMode('matrix')}>
+              矩阵
+            </button>
+            <button className={mode === 'insights' ? 'active' : ''} onClick={() => setMode('insights')}>
+              洞察
+            </button>
+          </div>
+          {mode === 'delta' ? (
+            <>
+              <label className="av-field">
+                基准
+                <select value={baseRef} onChange={(e) => setBaseRef(e.target.value)}>
+                  {refOptions.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                  {/* sha 等非清单值（历史跳入/选中提交）补一个显示项 */}
+                  {!refOptions.some((o) => o.value === baseRef) && (
+                    <option value={baseRef}>{baseRef.slice(0, 7)}</option>
+                  )}
+                </select>
+              </label>
+              <span className="av-arrow">→</span>
+              <label className="av-field">
+                目标
+                <select value={headRef} onChange={(e) => setHeadRef(e.target.value)}>
+                  {refOptions.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                  {!refOptions.some((o) => o.value === headRef) && (
+                    <option value={headRef}>{headRef.slice(0, 7)}</option>
+                  )}
+                </select>
+              </label>
+            </>
+          ) : (
+            <label className="av-field">
+              {mode === 'snapshot' ? '版本' : 'ref'}
+              <select value={snapRef} onChange={(e) => setSnapRef(e.target.value)}>
+                {refOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {displayingCurrent && <span className="av-current-label" title={current?.prompt}>AI 已更新</span>}
+          <button className="av-refresh" onClick={refresh} title="重新渲染">⟳</button>
         </div>
-        {mode === 'delta' ? (
-          <>
-            <label className="av-field">
-              基准
-              <select value={baseRef} onChange={(e) => setBaseRef(e.target.value)}>
-                {refOptions.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-                {/* sha 等非清单值（历史跳入/选中提交）补一个显示项 */}
-                {!refOptions.some((o) => o.value === baseRef) && (
-                  <option value={baseRef}>{baseRef.slice(0, 7)}</option>
-                )}
-              </select>
-            </label>
-            <span className="av-arrow">→</span>
-            <label className="av-field">
-              目标
-              <select value={headRef} onChange={(e) => setHeadRef(e.target.value)}>
-                {refOptions.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-                {!refOptions.some((o) => o.value === headRef) && (
-                  <option value={headRef}>{headRef.slice(0, 7)}</option>
-                )}
-              </select>
-            </label>
-          </>
-        ) : (
-          <label className="av-field">
-            {mode === 'snapshot' ? '版本' : 'ref'}
-            <select value={snapRef} onChange={(e) => setSnapRef(e.target.value)}>
-              {refOptions.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        {displayingCurrent && <span className="av-current-label" title={current?.prompt}>AI 已更新</span>}
-        <button className="av-refresh" onClick={refresh} title="重新渲染">⟳</button>
+        <div className="av-body av-ai-main">
+          {mode === 'matrix' ? <ArchMatrix refName={snapRef} refreshSeq={refreshSeq} /> : mode === 'insights' ? <ArchInsightsView refName={snapRef} refreshSeq={refreshSeq} /> : displayingCurrent ? (
+            aiThemedHtml ? <iframe className="av-frame" sandbox="allow-scripts" srcDoc={aiThemedHtml} title="当前架构图" /> : <div className="hv-loading">{error ?? '当前架构加载中…'}</div>
+          ) : (
+            <>
+              {loading && (
+                <div className="hv-loading av-load-progress" role="progressbar" aria-label="架构初始化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}>
+                  <div className="av-load-progress-label">{ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].label}</div>
+                  <div className="av-load-progress-track"><span style={{ width: `${ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}%` }} /></div>
+                  <div className="av-load-progress-meta">第 {loadStage} / 3 阶段 · {ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}%</div>
+                </div>
+              )}
+              {!loading && error && <div className="hv-empty">{error}</div>}
+              {!loading && !error && themedHtml && <iframe className="av-frame" sandbox="allow-scripts" srcDoc={themedHtml} title="架构图" />}
+            </>
+          )}
+        </div>
       </div>
-      <div className="av-ai-wrap">
-      <div className="av-body av-ai-main">
-        {mode === 'matrix' ? <ArchMatrix refName={snapRef} refreshSeq={refreshSeq} /> : mode === 'insights' ? <ArchInsightsView refName={snapRef} refreshSeq={refreshSeq} /> : displayingCurrent ? (
-          aiThemedHtml ? <iframe className="av-frame" sandbox="allow-scripts" srcDoc={aiThemedHtml} title="当前架构图" /> : <div className="hv-loading">{error ?? '当前架构加载中…'}</div>
-        ) : (
-          <>
-            {loading && (
-              <div className="hv-loading av-load-progress" role="progressbar" aria-label="架构初始化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}>
-                <div className="av-load-progress-label">{ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].label}</div>
-                <div className="av-load-progress-track"><span style={{ width: `${ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}%` }} /></div>
-                <div className="av-load-progress-meta">第 {loadStage} / 3 阶段 · {ARCH_LOAD_STAGES[Math.max(0, loadStage - 1)].percent}%</div>
-              </div>
-            )}
-            {!loading && error && <div className="hv-empty">{error}</div>}
-            {!loading && !error && themedHtml && <iframe className="av-frame" sandbox="allow-scripts" srcDoc={themedHtml} title="架构图" />}
-          </>
-        )}
-      </div>
-      <ArchAiPanel projectId={activeProjectId} getContext={getAiContext} onRendered={(html, spec, prompt) => {
-        const next = { spec, prompt, updatedAt: new Date().toISOString() }
-        saveCurrentArchitecture(projectKey, next)
-        setCurrent(next)
-        setAiHtml(html)
-        setError(null)
-        setMode('snapshot')
-        setSnapRef('HEAD')
-      }} />
-      </div>
-    </div>
+      {aiPanelHost && createPortal(
+        <ArchAiPanel projectId={activeProjectId} getContext={getAiContext} onRendered={(html, spec, prompt) => {
+          const next = { spec, prompt, updatedAt: new Date().toISOString() }
+          saveCurrentArchitecture(projectKey, next)
+          setCurrent(next)
+          setAiHtml(html)
+          setError(null)
+          setMode('snapshot')
+          setSnapRef('HEAD')
+        }} />,
+        aiPanelHost
+      )}
+    </>
   )
 }

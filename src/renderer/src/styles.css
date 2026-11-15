@@ -2501,3 +2501,130 @@ body.image-resizing iframe, body.image-resizing webview { pointer-events: none; 
 .st-prompt-input { min-height: 156px; resize: vertical; line-height: 1.65; font-family: var(--system-fonts); }
 .st-prompt-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
 .st-prompt-actions > span { color: var(--ink3); font-size: 11px; }
+
+.av-ai-agent-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.av-ai-agent-option { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--ink3); font-size: 10px; }
+.av-ai-agent-option.wide { grid-column: span 3; }
+.av-ai-agent-option :is(select, input) {
+  width: 100%; min-width: 0; height: 28px; padding: 0 7px;
+  border: 1px solid var(--line); border-radius: 6px; outline: none;
+  background: var(--paper); color: var(--ink2); font-family: inherit; font-size: 11px;
+}
+.av-ai-agent-option :is(select, input):focus { border-color: var(--accent); }
+.av-ai-agent-option :is(select, input):disabled { opacity: .55; cursor: default; }
+.av-ai-agent-option input::placeholder { color: var(--ink3); }
+
+/* Catfish 式单一圆角聊天输入卡。 */
+.av-ai-composer {
+  margin-top: auto; padding: 12px 12px 10px;
+  border: 1px solid var(--line); border-radius: 22px;
+  background: var(--paper); box-shadow: 0 2px 10px #00000006;
+}
+.av-ai-composer .av-ai-input {
+  min-height: 76px; max-height: 220px; padding: 2px 4px;
+  font-size: 13px; line-height: 1.65; resize: vertical;
+}
+.av-ai-actions { display: flex; align-items: center; justify-content: flex-start; gap: 6px; margin-top: 8px; }
+.av-ai-agent-options { display: contents; }
+.av-ai-agent-option { display: inline-flex; align-items: center; gap: 0; font-size: 11px; }
+.av-ai-agent-option > span { display: none; }
+.av-ai-agent-option.wide { grid-column: auto; }
+.av-ai-runtime-tools { display: flex; align-items: center; gap: 4px; min-width: 0; margin-left: auto; }
+.av-ai-runtime-tools :is(select, input) { width: auto; max-width: 108px; height: 28px; padding: 0 3px; border: 0; background: transparent; font-size: 11px; }
+.av-ai-agent-select select { max-width: 70px; }
+.av-ai-model-field input { width: 96px; text-overflow: ellipsis; }
+.av-ai-plus {
+  width: 30px; height: 30px; flex: none; padding: 0;
+  display: grid; place-items: center; border: 0; border-radius: 50%;
+  background: var(--Fills-F1); color: var(--ink2);
+}
+.av-ai-plus:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.av-ai-send {
+  width: 32px; height: 32px; flex: none; padding: 0;
+  display: grid; place-items: center; border: 0; border-radius: 50%;
+  background: var(--ink); color: var(--paper);
+}
+.av-ai-send:hover:not(:disabled) { background: var(--accent); }
+.av-ai-send:disabled { opacity: .35; cursor: default; }
+.av-ai-more { position: relative; flex: none; }
+.av-ai-more > summary {
+  display: inline-flex; align-items: center; height: 28px; padding: 0 4px;
+  color: var(--ink2); font-size: 11px; cursor: pointer; list-style: none;
+}
+.av-ai-more > summary::-webkit-details-marker { display: none; }
+.av-ai-more[data-disabled='true'] { pointer-events: none; opacity: .55; }
+.av-ai-more-pop {
+  position: absolute; right: 0; bottom: 34px; z-index: 60;
+  display: grid; gap: 10px; width: 168px; padding: 10px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--paper); box-shadow: var(--shadow-pop);
+}
+.av-ai-more-pop .av-ai-agent-option { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.av-ai-more-pop .av-ai-agent-option > span { display: block; color: var(--ink3); font-size: 10px; }
+.av-ai-more-pop :is(select, input) { width: 100%; height: 28px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+
+/* 0.7.6 · 架构 AI 复用应用右侧栏；按侧栏实际宽度渐进展示辅助控件。 */
+.architecture-sidebar {
+  border-left: 1px solid var(--line); border-right: 0; background: var(--paper);
+  container-type: inline-size;
+}
+.architecture-sidebar .sb-resizer { right: auto; left: -3px; }
+.architecture-ai-host { flex: 1; min-width: 0; min-height: 0; }
+.architecture-sidebar .av-ai-panel {
+  width: 100%; height: 100%; min-width: 0; padding: 18px 16px 16px; gap: 0;
+  border: 0; background: var(--paper); overflow: hidden;
+}
+.av-ai-conversation {
+  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  padding: 2px;
+}
+.av-ai-composer { position: relative; flex: none; margin-top: 12px; }
+.av-ai-composer .av-ai-input {
+  display: block; min-height: 64px; max-height: 360px; resize: none;
+}
+.av-ai-resize-handle {
+  position: absolute; z-index: 3; top: -7px; left: 12px; width: 34px; height: 14px;
+  display: grid; place-items: center; cursor: ns-resize; touch-action: none; outline: none;
+}
+.av-ai-resize-handle > span {
+  width: 22px; height: 3px; border-radius: var(--radius-full);
+  background: var(--line); box-shadow: 0 0 0 3px var(--paper);
+}
+.av-ai-resize-handle:hover > span,
+.av-ai-resize-handle:focus-visible > span { background: var(--accent); }
+.av-ai-actions { gap: 4px; }
+.av-ai-icon-button {
+  width: 30px; height: 30px; min-height: 30px; flex: none; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  border: 0; border-radius: 50%; background: var(--Fills-F1); color: var(--accent);
+}
+.av-ai-icon-button:hover:not(:disabled) { border: 0; background: var(--accent-soft); color: var(--accent); }
+.av-ai-action-label { display: none; font-size: 11px; white-space: nowrap; }
+.av-ai-agent-select { flex: none; }
+.av-ai-agent-select select { width: 70px; }
+.av-ai-runtime-tools { flex: 1; justify-content: flex-end; }
+.av-ai-model-field, .av-ai-effort-field { display: none; }
+.av-ai-more > summary { gap: 4px; padding: 0 6px; border-radius: var(--radius-md); }
+.av-ai-more > summary:hover { background: var(--Fills-F1); color: var(--accent); }
+@container (max-width: 280px) {
+  .architecture-sidebar .av-ai-panel { padding: 14px 10px 12px; }
+  .av-ai-intro { display: none; }
+}
+@container (min-width: 340px) {
+  .av-ai-effort-field { display: inline-flex; }
+}
+@container (min-width: 420px) {
+  .av-ai-model-field { display: inline-flex; }
+  .av-ai-model-field input { width: 104px; }
+  .av-ai-agent-select select { width: 86px; max-width: 100px; }
+}
+@container (min-width: 520px) {
+  .av-ai-action-label { display: inline; }
+  .av-ai-icon-button { width: auto; padding: 0 10px; border-radius: var(--radius-full); }
+  .av-ai-model-field input { width: 128px; max-width: 160px; }
+}
+
+/* 文件树文件名与扩展名图标共用固定行高，避免字体基线造成视觉偏移。 */
+.tree-doc { min-height: 28px; line-height: 20px; }
+.tree-doc .doc-icon { height: 18px; align-self: center; }
+.tree-doc .doc-name { min-height: 20px; line-height: 20px; }
