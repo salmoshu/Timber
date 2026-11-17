@@ -1,0 +1,17 @@
+.code-editor-shell { position: relative; display: flex; flex: 1; min-height: 0; flex-direction: column; background: var(--paper); }
+.code-editor-host { flex: 1; min-height: 0; }
+.code-editor-host .monaco-editor, .code-editor-host .monaco-editor .margin { background-color: var(--paper); }
+.code-editor-status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.code-editor-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink3); }
+.code-editor-status.ready::before { background: var(--Colors-Green, #1a9b61); }
+.code-editor-status.error::before { background: var(--Colors-LightOrange, #cf8a18); }
+.code-symbol-backdrop { position: absolute; inset: 0; z-index: 20; background: rgb(0 0 0 / 12%); }
+.code-symbol-palette { position: absolute; top: 52px; left: 50%; z-index: 21; display: flex; width: min(680px, 80%); max-height: min(560px, 70%); transform: translateX(-50%); flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); box-shadow: 0 18px 50px rgb(0 0 0 / 22%); }
+.code-symbol-input { box-sizing: border-box; width: 100%; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--line); outline: 0; background: transparent; color: var(--ink); font: inherit; }
+.code-symbol-list { overflow: auto; padding: 6px; }
+.code-symbol-item { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.code-symbol-item:hover, .code-symbol-item.active { background: var(--Fills-F1); }
+.code-symbol-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--code-font-family); }
+.code-symbol-kind { color: var(--ink3); font-size: 11px; }
+.code-symbol-path { grid-column: 1 / -1; overflow: hidden; color: var(--ink3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.code-symbol-empty { padding: 24px; color: var(--ink3); text-align: center; }

@@ -1,6 +1,6 @@
 {
   "name": "timber",
-  "version": "0.7.6",
+  "version": "0.8.0",
   "description": "Timber —— 项目理解工具：Git 历史 × 架构图 × 代码阅读 × 文档渲染，看清每一次提交如何塑造你的项目",
   "author": "Winchell.Hu <winchell.hu@outlook.com>",
   "license": "MIT",
@@ -11,12 +11,15 @@
   "scripts": {
     "postinstall": "node scripts/install-native.mjs",
     "build:sidecar": "node scripts/build-sidecar.mjs",
-    "predev": "node scripts/install-native.mjs && node scripts/build-sidecar.mjs",
+    "build:code-tools": "node scripts/build-code-tools.mjs",
+    "predev": "node scripts/install-native.mjs && node scripts/build-sidecar.mjs && node scripts/build-code-tools.mjs",
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
-    "prebuild": "node scripts/build-sidecar.mjs",
+    "prebuild": "node scripts/build-sidecar.mjs && node scripts/build-code-tools.mjs",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
+    "test:code": "node scripts/build-code-tools.mjs && node scripts/test-code-intelligence.mjs && node scripts/test-code-navigation.mjs",
+    "test:code:ui": "node scripts/smoke-code.cjs",
     "test:markdown": "node scripts/test-markdown.mjs",
     "test:fonts": "node scripts/test-fonts.mjs",
     "test:markdown:ui": "node scripts/smoke-markdown.cjs",
@@ -33,12 +36,14 @@
     "electron-updater": "^6.8.9",
     "font-list": "2.1.0",
     "highlight.js": "^11.10.0",
+    "monaco-editor": "0.52.2",
     "pagedjs": "^0.4.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.0",
     "remark-gfm": "^4.0.1",
+    "vscode-jsonrpc": "8.2.1",
     "xlsx": "^0.18.5",
     "zustand": "^5.0.2"
   },
@@ -57,8 +62,10 @@
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "esbuild": "0.21.5",
     "sharp": "^0.35.5",
     "typescript": "^5.6.3",
+    "typescript-language-server": "4.3.4",
     "vite": "^5.4.11"
   }
 }

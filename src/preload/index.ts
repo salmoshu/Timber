@@ -10,6 +10,12 @@ const bridge: TimberBridge = {
     return () => ipcRenderer.removeListener('files:pending', listener)
   },
   getApiInfo: () => ipcRenderer.invoke('api:info'),
+  codeSyncDocument: (document) => ipcRenderer.invoke('code:sync', document),
+  codeDefinition: (document, position) => ipcRenderer.invoke('code:definition', document, position),
+  codeReferences: (document, position) => ipcRenderer.invoke('code:references', document, position),
+  codeHover: (document, position) => ipcRenderer.invoke('code:hover', document, position),
+  codeDocumentSymbols: (document) => ipcRenderer.invoke('code:document-symbols', document),
+  codeWorkspaceSymbols: (rootPath, query) => ipcRenderer.invoke('code:workspace-symbols', rootPath, query),
   browseLocal: (path) => ipcRenderer.invoke('files:browse', path),
   pathExists: (path) => ipcRenderer.invoke('files:exists', path),
   revealPath: (p: string) => ipcRenderer.invoke('shell:reveal', p),

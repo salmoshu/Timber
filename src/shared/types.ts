@@ -1,5 +1,7 @@
 // 主进程 / preload / 渲染进程共享类型
 
+import type { CodeDocumentInput, CodeDocumentRef, CodeHoverResult, CodeLocation, CodePosition, CodeServiceStatus, CodeSymbol } from './code'
+
 export interface ApiInfo {
   base: string
   token: string
@@ -401,6 +403,12 @@ export interface TimberBridge {
   takePendingFiles(): Promise<string[]>
   onPendingFiles(cb: () => void): () => void
   getApiInfo(): Promise<ApiInfo>
+  codeSyncDocument(document: CodeDocumentInput): Promise<CodeServiceStatus>
+  codeDefinition(document: CodeDocumentRef, position: CodePosition): Promise<CodeLocation[]>
+  codeReferences(document: CodeDocumentRef, position: CodePosition): Promise<CodeLocation[]>
+  codeHover(document: CodeDocumentRef, position: CodePosition): Promise<CodeHoverResult | null>
+  codeDocumentSymbols(document: CodeDocumentRef): Promise<CodeSymbol[]>
+  codeWorkspaceSymbols(rootPath: string, query: string): Promise<CodeSymbol[]>
   browseLocal(path?: string): Promise<{ path: string; parent: string; home: string; roots: string[]; folders: { name: string; path: string }[] }>
   pathExists(path: string): Promise<boolean>
   revealPath(p: string): Promise<void>

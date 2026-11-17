@@ -42,7 +42,7 @@ export const CODE_EXTS = [
   '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.xlsx', '.xls'
 ]
 
-/** 资源视图中走 Reader（可编辑/阅读渲染）的扩展名；其余源码文件走 CodeReader（只读） */
+/** 资源视图中走 Reader（可编辑/阅读渲染）的扩展名；其余源码文件走 Monaco 代码工作区 */
 const READER_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'xlsx', 'xls'])
 
 export function isReaderPath(path: string): boolean {

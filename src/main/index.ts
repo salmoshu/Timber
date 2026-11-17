@@ -7,7 +7,9 @@ import { startSidecar, stopSidecar, setSidecarReadyListener } from './sidecar.js
 import { renderArchHtml, compareArchDelta } from './archify.js'
 import { UpdateService, extractReleaseNotesSection } from './updater.js'
 import { listFontFamilies } from './fonts.js'
+import { CodeLanguageService } from './code-lsp.js'
 import type { ApiInfo } from '@shared/types'
+import type { CodeDocumentInput, CodeDocumentRef, CodePosition } from '@shared/code'
 
 let mainWindow: BrowserWindow | null = null
 let apiInfo: ApiInfo | null = null
@@ -76,11 +78,20 @@ if (!app.requestSingleInstanceLock()) {
     })
   })
 
+  const stopCodeService = (): void => {
+    const service = codeLanguageService
+    codeLanguageService = null
+    if (service) void service.dispose()
+  }
   app.on('window-all-closed', () => {
+    stopCodeService()
     stopSidecar()
     if (process.platform !== 'darwin') app.quit()
   })
-  app.on('before-quit', stopSidecar)
+  app.on('before-quit', () => {
+    stopCodeService()
+    stopSidecar()
+  })
 }
 
 // 外部链接统一在应用内浮层打开（主窗口导航被拦截后经 'open-external-page' 通知渲染层）；
@@ -176,6 +187,43 @@ ipcMain.handle('api:info', () => {
   if (startupError && !apiInfo) throw new Error(startupError)
   return apiInfo
 })
+
+let codeLanguageService: CodeLanguageService | null = null
+function codeService(): CodeLanguageService {
+  if (codeLanguageService) return codeLanguageService
+  const candidates = [
+    join(process.resourcesPath ?? '', 'sidecar', 'lsp', 'typescript-language-server.mjs'),
+    join(app.getAppPath(), 'sidecar', 'bin', 'lsp', 'typescript-language-server.mjs')
+  ]
+  const cliPath = candidates.find(existsSync)
+  if (!cliPath) throw new Error('TypeScript 语言服务资源缺失，请先执行 pnpm build:code-tools')
+  codeLanguageService = new CodeLanguageService(cliPath)
+  return codeLanguageService
+}
+
+ipcMain.handle('code:sync', async (_event, document: CodeDocumentInput) => {
+  try {
+    await codeService().syncDocument(document)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+})
+ipcMain.handle('code:definition', (_event, document: CodeDocumentRef, position: CodePosition) =>
+  codeService().definition(document, position)
+)
+ipcMain.handle('code:references', (_event, document: CodeDocumentRef, position: CodePosition) =>
+  codeService().references(document, position)
+)
+ipcMain.handle('code:hover', (_event, document: CodeDocumentRef, position: CodePosition) =>
+  codeService().hover(document, position)
+)
+ipcMain.handle('code:document-symbols', (_event, document: CodeDocumentRef) =>
+  codeService().documentSymbols(document)
+)
+ipcMain.handle('code:workspace-symbols', (_event, rootPath: string, query: string) =>
+  codeService().workspaceSymbols(rootPath, query)
+)
 
 // archify 架构图：渲染快照 / 对比 delta（结果缓存在 <userData>/arch）
 ipcMain.handle('arch:render', (_e, spec: string, key: string) => renderArchHtml(spec, key))
