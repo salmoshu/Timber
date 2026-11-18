@@ -360,6 +360,13 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => evaluate("[...document.querySelectorAll('.tree-dir .dir-name')].some(name => name.textContent === 'empty-smoke')"), 'New empty folder is missing from the file tree')
       checks.push('centered file-tree rows, unobstructed tab menu and visible empty directories')
       await evaluate(`(() => {
+        const originalFetch = window.fetch.bind(window)
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const agent = url.includes('/ai/cli') && /[?&]agent=(kimi|codex)(?:&|$)/.exec(url)?.[1]
+          if (agent) return Promise.resolve(new Response(JSON.stringify({ ok: true, cli: agent }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+          return originalFetch(input, init)
+        }
         window.__archRenderOriginal = window.timber.archRender
         window.timber.archRender = (...args) => new Promise(resolve => setTimeout(() => resolve(window.__archRenderOriginal(...args)), 900))
         return undefined
