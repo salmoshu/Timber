@@ -15,8 +15,10 @@ const compile = async (path, replacements = {}) => {
   return 'data:text/javascript;base64,' + Buffer.from(output).toString('base64')
 }
 const sharedUrl = await compile(resolve(root, 'src/shared/code.ts'))
+const cppUrl = await compile(resolve(root, 'src/main/cpp-intel.ts'))
 const moduleUrl = await compile(resolve(root, 'src/main/code-lsp.ts'), {
   "from '@shared/code'": `from '${sharedUrl}'`,
+  "from './cpp-intel'": `from '${cppUrl}'`,
   "from 'vscode-jsonrpc/node.js'": `from '${pathToFileURL(require.resolve('vscode-jsonrpc/node')).href}'`
 })
 const { CodeLanguageService, absoluteCodePath } = await import(moduleUrl)
@@ -42,6 +44,36 @@ async function eventually(task) {
   }
   throw lastError ?? new Error('Language service did not become ready')
 }
+
+test('C/C++ built-in index resolves definitions, references, hover and symbols', { timeout: 40_000 }, async () => {
+  const cppFixture = resolve(root, 'tmp', `code-cpp-test-${process.pid}`)
+  const headerSource = '#pragma once\nnamespace demo {\nstruct Point { int x; int y; };\nint add(int a, int b);\n}\n'
+  const source = '#include "math.hpp"\nnamespace demo {\nint add(int a, int b) { return a + b; }\n}\nint main() { return demo::add(1, 2); }\n'
+  const header = { rootPath: cppFixture, path: 'math.hpp', languageId: 'cpp', content: headerSource }
+  const main = { rootPath: cppFixture, path: 'main.cpp', languageId: 'cpp', content: source }
+  try {
+    await mkdir(cppFixture, { recursive: true })
+    await writeFile(resolve(cppFixture, 'math.hpp'), headerSource)
+    await writeFile(resolve(cppFixture, 'main.cpp'), source)
+    await service.syncDocument(header)
+    await service.syncDocument(main)
+    const definition = await service.definition(main, { line: 4, character: 27 })
+    assert.ok(definition.some((item) => item.path === 'math.hpp' && item.range.start.line === 3))
+    const references = await service.references(main, { line: 4, character: 27 })
+    assert.ok(references.some((item) => item.path === 'math.hpp'))
+    assert.ok(references.some((item) => item.path === 'main.cpp' && item.range.start.line === 2))
+    const hover = await service.hover(main, { line: 4, character: 27 })
+    assert.ok(hover?.contents.some((item) => item.includes('add')))
+    const symbols = await service.documentSymbols(header)
+    assert.ok(symbols.some((item) => item.name === 'Point'))
+    assert.ok(symbols.some((item) => item.name === 'add'))
+    const workspace = await service.workspaceSymbols(cppFixture, 'add', 'cpp')
+    assert.ok(workspace.some((item) => item.path === 'math.hpp' && item.name === 'add'))
+    console.log(JSON.stringify({ cppDefinitions: definition.length, cppReferences: references.length, cppSymbols: symbols.length }))
+  } finally {
+    await rm(cppFixture, { recursive: true, force: true })
+  }
+})
 
 test('TypeScript LSP resolves cross-file navigation and symbols', { timeout: 40_000 }, async () => {
   try {

@@ -10,7 +10,9 @@ import TabsBar from './TabsBar'
 const LANG_BY_EXT: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript',
   cjs: 'javascript', go: 'go', py: 'python', rs: 'rust', java: 'java', kt: 'kotlin',
-  c: 'c', cc: 'cpp', cpp: 'cpp', h: 'c', hpp: 'cpp', cs: 'csharp', rb: 'ruby',
+  c: 'c', cc: 'cpp', cp: 'cpp', cpp: 'cpp', cxx: 'cpp', 'c++': 'cpp', h: 'c', hpp: 'cpp', hh: 'cpp',
+  hxx: 'cpp', 'h++': 'cpp', ipp: 'cpp', inl: 'cpp', tpp: 'cpp', txx: 'cpp', cu: 'cpp', cuh: 'cpp',
+  m: 'objectivec', mm: 'objectivec', cs: 'csharp', rb: 'ruby',
   php: 'php', swift: 'swift', scala: 'scala', sh: 'bash', ps1: 'powershell',
   css: 'css', scss: 'scss', html: 'xml', vue: 'xml', svelte: 'xml',
   md: 'markdown', markdown: 'markdown', json: 'json', yaml: 'yaml', yml: 'yaml',

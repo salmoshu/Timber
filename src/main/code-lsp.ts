@@ -12,12 +12,14 @@ import type {
   CodeDocumentInput,
   CodeDocumentRef,
   CodeHoverResult,
+  CodeLanguageId,
   CodeLocation,
   CodePosition,
   CodeRange,
   CodeSymbol
 } from '@shared/code'
 import { codeLanguageForPath } from '@shared/code'
+import { CppIndex } from './cpp-intel'
 
 interface OpenDocument extends CodeDocumentRef {
   uri: string
@@ -307,8 +309,13 @@ class TypeScriptClient {
   }
 }
 
+function isCppLanguage(languageId: CodeLanguageId | null | undefined): boolean {
+  return languageId === 'c' || languageId === 'cpp' || languageId === 'objective-c'
+}
+
 export class CodeLanguageService {
   private readonly clients = new Map<string, Promise<TypeScriptClient>>()
+  private readonly cppIndexes = new Map<string, CppIndex>()
 
   constructor(private readonly cliPath: string) {}
 
@@ -323,20 +330,40 @@ export class CodeLanguageService {
     return client
   }
 
+  private cppIndex(rootPath: string): CppIndex {
+    const root = resolve(rootPath)
+    let index = this.cppIndexes.get(root)
+    if (!index) {
+      index = new CppIndex(root)
+      this.cppIndexes.set(root, index)
+    }
+    return index
+  }
+
   async syncDocument(input: CodeDocumentInput): Promise<void> {
     if (codeLanguageForPath(input.path) !== input.languageId) throw new Error('代码语言与文件扩展名不匹配')
     const info = await stat(absoluteCodePath(input.rootPath, input.path))
     if (!info.isFile()) throw new Error('代码文件不存在')
+    if (isCppLanguage(input.languageId)) {
+      await this.cppIndex(input.rootPath).updateFile(input.path, input.content)
+      return
+    }
     const client = await this.client(input.rootPath)
     client.syncDocument(input)
   }
 
   async definition(input: CodeDocumentRef, position: CodePosition): Promise<CodeLocation[]> {
+    if (isCppLanguage(input.languageId)) {
+      return this.cppIndex(input.rootPath).definition(input.path, position)
+    }
     const client = await this.client(input.rootPath)
     return this.withPreviews(input.rootPath, await client.sourceDefinition(input, position))
   }
 
   async references(input: CodeDocumentRef, position: CodePosition): Promise<CodeLocation[]> {
+    if (isCppLanguage(input.languageId)) {
+      return this.cppIndex(input.rootPath).references(input.path, position)
+    }
     const client = await this.client(input.rootPath)
     const locations = await client.requestLocations('textDocument/references', input, position, {
       context: { includeDeclaration: true }
@@ -345,16 +372,25 @@ export class CodeLanguageService {
   }
 
   async hover(input: CodeDocumentRef, position: CodePosition): Promise<CodeHoverResult | null> {
+    if (isCppLanguage(input.languageId)) {
+      return this.cppIndex(input.rootPath).hover(input.path, position)
+    }
     const client = await this.client(input.rootPath)
     return client.hover(input, position)
   }
 
   async documentSymbols(input: CodeDocumentRef): Promise<CodeSymbol[]> {
+    if (isCppLanguage(input.languageId)) {
+      return this.cppIndex(input.rootPath).documentSymbols(input.path)
+    }
     const client = await this.client(input.rootPath)
     return client.documentSymbols(input)
   }
 
-  async workspaceSymbols(rootPath: string, query: string): Promise<CodeSymbol[]> {
+  async workspaceSymbols(rootPath: string, query: string, languageId?: CodeLanguageId): Promise<CodeSymbol[]> {
+    if (isCppLanguage(languageId)) {
+      return this.cppIndex(rootPath).workspaceSymbols(query)
+    }
     const client = await this.client(rootPath)
     return client.workspaceSymbols(query)
   }
@@ -377,6 +413,7 @@ export class CodeLanguageService {
   async dispose(): Promise<void> {
     const clients = [...this.clients.values()]
     this.clients.clear()
+    this.cppIndexes.clear()
     await Promise.allSettled(clients.map(async (client) => (await client).dispose()))
   }
 }

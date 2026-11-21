@@ -114,6 +114,8 @@ export default function CodeEditor({ path }: Props) {
   const [workspaceSearching, setWorkspaceSearching] = useState(false)
   const content = activeDoc?.path === path ? activeDoc.content : null
   const languageId = codeLanguageForPath(path)
+  const languageLabel = languageId === 'c' ? 'C' : languageId === 'cpp' ? 'C/C++' : languageId === 'objective-c' ? 'Objective-C' : 'TS / JS'
+  const cppLanguage = languageId === 'c' || languageId === 'cpp' || languageId === 'objective-c'
   const rootPath = project && project.kind !== 'file' && !project.remoteId && projectId && !projectId.includes(':') ? project.path : null
 
   useEffect(() => {
@@ -228,7 +230,8 @@ export default function CodeEditor({ path }: Props) {
         setServiceState('error')
         setServiceMessage(error instanceof Error ? error.message : String(error))
       }
-      const selector: monaco.languages.LanguageSelector = [languageId]
+      // Monaco 语言 id 与后端语义语言可能不同（C 共用 cpp 语法、objective-c 保留连字符）
+      const selector: monaco.languages.LanguageSelector = [monacoLanguageForPath(path)]
       disposables.push(monaco.languages.registerDefinitionProvider(selector, {
         provideDefinition: async (source, position) => {
           try {
@@ -297,7 +300,7 @@ export default function CodeEditor({ path }: Props) {
         }
       }))
       disposables.push(monaco.languages.registerDocumentSymbolProvider(selector, {
-        displayName: 'TypeScript',
+        displayName: languageLabel,
         provideDocumentSymbols: async () => {
           try {
             if (!await ready()) return []
@@ -344,7 +347,7 @@ export default function CodeEditor({ path }: Props) {
     let active = true
     setWorkspaceSearching(true)
     const timer = window.setTimeout(() => {
-      void window.timber!.codeWorkspaceSymbols(rootPath, workspaceQuery.trim()).then((symbols) => {
+      void window.timber!.codeWorkspaceSymbols(rootPath, workspaceQuery.trim(), languageId ?? undefined).then((symbols) => {
         if (!active) return
         setWorkspaceSymbols(symbols.slice(0, 100))
         setWorkspaceIndex(0)
@@ -355,7 +358,7 @@ export default function CodeEditor({ path }: Props) {
       })
     }, 200)
     return () => { active = false; clearTimeout(timer) }
-  }, [workspaceOpen, workspaceQuery, rootPath])
+  }, [workspaceOpen, workspaceQuery, rootPath, languageId])
 
   const openWorkspaceSymbol = (symbol: CodeSymbol): void => {
     if (!projectId) return
@@ -376,8 +379,15 @@ export default function CodeEditor({ path }: Props) {
         <span className="cv-meta">
           {content !== null && `${content.split('\n').length} 行 · ${cursor.line}:${cursor.column} · `}
           {languageId && rootPath ? (
-            <span className={`code-editor-status ${serviceState === 'ready' ? 'ready' : serviceState === 'error' ? 'error' : ''}`} title={serviceMessage || 'TypeScript / JavaScript 语言服务'}>
-              {serviceState === 'ready' ? 'TS 导航已就绪' : serviceState === 'error' ? '仅语法高亮' : 'TS 服务启动中'}
+            <span
+              className={`code-editor-status ${serviceState === 'ready' ? 'ready' : serviceState === 'error' ? 'error' : ''}`}
+              title={serviceMessage || (cppLanguage ? `${languageLabel} 内置索引（定义 / 引用 / 符号）` : 'TypeScript / JavaScript 语言服务')}
+            >
+              {serviceState === 'ready'
+                ? `${cppLanguage ? 'C/C++' : 'TS'} 导航已就绪`
+                : serviceState === 'error'
+                  ? '仅语法高亮'
+                  : cppLanguage ? 'C/C++ 索引构建中' : 'TS 服务启动中'}
             </span>
           ) : '只读'}
         </span>

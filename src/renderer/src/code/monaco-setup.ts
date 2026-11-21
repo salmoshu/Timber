@@ -27,11 +27,14 @@ export function configureMonaco(): void {
 
 export function monacoLanguageForPath(path: string): string {
   const semantic = codeLanguageForPath(path)
-  if (semantic) return semantic
+  // Monaco 没有独立的 C 语言，C 与 C++ 共用 cpp 语法
+  if (semantic) return semantic === 'c' ? 'cpp' : semantic
   const ext = path.split('.').pop()?.toLowerCase()
   const languages: Record<string, string> = {
     go: 'go', py: 'python', pyi: 'python', rs: 'rust', java: 'java', kt: 'kotlin', kts: 'kotlin',
-    c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp', cs: 'csharp',
+    c: 'c', h: 'c', cc: 'cpp', cp: 'cpp', cpp: 'cpp', cxx: 'cpp', 'c++': 'cpp', hpp: 'cpp', hh: 'cpp',
+    hxx: 'cpp', 'h++': 'cpp', ipp: 'cpp', inl: 'cpp', tpp: 'cpp', txx: 'cpp', cu: 'cpp', cuh: 'cpp',
+    m: 'objective-c', mm: 'objective-c', cmake: 'ini', mk: 'ini', cs: 'csharp',
     rb: 'ruby', php: 'php', swift: 'swift', dart: 'dart', scala: 'scala', clj: 'clojure',
     ex: 'elixir', exs: 'elixir', lua: 'lua', pl: 'perl', r: 'r', sh: 'shell', bash: 'shell', zsh: 'shell',
     ps1: 'powershell', bat: 'bat', cmd: 'bat', css: 'css', scss: 'scss', sass: 'sass', less: 'less',

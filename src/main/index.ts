@@ -9,7 +9,7 @@ import { UpdateService, extractReleaseNotesSection } from './updater.js'
 import { listFontFamilies } from './fonts.js'
 import { CodeLanguageService } from './code-lsp.js'
 import type { ApiInfo } from '@shared/types'
-import type { CodeDocumentInput, CodeDocumentRef, CodePosition } from '@shared/code'
+import type { CodeDocumentInput, CodeDocumentRef, CodeLanguageId, CodePosition } from '@shared/code'
 
 let mainWindow: BrowserWindow | null = null
 let apiInfo: ApiInfo | null = null
@@ -221,8 +221,8 @@ ipcMain.handle('code:hover', (_event, document: CodeDocumentRef, position: CodeP
 ipcMain.handle('code:document-symbols', (_event, document: CodeDocumentRef) =>
   codeService().documentSymbols(document)
 )
-ipcMain.handle('code:workspace-symbols', (_event, rootPath: string, query: string) =>
-  codeService().workspaceSymbols(rootPath, query)
+ipcMain.handle('code:workspace-symbols', (_event, rootPath: string, query: string, languageId?: CodeLanguageId) =>
+  codeService().workspaceSymbols(rootPath, query, languageId)
 )
 
 // archify 架构图：渲染快照 / 对比 delta（结果缓存在 <userData>/arch）

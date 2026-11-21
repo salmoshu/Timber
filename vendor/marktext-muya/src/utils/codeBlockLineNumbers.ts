@@ -89,17 +89,32 @@ function measureLineTops(codeEl: HTMLElement): number[] {
         while (index < tops.length && !Number.isFinite(tops[index])) index++;
         const previous = start > 0 ? tops[start - 1] : Number.NaN;
         const next = index < tops.length ? tops[index] : Number.NaN;
-        const count = index - start;
         for (let empty = start; empty < index; empty++) {
-            if (Number.isFinite(previous) && Number.isFinite(next))
-                tops[empty] = previous + (next - previous) * (empty - start + 1) / (count + 1);
-            else if (Number.isFinite(previous))
+            // Empty lines have no text rect. Stack them one line box apart from
+            // the nearest measurable neighbour instead of interpolating, which
+            // can compress several blank lines into one visual row.
+            if (Number.isFinite(previous))
                 tops[empty] = previous + lineH * (empty - start + 1);
             else if (Number.isFinite(next))
                 tops[empty] = next - lineH * (index - empty);
             else
                 tops[empty] = lineH * empty;
         }
+    }
+
+    // Syntax highlighting can split a line across token spans; a caret rect at
+    // the split occasionally reports the previous line's top, which makes the
+    // first numbers stack. Keep real gaps (wrapped lines) but never let two
+    // consecutive numbers land closer than one line box.
+    let previous = Number.NaN;
+    for (let i = 0; i < tops.length; i++) {
+        let top = tops[i];
+        if (!Number.isFinite(top))
+            top = Number.isFinite(previous) ? previous + lineH : lineH * i;
+        if (Number.isFinite(previous) && top < previous + lineH * 0.75)
+            top = previous + lineH;
+        tops[i] = top;
+        previous = top;
     }
 
     return tops;

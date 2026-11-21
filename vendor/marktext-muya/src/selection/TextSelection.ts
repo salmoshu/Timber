@@ -264,8 +264,28 @@ class TextSelection {
             if (this._muya.isReadOnly)
                 return;
             const { selection } = this._selectInfo;
-            if (!this._selection.table.hasSelection && selection?.anchor.block.outMostBlock && selection.focus.block.outMostBlock)
-                this.setSelection(selection.anchor, selection.focus);
+            if (!this._selection.table.hasSelection) {
+                const live = this.getSelection();
+                // A live native range is already correct (especially a multi-paragraph
+                // drag): rebuilding it through `_updateSelection` occasionally collapses
+                // the highlight. Only re-apply when the native selection is gone.
+                if (live && !live.isCollapsed && live.anchor.block.outMostBlock && live.focus.block.outMostBlock) {
+                    this.anchor = {
+                        offset: live.anchor.offset,
+                    };
+                    this.anchorBlock = live.anchor.block;
+                    this.anchorPath = live.anchor.path;
+                    this.focus = {
+                        offset: live.focus.offset,
+                    };
+                    this.focusBlock = live.focus.block;
+                    this.focusPath = live.focus.path;
+                    this._emitSelectionChange();
+                }
+                else if (selection?.anchor.block.outMostBlock && selection.focus.block.outMostBlock) {
+                    this.setSelection(selection.anchor, selection.focus);
+                }
+            }
 
             this._selectInfo = {
                 isSelect: false,
@@ -321,9 +341,9 @@ class TextSelection {
         };
 
         eventCenter.attachDOMEvent(domNode, 'mousedown', handleMousedown);
-        eventCenter.attachDOMEvent(domNode, 'mousemove', handleMousemoveOrClick);
-        eventCenter.attachDOMEvent(domNode, 'mouseup', handleMouseupOrLeave);
-        eventCenter.attachDOMEvent(domNode, 'mouseleave', handleMouseupOrLeave);
+        eventCenter.attachDOMEvent(this._doc, 'mousemove', handleMousemoveOrClick);
+        // Document-level mouseup finalizes a drag that ends outside the editor.
+        eventCenter.attachDOMEvent(this._doc, 'mouseup', handleMouseupOrLeave);
         eventCenter.attachDOMEvent(domNode, 'click', handleMousemoveOrClick);
     }
 

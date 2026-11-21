@@ -1,4 +1,11 @@
-export type CodeLanguageId = 'typescript' | 'typescriptreact' | 'javascript' | 'javascriptreact'
+export type CodeLanguageId =
+  | 'typescript'
+  | 'typescriptreact'
+  | 'javascript'
+  | 'javascriptreact'
+  | 'c'
+  | 'cpp'
+  | 'objective-c'
 
 export interface CodePosition {
   line: number
@@ -56,6 +63,25 @@ export function codeLanguageForPath(path: string): CodeLanguageId | null {
     case 'mjs':
     case 'cjs': return 'javascript'
     case 'jsx': return 'javascriptreact'
+    case 'c': return 'c'
+    case 'h': return 'c'
+    case 'cc':
+    case 'cp':
+    case 'cpp':
+    case 'cxx':
+    case 'c++':
+    case 'hpp':
+    case 'hh':
+    case 'hxx':
+    case 'h++':
+    case 'ipp':
+    case 'inl':
+    case 'tpp':
+    case 'txx':
+    case 'cu':
+    case 'cuh': return 'cpp'
+    case 'm':
+    case 'mm': return 'objective-c'
     default: return null
   }
 }

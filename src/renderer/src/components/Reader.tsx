@@ -38,7 +38,7 @@ function locateKeyword(keyword: string): boolean {
 export default function Reader() {
   const [marginExpanded, setMarginExpanded] = useState(false)
   const [marginHidden, setMarginHidden] = useState(false)
-  const [marginWidth, setMarginWidth] = useState(190)
+  const [marginWidth, setMarginWidth] = useState(238)
   const composeQuote = useStore((s) => s.composeQuote)
   const activeDoc = useStore((s) => s.activeDoc)
   const docLoading = useStore((s) => s.docLoading)
@@ -79,7 +79,7 @@ export default function Reader() {
     e.preventDefault()
     const startX = e.clientX
     const startW = e.currentTarget.parentElement!.getBoundingClientRect().width
-    const onMove = (ev: MouseEvent): void => setMarginWidth(Math.min(420, Math.max(150, startW + startX - ev.clientX)))
+    const onMove = (ev: MouseEvent): void => setMarginWidth(Math.min(420, Math.max(222, startW + startX - ev.clientX)))
     const onUp = (): void => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
@@ -304,8 +304,8 @@ export default function Reader() {
           <div className="rt-tool-group">
             <button
               className={`rt-btn ${annotationsOpen ? 'active' : ''}`}
-              title={annotationsOpen ? `收起标签（${annotations.length}）` : `展开标签（${annotations.length}）`}
-              aria-label={annotationsOpen ? '收起标签' : '展开标签'}
+              title={annotationsOpen ? `收起批注（${annotations.length}）` : `展开批注（${annotations.length}）`}
+              aria-label={annotationsOpen ? '收起批注' : '展开批注'}
               aria-expanded={annotationsOpen}
               onClick={() => {
                 if (annotationsOpen) {

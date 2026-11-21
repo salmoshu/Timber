@@ -1,7 +1,8 @@
 import { askConfirm, askInput } from '../utils/dialogs'
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { useStore } from '../store'
-import type { DocNode, Project, RemoteConfig } from '@shared/types'
+import { CODE_EXTS, apiFor, isDocumentTabPath, useStore } from '../store'
+import { DOC_FORMAT_GROUPS } from '@shared/types'
+import type { DocNode, Project, RemoteConfig, SearchResponse } from '@shared/types'
 import Chevron from './Chevron'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
@@ -44,7 +45,9 @@ const EXT_ICONS: Record<string, string> = {
   '.html': '<>', '.htm': '<>', '.xml': '<>', '.vue': 'V', '.svelte': 'S', '.astro': 'A',
   '.js': 'JS', '.jsx': 'JS', '.mjs': 'JS', '.cjs': 'JS', '.ts': 'TS', '.tsx': 'TS',
   '.py': 'Py', '.pyi': 'Py', '.go': 'Go', '.rs': 'Rs', '.java': 'J', '.kt': 'Kt', '.kts': 'Kt',
-  '.c': 'C', '.h': 'C', '.cc': 'C+', '.cpp': 'C+', '.hpp': 'C+', '.hh': 'C+', '.cs': 'C#',
+  '.c': 'C', '.h': 'C', '.cc': 'C+', '.cp': 'C+', '.cpp': 'C+', '.cxx': 'C+', '.c++': 'C+',
+  '.hpp': 'C+', '.hh': 'C+', '.hxx': 'C+', '.h++': 'C+', '.ipp': 'C+', '.inl': 'C+', '.tpp': 'C+', '.txx': 'C+',
+  '.cu': 'CU', '.cuh': 'CU', '.m': 'M', '.mm': 'M+', '.cmake': 'CM', '.mk': 'MK',
   '.rb': 'Rb', '.php': 'PHP', '.swift': 'Sw', '.dart': 'D', '.scala': 'Sc', '.clj': 'Cl',
   '.ex': 'Ex', '.exs': 'Ex', '.lua': 'Lu', '.pl': 'Pl', '.r': 'R',
   '.css': '#', '.scss': '#', '.sass': '#', '.less': '#',
@@ -75,6 +78,25 @@ function matchFilter(node: DocNode, f: string): boolean {
   if (!f) return true
   if (node.name.toLowerCase().includes(f)) return true
   return (node.children ?? []).some((c) => matchFilter(c, f))
+}
+
+/** 内容搜索关键词高亮：大小写不敏感切分文本 */
+function highlightMatches(text: string, kw: string): (string | { hit: string })[] {
+  const out: (string | { hit: string })[] = []
+  const lower = text.toLowerCase()
+  const needle = kw.toLowerCase()
+  let i = 0
+  while (i < text.length) {
+    const idx = lower.indexOf(needle, i)
+    if (idx < 0) {
+      out.push(text.slice(i))
+      break
+    }
+    if (idx > i) out.push(text.slice(i, idx))
+    out.push({ hit: text.slice(idx, idx + needle.length) })
+    i = idx + needle.length
+  }
+  return out
 }
 
 type TreeEdit =
@@ -386,7 +408,8 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     settings,
     setSetting,
     selectedDir,
-    setSelectedDir
+    setSelectedDir,
+    setPendingLocate
   } = useStore()
 
   /** 侧栏边缘拖拽调宽（HTML 文档 iframe 会吞 mousemove，拖拽期间禁用指针事件） */
@@ -407,6 +430,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
 
   const [projCollapsed, setProjCollapsed] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
+  const [showAllProjects, setShowAllProjects] = useState(false)
   const [tab, setTab] = useState<TreeTab>('docs')
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [storeRev, setStoreRev] = useState(0) // 别名/屏蔽变更后强制重渲染
@@ -416,6 +440,10 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
   const [dropTarget, setDropTarget] = useState<string | null>(null) // 拖拽放置目标（'' = 项目根）
   const [treeEdit, setTreeEdit] = useState<TreeEdit | null>(null)
   const [nameValue, setNameValue] = useState('')
+  const [contentResult, setContentResult] = useState<SearchResponse | null>(null)
+  const [contentLoading, setContentLoading] = useState(false)
+  const [contentError, setContentError] = useState(false)
+  const contentSearchSeq = useRef(0)
   const bump = () => setStoreRev((v) => v + 1)
 
   useEffect(() => {
@@ -423,6 +451,46 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
     setNameValue('')
     setTab((current) => current === 'git' ? 'docs' : current)
   }, [activeProjectId])
+
+  // 侧栏搜索：文件名在本地过滤树，同时请求 sidecar 全文检索文件内容（v0.8.1）
+  useEffect(() => {
+    const kw = filter.trim()
+    const seq = ++contentSearchSeq.current
+    if (!activeProjectId || tab !== 'docs' || !kw) {
+      setContentResult(null)
+      setContentLoading(false)
+      setContentError(false)
+      return
+    }
+    setContentLoading(true)
+    setContentError(false)
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const s = useStore.getState()
+          const keys = s.settings.docFormats
+          const exts = DOC_FORMAT_GROUPS.filter((g) => keys.includes(g.key)).flatMap((g) => g.exts)
+          const proj = s.projects.find((p) => p.id === activeProjectId)
+          const docsOnly = proj ? filterDocsForProject(s.settings, proj) : false
+          if (!docsOnly) exts.push(...CODE_EXTS)
+          const r = await apiFor<SearchResponse>(activeProjectId)(
+            'GET',
+            `/api/projects/${activeProjectId}/search?q=${encodeURIComponent(kw)}&exts=${encodeURIComponent(exts.join(','))}`
+          )
+          if (contentSearchSeq.current !== seq) return
+          r.files = r.files.filter((f) => !isBlocked(activeProjectId, f.path))
+          setContentResult(r)
+        } catch {
+          if (contentSearchSeq.current !== seq) return
+          setContentResult(null)
+          setContentError(true)
+        } finally {
+          if (contentSearchSeq.current === seq) setContentLoading(false)
+        }
+      })()
+    }, 320)
+    return () => window.clearTimeout(timer)
+  }, [filter, tab, activeProjectId, settings])
 
   const onReconnect = async (remoteId: string, projectId?: string) => {
     const key = projectId ? `${remoteId}:${projectId}` : remoteId
@@ -751,10 +819,20 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
   }
 
   const visibleProjects = projects.filter((p) => showHidden || !hiddenIds.includes(p.id))
+  const displayedProjects = showAllProjects ? visibleProjects : visibleProjects.slice(0, 12)
   const hiddenCount = projects.filter((p) => hiddenIds.includes(p.id)).length
   const docsOnly = active ? filterDocsForProject(settings, active) : false
   const shownTree = docsOnly ? tree : codeTree
   const shownTreeLoading = docsOnly ? treeLoading : codeTreeLoading
+  const contentTotal = contentResult?.files.reduce((n, f) => n + f.count, 0) ?? 0
+
+  /** 点击内容命中：打开文档并定位到关键词（与搜索面板一致） */
+  const jumpToSearchHit = (path: string): void => {
+    const kw = filter.trim()
+    if (!kw) return
+    setPendingLocate({ path, keyword: kw })
+    void useStore.getState().openDoc(path)
+  }
   // 未连接的远程连接：重启后不自动重连，占位显示 + ⟳ 手动重连（zcode 式）；
   // v0.5.6 起分项目管理——连接在线但仅部分项目接入时，其余项目同样显示占位
   const disconnectedRemotes = remotes
@@ -776,7 +854,10 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
       aria-label={section === 'projects' ? '项目列表' : section === 'files' ? '项目文件' : '提交历史'}
     >
       <div className="sb-resizer" onMouseDown={startResize} title="拖拽调整宽度" />
-      {section === 'projects' && <div className="sb-projects">
+      {section === 'projects' && <div className={`sb-projects ${showAllProjects ? 'show-all' : ''}`}>
+        <button className="proj-import proj-create" onClick={openAddProject}>
+          ＋ 新建项目
+        </button>
         <div className="sb-head-row">
         <button className="sb-proj-toggle" onClick={() => setProjCollapsed(!projCollapsed)}>
           <Chevron open={!projCollapsed} />
@@ -797,7 +878,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
         </div>
         {!projCollapsed && (
           <div className="sb-proj-list">
-            {visibleProjects.map((p) => {
+            {displayedProjects.map((p) => {
               const hidden = hiddenIds.includes(p.id)
               return (
                 <button
@@ -862,9 +943,11 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                 )
               })
             })}
-            <button className="proj-import" onClick={openAddProject}>
-              ＋ 添加项目
-            </button>
+            {visibleProjects.length > 12 && (
+              <button className="proj-more" onClick={() => setShowAllProjects(!showAllProjects)}>
+                {showAllProjects ? '收起项目' : `更多项目（${visibleProjects.length - 12}）`}
+              </button>
+            )}
           </div>
         )}
       </div>}
@@ -894,17 +977,28 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                 className={`pf-chip pf-filter ${filterDocsForProject(settings, active) ? 'on' : ''}`}
                 title={
                   filterDocsForProject(settings, active)
-                    ? '文件树：仅文档（点击显示全部文件）'
-                    : '文件树：全部文件（点击仅显示文档）'
+                    ? '仅文档：文件树与非文档标签已隐藏（点击显示全部）'
+                    : '全部文件：点击仅显示文档（同时隐藏非文档标签）'
                 }
                 aria-label={filterDocsForProject(settings, active) ? '仅显示文档，点击显示全部' : '显示全部文件，点击仅显示文档'}
                 aria-pressed={filterDocsForProject(settings, active)}
-                onClick={() =>
+                onClick={() => {
+                  const next = !filterDocsForProject(settings, active)
                   setSetting('resourceFilterDocsByProject', {
                     ...settings.resourceFilterDocsByProject,
-                    [filterKeyForProject(active)]: !filterDocsForProject(settings, active)
+                    [filterKeyForProject(active)]: next
                   })
-                }
+                  // 开启过滤：若当前激活的是非文档标签，切到第一个仍可见的文档标签。
+                  // 标签本身不关闭，关闭过滤后按原位置恢复（v0.8.1）
+                  if (!next) return
+                  const s = useStore.getState()
+                  const activeVisible =
+                    s.activeTabId !== null &&
+                    s.tabs.some((t) => t.id === s.activeTabId && isDocumentTabPath(t.path, s.settings))
+                  if (activeVisible) return
+                  const first = s.tabs.find((t) => isDocumentTabPath(t.path, s.settings))
+                  if (first) void s.activateTab(first.id)
+                }}
               >
                 {/* 过滤图标（v0.6.8）：激活=仅文档，空心=全部；无文字 */}
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -959,14 +1053,17 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                 <input
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  placeholder={docsOnly ? '过滤文档名…' : '搜索文件…'}
+                  placeholder="搜索文件与内容…"
                   spellCheck={false}
                 />
               </div>
               <div className="sb-tree">
                 {shownTreeLoading && <div className="sb-empty">扫描中…</div>}
-                {!shownTreeLoading && shownTree && (shownTree.children?.length ?? 0) === 0 && (
+                {!shownTreeLoading && shownTree && (shownTree.children?.length ?? 0) === 0 && !filter.trim() && (
                   <div className="sb-empty">{docsOnly ? '未找到 Markdown / HTML / TXT 文档' : '无匹配文件'}</div>
+                )}
+                {!shownTreeLoading && filter.trim() && (shownTree?.children?.length ?? 0) > 0 && (
+                  <div className="sb-search-label">文件名匹配</div>
                 )}
                 {treeEdit?.mode === 'create' && treeEdit.dir === '' && (
                   <div className="tree-inline-row" style={{ paddingLeft: 10 }}>
@@ -1003,6 +1100,58 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
                 {shownTree?.truncated && (
                   <div className="tree-truncated" title="项目文件数超过扫描上限，超出部分未显示；可屏蔽大目录后重新扫描">
                     文件过多，仅显示前 2 万个
+                  </div>
+                )}
+                {filter.trim() && (
+                  <div className="sb-content-hits">
+                    {contentLoading && <div className="sb-empty">搜索内容中…</div>}
+                    {!contentLoading && contentError && (
+                      <div className="sb-empty">内容搜索失败，请稍后重试</div>
+                    )}
+                    {!contentLoading && !contentError && contentResult && contentResult.files.length === 0 && (
+                      <div className="sb-empty">没有匹配的文件或内容</div>
+                    )}
+                    {!contentLoading && !contentError && contentResult && contentResult.files.length > 0 && (
+                      <>
+                        <div className="sb-search-label">
+                          内容匹配（{contentResult.files.length} 个文件 / {contentTotal} 处）
+                        </div>
+                        {contentResult.files.map((f) => (
+                          <div key={f.path} className="sp-file">
+                            <button className="sp-file-name" onClick={() => jumpToSearchHit(f.path)} title={f.path}>
+                              <span className={`doc-icon ${extClass(f.ext)}`}>{extIcon(f.ext)}</span>
+                              <span className="sp-file-text">{f.path.split('/').pop()}</span>
+                              <span className="sp-file-count">{f.count}</span>
+                            </button>
+                            <div className="sp-matches">
+                              {f.matches.map((m, i) => (
+                                <button
+                                  key={i}
+                                  className="sp-match"
+                                  onClick={() => jumpToSearchHit(f.path)}
+                                  title={`第 ${m.line} 行`}
+                                >
+                                  <span className="sp-line">{m.line}</span>
+                                  <span className="sp-text">
+                                    {highlightMatches(m.text, contentResult.query).map((part, j) =>
+                                      typeof part === 'string' ? (
+                                        <span key={j}>{part}</span>
+                                      ) : (
+                                        <mark className="sp-kw" key={j}>{part.hit}</mark>
+                                      )
+                                    )}
+                                  </span>
+                                </button>
+                              ))}
+                              {f.count > f.matches.length && (
+                                <div className="sp-more">…另有 {f.count - f.matches.length} 处命中</div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        {contentResult.truncated && <div className="sp-more">结果较多，已截断</div>}
+                      </>
+                    )}
                   </div>
                 )}
               </div>

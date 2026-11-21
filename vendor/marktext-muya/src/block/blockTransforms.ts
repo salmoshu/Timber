@@ -253,7 +253,12 @@ function finishInsertedBlock(newBlock: Parent, muya: Muya, label: string) {
 
 // HTML-block carets start between the opening and closing tags.
 function placeCaretInNewBlock(newBlock: Parent, label: string) {
-    const cursorBlock = newBlock.firstContentInDescendant();
+    // A code block's first content is the hidden language input; the caret
+    // belongs in the code body (its last content), otherwise typing after a
+    // slash insert lands outside the new block.
+    const cursorBlock = label === 'code-block'
+        ? newBlock.lastContentInDescendant()
+        : newBlock.firstContentInDescendant();
     if (!cursorBlock)
         return;
 

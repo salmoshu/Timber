@@ -307,6 +307,43 @@ export function DocumentOutline() {
 /** 类型图标/文字统一拆分渲染（v0.6.4）：面板拖窄后容器查询隐藏文字，仅留图标，避免换行挤压 */
 const KIND_ICONS: Record<AnnotationKind, string> = { tag: '🏷', note: '📝', annotation: '✎' }
 
+/** 批注卡片操作图标（v0.8.1：仅图标，保证窄栏下五个按钮同处一行） */
+const OpIcon = ({ name }: { name: 'locate' | 'address' | 'note' | 'done' | 'reopen' | 'trash' }) => {
+  const paths: Record<typeof name, React.ReactNode> = {
+    locate: (
+      <>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+      </>
+    ),
+    address: (
+      <>
+        <path d="M10 13a5 5 0 0 0 7.07 0l1.93-1.93a5 5 0 1 0-7.07-7.07L11 5" />
+        <path d="M14 11a5 5 0 0 0-7.07 0L5 12.93a5 5 0 1 0 7.07 7.07L13 19" />
+      </>
+    ),
+    note: <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />,
+    done: <path d="M20 6 9 17l-5-5" />,
+    reopen: (
+      <>
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+        <path d="M3 3v5h5" />
+      </>
+    ),
+    trash: (
+      <>
+        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+        <path d="M10 11v6M14 11v6" />
+      </>
+    )
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths[name]}
+    </svg>
+  )
+}
+
 export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e: React.MouseEvent<HTMLDivElement>) => void }) {
   const annotations = useStore((s) => s.annotations)
   const composeQuote = useStore((s) => s.composeQuote)
@@ -335,16 +372,17 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
     if (!project || annotations.length === 0) return
     const annFile = `${project.path}\\.timber\\annotations.json`
     const body = annotations
-      .map((a, i) =>
-        [
-          `## 标注 ${i + 1}（${ANNOTATION_KIND_LABELS[kindOf(a)]} · ${a.status === 'open' ? '待处理' : '已完成'}）`,
+      .map((a, i) => {
+        const status = kindOf(a) === 'note' ? '' : ` · ${a.status === 'open' ? '待处理' : '已完成'}`
+        return [
+          `## 标注 ${i + 1}（${ANNOTATION_KIND_LABELS[kindOf(a)]}${status}）`,
           `链接: timber://${project.name}/${a.doc}#${a.id}`,
           `文档: ${project.path}\\${a.doc.replace(/\//g, '\\')}`,
           `标注ID: ${a.id}`,
           `引用: ${a.quote}`,
           `内容: ${a.text}`
         ].join('\n')
-      )
+      })
       .join('\n\n')
     const text = [
       `[Timber 标注任务 · ${project.name} / ${activeDoc?.path ?? ''} · 共 ${annotations.length} 条]`,
@@ -407,14 +445,14 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
     }
   }
 
-  const open = annotations.filter((a) => a.status === 'open')
-  const done = annotations.filter((a) => a.status === 'done')
+  const open = annotations.filter((a) => kindOf(a) !== 'note' && a.status === 'open')
+  const done = annotations.filter((a) => kindOf(a) !== 'note' && a.status === 'done')
 
   return (
-    <aside className="ann-panel document-annotations" aria-label="正文标签">
-      {onResizeStart && <div className="document-ann-resizer" onMouseDown={onResizeStart} title="拖拽调整标签宽度" />}
+    <aside className="ann-panel document-annotations" aria-label="笔记与批注">
+      {onResizeStart && <div className="document-ann-resizer" onMouseDown={onResizeStart} title="拖拽调整批注栏宽度" />}
       <div className="ap-head">
-        <strong>标签 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
+        <strong>笔记与批注 {annotations.length > 0 ? `(${annotations.length})` : ''}</strong>
         <span className="ap-count">{open.length} 待处理 · {done.length} 已完成</span>
       </div>
         <div className="ap-body">
@@ -447,7 +485,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                     <button
                       key={t}
                       className="ap-tag-chip"
-                      title="点击用该标签标注选中文字"
+                      title="点击用该批注标注选中文字"
                       onClick={() => {
                         void createAnnotation(t, 'tag')
                         setDraft('')
@@ -462,7 +500,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                 autoFocus
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder={kind === 'tag' ? '标签名（可直接点上方历史标签）…' : '笔记：记录你的思考与备忘…'}
+                placeholder={kind === 'tag' ? '批注名（可直接点上方历史批注）…' : '笔记：记录你的思考与备忘…'}
                 rows={kind === 'tag' ? 1 : 3}
               />
               <div className="ap-compose-ops">
@@ -493,19 +531,21 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                 />
                 <path d="M16 17.5h16M16 24.5h9" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
               </svg>
-              <div className="ap-empty-title">还没有标签</div>
-              <div className="ap-empty-desc">选中正文或源码中的文字，点击弹出的「🏷 添加标签」，即可创建笔记或标签：</div>
+              <div className="ap-empty-title">还没有笔记或批注</div>
+              <div className="ap-empty-desc">选中正文或源码中的文字，点击弹出的「添加批注」，即可创建笔记或批注：</div>
               <div className="ap-empty-kinds">
                 <span className="ap-kind note"><span className="ap-kind-ico" aria-hidden="true">📝</span><span className="ap-kind-text">笔记</span></span>
-                <span className="ap-kind tag"><span className="ap-kind-ico" aria-hidden="true">🏷</span><span className="ap-kind-text">标签</span></span>
+                <span className="ap-kind tag"><span className="ap-kind-ico" aria-hidden="true">🏷</span><span className="ap-kind-text">批注</span></span>
               </div>
-              <div className="ap-empty-tip">笔记与标签保存在项目 .timber/annotations.json，可复制标签地址交给 agent 执行</div>
+              <div className="ap-empty-tip">笔记与批注保存在项目 .timber/annotations.json，可复制批注地址交给 agent 执行</div>
             </div>
           )}
-        {annotations.map((a) => (
+        {annotations.map((a) => {
+          const note = kindOf(a) === 'note'
+          return (
           <div
             key={a.id}
-            className={`ap-card ${a.status} ${locating === a.id ? 'locating' : ''}`}
+            className={`ap-card ${note ? 'note' : a.status} ${locating === a.id ? 'locating' : ''}`}
             id={`ap-${a.id}`}
           >
             <div className="ap-card-quote" title={a.quote}>
@@ -529,7 +569,7 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                     }}
                     title="保存修改"
                   >
-                    ✓ 保存
+                    <OpIcon name="done" /> 保存
                   </button>
                   <button onClick={() => setEditing(null)} title="放弃修改">
                     取消
@@ -544,37 +584,48 @@ export default function AnnotationPanel({ onResizeStart }: { onResizeStart?: (e:
                 <span className="ap-kind-ico" aria-hidden="true">{KIND_ICONS[kindOf(a)]}</span>
                 <span className="ap-kind-text">{ANNOTATION_KIND_LABELS[kindOf(a)]}</span>
               </span>
-              <span className={`ap-status ${a.status}`}>{a.status === 'open' ? '待处理' : '已完成'}</span>
+              {!note && <span className={`ap-status ${a.status}`}>{a.status === 'open' ? '待处理' : '已完成'}</span>}
               <span className="ap-time">{fmtTime(a.updatedAt)}</span>
             </div>
             {editing?.id !== a.id && (
-              <div className="ap-card-ops">
-                <button onClick={() => locate(a)} title="在正文中定位">◎ 定位</button>
-                <button onClick={() => void copyAnnAddress(a)} title="复制标注地址（发给 agent）">
-                  ⧉ 地址
+              <div className="ap-card-ops" role="group" aria-label="批注操作">
+                <button onClick={() => locate(a)} title="定位" aria-label="定位">
+                  <OpIcon name="locate" />
                 </button>
-                <button onClick={() => setEditing({ id: a.id, text: a.text })} title="编辑标注内容">
-                  ✎ 编辑
+                <button onClick={() => void copyAnnAddress(a)} title="地址" aria-label="地址">
+                  <OpIcon name="address" />
                 </button>
                 <button
-                  onClick={() => void setAnnStatus(a, a.status === 'open' ? 'done' : 'open')}
-                  title="切换状态"
+                  onClick={() => setEditing({ id: a.id, text: a.text })}
+                  title={note ? '编辑笔记' : '编辑批注'}
+                  aria-label={note ? '编辑笔记' : '编辑批注'}
                 >
-                  {a.status === 'open' ? '✓ 完成' : '↺ 重开'}
+                  <OpIcon name="note" />
                 </button>
+                {!note && (
+                  <button
+                    onClick={() => void setAnnStatus(a, a.status === 'open' ? 'done' : 'open')}
+                    title={a.status === 'open' ? '完成' : '重开'}
+                    aria-label={a.status === 'open' ? '完成' : '重开'}
+                  >
+                    <OpIcon name={a.status === 'open' ? 'done' : 'reopen'} />
+                  </button>
+                )}
                 <button
                   className="danger"
                   onClick={async () => {
-                    if (await askConfirm('删除这条标注？')) void deleteAnnotation(a)
+                    if (await askConfirm(note ? '删除这条笔记？' : '删除这条批注？')) void deleteAnnotation(a)
                   }}
                   title="删除"
+                  aria-label="删除"
                 >
-                  ✕
+                  <OpIcon name="trash" />
                 </button>
               </div>
             )}
           </div>
-        ))}
+          )
+        })}
           </div>
         </div>
     </aside>

@@ -262,6 +262,46 @@ func (s *server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "commit": c, "body": body, "files": files})
 }
 
+// handleGitShowDiff 某个文件在某次提交中的差异（历史视图原地展开，不跳转资源视图）。
+// 重命名提交需要同时指定旧路径，否则 git 只按新路径过滤会得到空 diff。
+func (s *server) handleGitShowDiff(w http.ResponseWriter, r *http.Request) {
+	p := s.project(w, r)
+	if p == nil {
+		return
+	}
+	if !isGitRepo(p.Path) {
+		writeNotRepo(w)
+		return
+	}
+	sha := r.PathValue("sha")
+	if !shaRe.MatchString(sha) {
+		writeError(w, 400, "无效的提交 sha")
+		return
+	}
+	rel := strings.TrimSpace(r.URL.Query().Get("path"))
+	if rel == "" {
+		writeError(w, 400, "缺少 path 参数")
+		return
+	}
+	if _, err := resolveDoc(p.Path, rel); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	prefix := repoPrefix(p.Path)
+	args := []string{"show", "--format=", "--no-color", "--patch", sha, "--", prefix + rel}
+	if old := strings.TrimSpace(r.URL.Query().Get("old")); old != "" && old != rel {
+		if _, err := resolveDoc(p.Path, old); err == nil {
+			args = append(args, prefix+old)
+		}
+	}
+	out, err := gitRun(p.Path, 30*time.Second, args...)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"path": rel, "diff": out})
+}
+
 // showFiles 组合 --name-status 与 --numstat（均 -z，避免路径转义问题）解析文件列表。
 func showFiles(dir, sha string) []CommitFile {
 	nsOut, err := gitRun(dir, 30*time.Second, "show", "--format=", "-z", "--name-status", sha)

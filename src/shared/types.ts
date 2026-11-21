@@ -1,6 +1,6 @@
 // 主进程 / preload / 渲染进程共享类型
 
-import type { CodeDocumentInput, CodeDocumentRef, CodeHoverResult, CodeLocation, CodePosition, CodeServiceStatus, CodeSymbol } from './code'
+import type { CodeDocumentInput, CodeDocumentRef, CodeHoverResult, CodeLanguageId, CodeLocation, CodePosition, CodeServiceStatus, CodeSymbol } from './code'
 
 export interface ApiInfo {
   base: string
@@ -91,13 +91,13 @@ export interface DocContent {
 
 export type AnnotationStatus = 'open' | 'done'
 
-/** 标注类型：标签（快速归类，兼容旧 annotation 数据）/ 笔记（记录思考与备忘） */
+/** 标注类型：批注（可标记待处理/完成，兼容旧 annotation 数据）/ 笔记（记录思考与备忘） */
 export type AnnotationKind = 'tag' | 'note' | 'annotation'
 
 export const ANNOTATION_KIND_LABELS: Record<AnnotationKind, string> = {
-  tag: '标签',
+  tag: '批注',
   note: '笔记',
-  annotation: '标签'
+  annotation: '批注'
 }
 
 export interface Annotation {
@@ -408,7 +408,7 @@ export interface TimberBridge {
   codeReferences(document: CodeDocumentRef, position: CodePosition): Promise<CodeLocation[]>
   codeHover(document: CodeDocumentRef, position: CodePosition): Promise<CodeHoverResult | null>
   codeDocumentSymbols(document: CodeDocumentRef): Promise<CodeSymbol[]>
-  codeWorkspaceSymbols(rootPath: string, query: string): Promise<CodeSymbol[]>
+  codeWorkspaceSymbols(rootPath: string, query: string, languageId?: CodeLanguageId): Promise<CodeSymbol[]>
   browseLocal(path?: string): Promise<{ path: string; parent: string; home: string; roots: string[]; folders: { name: string; path: string }[] }>
   pathExists(path: string): Promise<boolean>
   revealPath(p: string): Promise<void>

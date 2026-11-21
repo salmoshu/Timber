@@ -12,7 +12,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func (s *server) handleFsOp(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +108,8 @@ func (s *server) handleFsOp(w http.ResponseWriter, r *http.Request) {
 }
 
 // fsMove 移动/重命名：目标不得已存在、目录不得移入自身内部；成功后迁移批注。
+// 大小写不敏感文件系统（Windows/macOS）上仅改大小写时，源与目标 Stat 到同一文件，
+// 直接 Rename 会失败或留下双份，需先改临时名再落到目标名。
 func (s *server) fsMove(projectPath, from, to, fromAbs, toAbs string) error {
 	if from == to {
 		return fmt.Errorf("源路径与目标路径相同")
@@ -113,13 +117,26 @@ func (s *server) fsMove(projectPath, from, to, fromAbs, toAbs string) error {
 	if strings.HasPrefix(to, from+"/") {
 		return fmt.Errorf("不能把目录移动到它自身内部")
 	}
-	if _, err := os.Stat(fromAbs); err != nil {
+	fromInfo, err := os.Lstat(fromAbs)
+	if err != nil {
 		return fmt.Errorf("源路径不存在：%w", err)
 	}
-	if _, err := os.Lstat(toAbs); err == nil {
-		return fmt.Errorf("目标已存在：%s", to)
-	}
-	if err := os.Rename(fromAbs, toAbs); err != nil {
+	toInfo, statErr := os.Lstat(toAbs)
+	if statErr == nil {
+		if !os.SameFile(fromInfo, toInfo) {
+			return fmt.Errorf("目标已存在：%s", to)
+		}
+		tmp := fromAbs + ".timber-rename-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		if err := os.Rename(fromAbs, tmp); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, toAbs); err != nil {
+			_ = os.Rename(tmp, fromAbs)
+			return err
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("无法检查目标路径：%w", statErr)
+	} else if err := os.Rename(fromAbs, toAbs); err != nil {
 		return err
 	}
 	return s.anns.renameDoc(projectPath, path.Clean(from), path.Clean(to))

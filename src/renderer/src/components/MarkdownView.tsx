@@ -147,6 +147,89 @@ function registerMuyaPlugins(): void {
 registerMuyaPlugins()
 
 interface LightboxInfo { src: string; original: string; alt: string }
+
+const CODE_PREVIEW_LINES = 15
+
+interface CodeViewerInfo { html: string; lang: string; lines: number }
+
+function codeLineCount(text: string): number {
+  let count = 1
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) count++
+  return count
+}
+
+/** 代码块折叠（v0.8.1）：超过 15 行时限制正文高度并加「全屏查看」按钮。
+ *  行号槽是 pre 的兄弟节点，折叠后随正文滚动做位移，保持行号与代码行对齐。 */
+function enhanceCodeBlocks(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>('pre.mu-code-block').forEach((pre) => {
+    const code = pre.querySelector<HTMLElement>(':scope > .mu-code')
+    if (!code) return
+    const lines = codeLineCount(code.textContent ?? '')
+    const collapsible = lines > CODE_PREVIEW_LINES
+    const gutter = pre.querySelector<HTMLElement>('.mu-line-numbers-rows')
+    if (!collapsible) {
+      pre.classList.remove('code-collapsed')
+      code.style.maxHeight = ''
+      code.style.removeProperty('overflow-y')
+      if (gutter) gutter.style.transform = ''
+      pre.querySelector<HTMLElement>('[data-code-expand]')?.remove()
+      return
+    }
+    pre.classList.add('code-collapsed')
+    const computed = getComputedStyle(code)
+    const lineH = Number.parseFloat(computed.lineHeight) || Number.parseFloat(computed.fontSize) * 1.6 || 22
+    code.style.maxHeight = `${Math.ceil(lineH * CODE_PREVIEW_LINES)}px`
+    code.style.overflowY = 'auto'
+    if (!code.dataset.gutterSync) {
+      code.dataset.gutterSync = '1'
+      code.addEventListener('scroll', () => {
+        const current = pre.querySelector<HTMLElement>('.mu-line-numbers-rows')
+        if (current) current.style.transform = code.scrollTop ? `translateY(${-code.scrollTop}px)` : ''
+      })
+    }
+    let button = pre.querySelector<HTMLButtonElement>('[data-code-expand]')
+    if (!button) {
+      button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'code-expand-btn'
+      button.dataset.codeExpand = '1'
+      button.contentEditable = 'false'
+      button.setAttribute('aria-label', '全屏查看完整代码')
+      pre.appendChild(button)
+    }
+    button.title = '全屏查看完整代码'
+    button.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg><span>全屏查看（共 ${lines} 行）</span>`
+  })
+}
+
+function CodeFullscreen({ info, onClose }: { info: CodeViewerInfo; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return createPortal(
+    <div
+      className="code-fullscreen-backdrop"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}
+    >
+      <div className="code-fullscreen timber-muya" role="dialog" aria-modal="true" aria-label="代码全屏查看">
+        <div className="code-fullscreen-head">
+          <span className="code-fullscreen-lang">{info.lang}</span>
+          <span className="code-fullscreen-count">{info.lines} 行</span>
+          <button className="code-fullscreen-close" onClick={onClose} title="关闭（Esc）" aria-label="关闭">✕</button>
+        </div>
+        <pre className="code-fullscreen-body"><code dangerouslySetInnerHTML={{ __html: info.html }} /></pre>
+      </div>
+    </div>,
+    document.body
+  )
+}
 function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => void }) {
   const [originalSize, setOriginalSize] = useState(false)
   useEffect(() => {
@@ -216,6 +299,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
   selectAnnRef.current = onSelectAnn
   const [lightbox, setLightbox] = useState<LightboxInfo | null>(null)
   const [diagram, setDiagram] = useState<IPreviewDiagramPayload | null>(null)
+  const [codeViewer, setCodeViewer] = useState<CodeViewerInfo | null>(null)
   const [error, setError] = useState('')
   const docPath = useStore((state) => state.activeDoc?.path)
   const projectId = useStore((state) => state.activeProjectId)
@@ -244,6 +328,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     let disposed = false
     let disposeEditor: (() => void) | undefined
     setError('')
+    setCodeViewer(null)
     void rawBaseFor(projectId).then((rawBase) => {
       if (disposed) return
       const mount = document.createElement('div')
@@ -302,6 +387,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         cancelAnimationFrame(frame)
         frame = requestAnimationFrame(() => {
           if (disposed) return
+          enhanceCodeBlocks(muya.domNode)
           refreshRef.current()
           window.dispatchEvent(new Event('markdown-rendered'))
         })
@@ -409,12 +495,30 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         event.preventDefault(); event.stopPropagation()
         void insertImages(files)
       }
+      const onCodeMousedown = (event: MouseEvent): void => {
+        if ((event.target as Element).closest('[data-code-expand]')) event.preventDefault()
+      }
+      const onCodeClick = (event: MouseEvent): void => {
+        const target = event.target as Element
+        const button = target.closest<HTMLButtonElement>('[data-code-expand]')
+        if (!button) return
+        event.preventDefault(); event.stopPropagation()
+        const pre = button.closest('pre.mu-code-block')
+        const code = pre?.querySelector<HTMLElement>(':scope > .mu-code')
+        if (!pre || !code) return
+        const clone = code.cloneNode(true) as HTMLElement
+        clone.querySelectorAll('.mu-code-copy').forEach((node) => node.remove())
+        const lang = pre.querySelector('.mu-language-input')?.textContent?.trim() || '代码'
+        setCodeViewer({ html: clone.innerHTML, lang, lines: codeLineCount(code.textContent ?? '') })
+      }
       const onDragOver = (event: DragEvent): void => {
         if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
       }
       muya.domNode.addEventListener('keydown', onKeyDown, true)
       muya.domNode.addEventListener('beforeinput', onBeforeInput, true)
       muya.domNode.addEventListener('click', onClick)
+      muya.domNode.addEventListener('mousedown', onCodeMousedown, true)
+      muya.domNode.addEventListener('click', onCodeClick, true)
       muya.domNode.addEventListener('drop', onDrop, true)
       muya.domNode.addEventListener('dragover', onDragOver)
       window.addEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
@@ -431,6 +535,8 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         // preserve the source draft, including its exact trailing newlines.
         window.removeEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
         window.removeEventListener('timber:insert-images', onImages)
+        muya.domNode.removeEventListener('mousedown', onCodeMousedown, true)
+        muya.domNode.removeEventListener('click', onCodeClick, true)
         if (getMarkdownEditor() === runtime) registerMarkdownEditor(null)
         setTextHighlight('ann-open', [])
         setTextHighlight('ann-done', [])
@@ -457,6 +563,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     </div>
     {lightbox && createPortal(<ImageLightbox info={lightbox} onClose={closeOverlays} />, document.body)}
     {diagram && createPortal(<DiagramLightbox payload={diagram} onClose={closeOverlays} />, document.body)}
+    {codeViewer && <CodeFullscreen info={codeViewer} onClose={() => setCodeViewer(null)} />}
   </>
 }
 

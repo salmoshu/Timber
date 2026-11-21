@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { useStore, type DocTab } from '../store'
+import { isDocumentTabPath, useStore, type DocTab } from '../store'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import { exportActiveDocument } from '../utils/documentExport'
+import { filterDocsForProject } from '../utils/settings'
 
 /** 文档标签栏（VSCode 语义：斜体 = 预览标签，随单击复用；双击固定）；
  *  children 渲染为行右端操作区（阅读模式|编辑模式 / 标签等）。
@@ -14,6 +15,11 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
   const activeTabId = useStore((s) => s.activeTabId)
   const activeProjectId = useStore((s) => s.activeProjectId)
   const projects = useStore((s) => s.projects)
+  const settings = useStore((s) => s.settings)
+  const project = projects.find((p) => p.id === activeProjectId)
+  // 文档过滤（项目级设置）开启时，非文档标签暂时隐藏但不关闭；关闭过滤后按原位置恢复（v0.8.1）
+  const docsOnly = project ? filterDocsForProject(settings, project) : false
+  const visibleTabs = docsOnly ? tabs.filter((t) => isDocumentTabPath(t.path, settings)) : tabs
   const { activateTab, closeTab, closeOtherTabs, closeTabsToRight, pinTab, reorderTabs, toast } =
     useStore.getState()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -23,7 +29,7 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
   useEffect(() => {
     const el = scrollRef.current?.querySelector('.doc-tab.active')
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [activeTabId, tabs.length])
+  }, [activeTabId, visibleTabs.length])
 
   /** tab 右键菜单项（VSCode 风格）；远程项目无本地文件路径，隐藏「在文件管理器中显示」 */
   const tabMenuItems = (t: DocTab): MenuItem[] => {
@@ -73,9 +79,9 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
   }
 
   // 菜单打开期间目标 tab 可能被关闭：找不到则不渲染
-  const menuTab = menu ? tabs.find((t) => t.id === menu.tabId) : undefined
+  const menuTab = menu ? visibleTabs.find((t) => t.id === menu.tabId) : undefined
 
-  if (tabs.length === 0) return null
+  if (visibleTabs.length === 0) return null
 
   return (
     <div className="tabs-bar">
@@ -87,7 +93,7 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
           e.preventDefault()
           e.dataTransfer.dropEffect = 'move'
           // 拖到 tab 区尾部空白：视为插入到最后一个标签之后
-          const last = tabs[tabs.length - 1]
+          const last = visibleTabs[visibleTabs.length - 1]
           if (last && last.id !== drag.from) setDrag((d) => (d ? { ...d, over: last.id, pos: 'after' } : d))
         }}
         onDrop={(e) => {
@@ -97,7 +103,7 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
           setDrag(null)
         }}
       >
-        {tabs.map((t) => (
+        {visibleTabs.map((t) => (
           <div
             key={t.id}
             className={`doc-tab ${t.id === activeTabId ? 'active' : ''} ${t.pinned ? '' : 'preview'} ${

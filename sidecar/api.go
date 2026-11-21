@@ -44,6 +44,7 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{id}/git/diff", s.auth(s.handleGitDiff))
 	mux.HandleFunc("GET /api/projects/{id}/git/log", s.auth(s.handleGitLog))
 	mux.HandleFunc("GET /api/projects/{id}/git/show/{sha}", s.auth(s.handleGitShow))
+	mux.HandleFunc("GET /api/projects/{id}/git/show/{sha}/diff", s.auth(s.handleGitShowDiff))
 	mux.HandleFunc("GET /api/projects/{id}/entire/checkpoint", s.auth(s.handleEntireCheckpoint))
 	mux.HandleFunc("GET /api/projects/{id}/entire/transcript", s.auth(s.handleEntireTranscript))
 	mux.HandleFunc("GET /api/projects/{id}/entire/coupling", s.auth(s.handleEntireCoupling))

@@ -33,12 +33,13 @@ function extsQuery(): string {
 /** 源码 + 文本扩展名（代码视图树请求参数；原在 CodeView，v0.5.6 收敛到 store 供侧栏复用） */
 export const CODE_EXTS = [
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.py', '.pyi', '.rs', '.java', '.kt', '.kts',
-  '.vue', '.svelte', '.astro', '.c', '.cc', '.cpp', '.h', '.hpp', '.hh', '.cs', '.rb', '.php', '.swift',
+  '.vue', '.svelte', '.astro', '.c', '.cc', '.cp', '.cpp', '.cxx', '.c++', '.h', '.hpp', '.hh', '.hxx', '.h++',
+  '.ipp', '.inl', '.tpp', '.txx', '.cu', '.cuh', '.m', '.mm', '.cs', '.rb', '.php', '.swift',
   '.dart', '.scala', '.clj', '.ex', '.exs', '.lua', '.pl', '.r',
   '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.css', '.scss', '.sass', '.less', '.html', '.htm',
   '.md', '.markdown', '.mdown', '.mkd', '.mdx', '.rst', '.txt', '.json', '.jsonl', '.yaml', '.yml',
   '.toml', '.ini', '.cfg', '.conf', '.env', '.csv', '.tsv', '.log', '.sql', '.graphql', '.gql',
-  '.proto', '.properties', '.gitignore', '.gitattributes', '.editorconfig',
+  '.proto', '.properties', '.cmake', '.mk', '.gitignore', '.gitattributes', '.editorconfig',
   '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.xlsx', '.xls'
 ]
 
@@ -68,6 +69,12 @@ export interface DocTab {
   scrollTop: number
   /** 已加载的文档内容缓存（切回标签即时呈现，后台校验新鲜度） */
   doc?: DocContent
+}
+
+/** 标签路径是否属于当前设置的文档格式（仅文档过滤时用于隐藏非文档标签） */
+export function isDocumentTabPath(path: string, settings: AppSettings): boolean {
+  const ext = `.${(path.split('.').pop() ?? '').toLowerCase()}`
+  return DOC_FORMAT_GROUPS.some((group) => settings.docFormats.includes(group.key) && group.exts.includes(ext))
 }
 
 export interface Toast {
@@ -1376,6 +1383,8 @@ export const useStore = create<State>((set, get) => ({
           ...tab,
           draft,
           dirty: normalizeDocText(draft) !== normalizeDocText(content),
+          // 保存后不再以斜体预览态存在：正式固定为独立标签（v0.8.1）
+          pinned: true,
           doc: { ...(tab.doc ?? baseDoc), content }
         }
       })
@@ -1385,7 +1394,7 @@ export const useStore = create<State>((set, get) => ({
         dirty: active ? normalizeDocText(cur.draft) !== normalizeDocText(content) : cur.dirty,
         saving: false
       })
-      if (!options?.silent) get().toast('ok', '已保存')
+      // 保存不打扰：成功时不弹提示（错误仍提示），v0.8.1
       if (active && get().dirty) scheduleAutoSave()
     } catch (err) {
       set({ saving: false })
@@ -1522,7 +1531,7 @@ export const useStore = create<State>((set, get) => ({
       })
       set({ composeQuote: null })
       await get().loadAnnotations()
-      get().toast('ok', kind === 'note' ? '笔记已保存' : '标签已保存')
+      get().toast('ok', kind === 'note' ? '笔记已保存' : '批注已保存')
     } catch (err) {
       get().toast('err', `保存失败：${err}`)
     }
@@ -1549,9 +1558,9 @@ export const useStore = create<State>((set, get) => ({
         text
       })
       await get().loadAnnotations()
-      get().toast('ok', '标签已更新')
+      get().toast('ok', '批注已更新')
     } catch (err) {
-      get().toast('err', `标签更新失败：${err}`)
+      get().toast('err', `批注更新失败：${err}`)
     }
   },
 
