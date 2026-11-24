@@ -80,8 +80,12 @@ if ((process.platform === 'win32' || mac) && !await clangdInstalled()) {
   try {
     const archive = resolve(staging, 'clangd.zip')
     await downloadClangd(archive)
-    if (mac) execFileSync('/usr/bin/ditto', ['-x', '-k', archive, staging])
-    else execFileSync('tar.exe', ['-xf', archive, '-C', staging], { stdio: 'inherit' })
+    if (mac) {
+      execFileSync('/usr/bin/ditto', ['-x', '-k', archive, staging])
+    } else {
+      const tar = resolve(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
+      execFileSync(tar, ['-xf', archive, '-C', staging], { stdio: 'inherit' })
+    }
     const extracted = resolve(staging, `clangd_${clangdVersion}`)
     await Promise.all(clangdFiles.map((file) => stat(resolve(extracted, file))))
     await writeFile(resolve(extracted, '.timber-version'), clangdVersion)

@@ -5,12 +5,13 @@
 // 用法：node scripts/run-electron-builder.cjs [--publish]   （OUTPUT_DIR 环境变量可改输出目录）
 const { spawnSync } = require('node:child_process')
 const { readFileSync } = require('node:fs')
-const { join } = require('node:path')
+const { dirname, join } = require('node:path')
 
-function run(cmd, args) {
-  const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true })
+function run(args) {
+  const r = spawnSync(process.execPath, args, { stdio: 'inherit' })
   if (r.status !== 0) {
-    console.error(`[dist] 失败：${cmd} ${args.join(' ')}`)
+    console.error(`[dist] 失败：node ${args.join(' ')}`)
+    if (r.error) console.error(r.error)
     process.exit(1)
   }
 }
@@ -42,9 +43,11 @@ function verifyBuildStamp() {
 if (process.platform !== 'win32' && process.platform !== 'darwin') {
   throw new Error('Timber installers are built on Windows and macOS hosts')
 }
-run('node', ['scripts/build-sidecar.mjs'])
-run('node', ['scripts/build-code-tools.mjs'])
-run('npx', ['electron-vite', 'build'])
+run(['scripts/build-sidecar.mjs'])
+run(['scripts/build-code-tools.mjs'])
+const vitePackage = require.resolve('electron-vite/package.json')
+const viteCli = join(dirname(vitePackage), require(vitePackage).bin['electron-vite'])
+run(['--max-old-space-size=4096', viteCli, 'build'])
 verifyBuildStamp()
 
 const { Arch, build, Platform } = require('electron-builder')
