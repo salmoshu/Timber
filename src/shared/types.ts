@@ -193,6 +193,8 @@ export interface CommitInfo {
   deletions: number
   /** Entire-Checkpoint trailer：存在即该提交有关联的 AI 会话 checkpoint */
   entireCheckpoint?: string
+  entireCheckpoints?: string[]
+  refs?: string[]
 }
 
 /** 提交中的文件变更 */
@@ -252,6 +254,39 @@ export interface EntireCheckpointDetail {
 
 /** not-synced = commit 有 trailer 但 checkpoint refs 未同步到本地 */
 export type EntireCheckpointResult = EntireCheckpointDetail | { ok: false; error: string }
+
+export interface EntireSetupStatus {
+  repo: boolean
+  root: string
+  cli: boolean
+  version: string
+  configured: boolean
+  enabled: boolean
+  agents: string[]
+  codexAvailable: boolean
+  pushDisabled: boolean
+  checkpoints: number
+  codexHookWarning?: string
+  codexNeedsApproval?: boolean
+  probeError?: string
+}
+
+export interface EntireCatalogEntry {
+  checkpointId: string
+  index: number
+  sessionId: string
+  agent: string
+  model: string
+  branch: string
+  time: number
+  prompt: string
+  files: number
+  commits?: { sha: string; subject: string }[]
+}
+
+export type EntireCatalogResult =
+  | { ok: true; entries: EntireCatalogEntry[]; total: number; nextOffset: number; unreadable: number; linksUnavailable: boolean }
+  | { ok: false; error: string }
 
 /** transcript.jsonl 的一行（宽容结构：type/content/ts 等字段缺省容忍） */
 export interface EntireTranscriptLine {

@@ -88,6 +88,46 @@ func TestGitShowDiffReturnsOnlyRequestedFile(t *testing.T) {
 	}
 }
 
+func TestGitFileOperationsUseProjectRelativePaths(t *testing.T) {
+	root := t.TempDir()
+	if _, err := gitRun(root, 10*time.Second, "init", "-q"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	subdir := filepath.Join(root, "docs")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(subdir, "note.md")
+	if err := os.WriteFile(file, []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(root, 10*time.Second, "add", "--", "docs/note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitRun(root, 10*time.Second, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, mux, id := newTestAPI(t, subdir)
+	base := "/api/projects/" + id + "/git/"
+	diff := callAPI(s, mux, "GET", base+"diff?path=note.md", "")
+	if diff.Code != 200 || !strings.Contains(diff.Body.String(), "-first") || !strings.Contains(diff.Body.String(), "+second") {
+		t.Fatalf("nested diff failed: %d %s", diff.Code, diff.Body)
+	}
+	for _, op := range []string{"add", "reset", "discard"} {
+		response := callAPI(s, mux, "POST", base+op, `{"paths":["note.md"]}`)
+		if response.Code != 200 {
+			t.Fatalf("nested %s failed: %d %s", op, response.Code, response.Body)
+		}
+	}
+	content, err := os.ReadFile(file)
+	if err != nil || strings.TrimSpace(string(content)) != "first" {
+		t.Fatalf("tracked file was not restored: %s (%v)", content, err)
+	}
+}
+
 func TestFsMoveCaseOnlyRenameLeavesSingleEntry(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("# note\n"), 0o644); err != nil {

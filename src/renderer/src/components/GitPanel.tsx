@@ -4,6 +4,7 @@ import type { GitChange, GitStatus } from '@shared/types'
 import { apiFor } from '../store'
 import { useStore } from '../store'
 import Chevron from './Chevron'
+import EntireSetupButton from './EntireSetup'
 
 /** 状态码 → 徽标文案与配色（模仿 VSCode） */
 const CODE_LETTER: Record<string, string> = { M: 'M', A: 'A', D: 'D', R: 'R', U: 'U', '?': 'U' }
@@ -134,7 +135,10 @@ export default function GitPanel({ projectId }: { projectId: string }) {
     const ok = await run('提交', () =>
       apiFor(projectId)('POST', `/api/projects/${projectId}/git/commit`, { message })
     )
-    if (ok) setMessage('')
+    if (ok) {
+      setMessage('')
+      if (useStore.getState().commitsProjectId === projectId) useStore.setState({ commitsProjectId: null })
+    }
   }
   const sync = (op: 'pull' | 'push') =>
     run(op === 'pull' ? '拉取' : '推送', () =>
@@ -175,6 +179,11 @@ export default function GitPanel({ projectId }: { projectId: string }) {
             ↑
           </button>
         </span>
+      </div>
+
+      <div className="git-entire-entry">
+        <span>AI 会话记录</span>
+        <EntireSetupButton projectId={projectId} />
       </div>
 
       {(staged.length > 0 || unstaged.length > 0) && (

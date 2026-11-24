@@ -16,6 +16,7 @@ interface Props {
   checkpointId: string
   /** 初始即展开（搜索结果内联时） */
   defaultOpen?: boolean
+  sessionIndex?: number
 }
 
 type CardState =
@@ -48,24 +49,39 @@ function TokenLine({ usage }: { usage: EntireTokenUsage }) {
   )
 }
 
-/** transcript.jsonl 一行 → 纯文本（tool call 等非 text 部分跳过） */
-function lineText(line: EntireTranscriptLine): string {
-  if (!Array.isArray(line.content)) return ''
-  return line.content
-    .map((c) => (typeof c?.text === 'string' ? c.text : ''))
-    .filter(Boolean)
-    .join('\n')
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+}
+
+function transcriptMessage(line: EntireTranscriptLine) {
+  const root = objectRecord(line) ?? {}
+  const payload = root.type === 'response_item' ? objectRecord(root.payload) : undefined
+  const record = payload ?? objectRecord(root.message) ?? root
+  const role = record.role ?? root.type
+  const contents = Array.isArray(record.content) ? record.content.map(objectRecord) : []
+  const text = role === 'user' || role === 'assistant'
+    ? typeof record.content === 'string'
+      ? record.content
+      : contents.flatMap((block) => typeof block?.text === 'string' && ['text', 'input_text', 'output_text'].includes(String(block.type ?? 'text')) ? [block.text] : []).join('\n')
+    : ''
+  const tools = [record, ...contents].flatMap((block) => {
+    if (typeof block?.name !== 'string' || !['tool_use', 'tool_call', 'function_call', 'custom_tool_call'].includes(String(block.type))) return []
+    return [block.name]
+  })
+  return { role: role === 'user' ? '用户' : 'AI', text, tools }
 }
 
 /** 单条 transcript 消息 */
 function TranscriptMsg({ line }: { line: EntireTranscriptLine }) {
-  const text = lineText(line)
-  if (!text) return null
-  const role = line.type === 'user' ? '用户' : 'AI'
+  const { role, text, tools } = transcriptMessage(line)
+  if (!text && tools.length === 0) return null
   return (
-    <div className={`ec-msg ${line.type === 'user' ? 'ec-msg-user' : ''}`}>
-      <div className="ec-msg-role">{role}</div>
-      <div className="ec-msg-text">{text}</div>
+    <div className={`ec-msg ${role === '用户' ? 'ec-msg-user' : ''}`}>
+      {text && <>
+        <div className="ec-msg-role">{role}</div>
+        <div className="ec-msg-text">{text}</div>
+      </>}
+      {!!tools.length && <div className="ec-tool-events">{tools.map((tool, index) => <code key={index}>{tool}</code>)}</div>}
     </div>
   )
 }
@@ -129,12 +145,15 @@ function SessionBlock({
         </div>
       )}
       <button className="ec-transcript-btn" onClick={() => void toggle()}>
-        {showTranscript ? '收起对话 ▴' : '查看完整对话 ▾'}
+        {showTranscript ? '收起对话 ▴' : '查看对话 ▾'}
       </button>
       {showTranscript && (
         <div className="ec-transcript">
           {loading && <div className="hv-loading">对话加载中…</div>}
-          {!loading && lines && lines.length === 0 && <div className="ai-none">无文本消息</div>}
+          {!loading && lines && !lines.some((line) => {
+            const message = transcriptMessage(line)
+            return message.text || message.tools.length
+          }) && <div className="ai-none">无可显示的会话消息</div>}
           {!loading && lines?.map((ln, i) => <TranscriptMsg key={i} line={ln} />)}
           {truncated && <div className="ec-truncated">对话过长，仅显示前 200KB</div>}
         </div>
@@ -143,11 +162,14 @@ function SessionBlock({
   )
 }
 
-export default function EntireCard({ projectId, checkpointId, defaultOpen }: Props) {
+export default function EntireCard({ projectId, checkpointId, defaultOpen, sessionIndex }: Props) {
   const toast = useStore((s) => s.toast)
   const [open, setOpen] = useState(defaultOpen ?? false)
   const [state, setState] = useState<CardState | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const sessions = state?.st === 'ok'
+    ? state.data.sessions.filter((session) => sessionIndex === undefined || session.index === sessionIndex)
+    : []
 
   const load = async (): Promise<void> => {
     setState({ st: 'loading' })
@@ -192,8 +214,8 @@ export default function EntireCard({ projectId, checkpointId, defaultOpen }: Pro
         <span className="ec-spark">✨</span>
         <span className="ec-title">AI 会话</span>
         <span className="ec-id">{checkpointId.slice(0, 8)}</span>
-        {state?.st === 'ok' && state.data.sessions[0]?.agent && (
-          <span className="ec-head-meta">{state.data.sessions[0].agent}</span>
+        {sessions[0]?.agent && (
+          <span className="ec-head-meta">{sessions[0].agent}</span>
         )}
         <span className="ec-chevron">{open ? '▴' : '▾'}</span>
       </button>
@@ -211,7 +233,7 @@ export default function EntireCard({ projectId, checkpointId, defaultOpen }: Pro
           {state?.st === 'error' && <div className="ai-none">会话数据读取失败：{state.msg}</div>}
           {state?.st === 'ok' && (
             <>
-            {state.data.sessions.map((sess) => (
+            {sessions.map((sess) => (
               <SessionBlock
                 key={sess.index}
                 projectId={projectId}
@@ -219,11 +241,11 @@ export default function EntireCard({ projectId, checkpointId, defaultOpen }: Pro
                 session={sess}
               />
             ))}
-            {state.data.sessions.length === 0 && <div className="ai-none">checkpoint 内无会话</div>}
+            {sessions.length === 0 && <div className="ai-none">checkpoint 内无会话</div>}
             </>
           )}
           <div className="ec-privacy">
-            AI 会话记录 · 存储于本仓库 git 对象，公开仓库对外可见
+            AI 会话保存在 Git checkpoint 中，上传到公开仓库的记录可被读取。
           </div>
         </div>
       )}

@@ -1338,15 +1338,37 @@ body.col-resizing iframe, body.col-resizing webview { pointer-events: none; }
   display: flex; align-items: center; align-self: center; position: relative;
   margin-left: 12px; color: var(--ink2); -webkit-app-region: no-drag;
 }
-.tb-view-select {
-  appearance: none; cursor: pointer; height: 30px; min-width: 100px;
-  padding: 0 25px 0 32px; border: 1px solid var(--line); border-radius: 8px;
+.tb-view-trigger {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; min-width: 99px;
+  padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--Fills-F1); color: var(--ink); font-size: 12px; font-weight: 600;
 }
-.tb-view-select:hover { border-color: var(--accent); }
-.tb-views svg { position: absolute; pointer-events: none; }
-.tb-views svg:first-child { left: 10px; }
-.tb-views svg:last-child { right: 8px; }
+.tb-view-trigger:hover, .tb-view-trigger[aria-expanded="true"] { border-color: var(--accent); }
+.tb-view-trigger > svg:last-child { margin-left: auto; color: var(--ink3); }
+.tb-view-trigger[aria-expanded="true"] > svg:last-child { transform: rotate(180deg); }
+.tb-view-menu {
+  position: absolute; top: calc(100% + 7px); left: 0; z-index: 1;
+  display: grid; gap: 3px; width: 208px; padding: 5px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--paper); box-shadow: 0 8px 24px color-mix(in srgb, #000 17%, transparent);
+  -webkit-app-region: no-drag;
+}
+.tb-view-menu button {
+  display: grid; grid-template-columns: 30px 1fr 16px; align-items: center; gap: 9px; width: 100%;
+  padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink);
+  text-align: left; font: inherit; -webkit-app-region: no-drag;
+}
+.tb-view-menu button[aria-checked="true"] { background: var(--accent-soft); }
+.tb-view-menu button:hover:not(:disabled), .tb-view-menu button:focus-visible { background: var(--Fills-F1); }
+.tb-view-menu button:disabled { opacity: .5; }
+.tb-view-option-icon {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px;
+  color: var(--ink2); background: var(--Fills-F1);
+}
+.tb-view-menu [aria-checked="true"] .tb-view-option-icon, .tb-view-check { color: var(--accent); }
+.tb-view-option-text { display: grid; min-width: 0; gap: 2px; }
+.tb-view-option-text strong { font-size: 12px; font-weight: 600; }
+.tb-view-option-text small { color: var(--ink3); font-size: 11px; }
+.tb-view-check { text-align: center; font-size: 13px; }
 
 /* ---- 历史视图 ---- */
 .history-view {
@@ -1953,7 +1975,7 @@ body:has(.img-lightbox) .mu-image-toolbar-container { display: none !important; 
 button, input, textarea, select, a,
 .ctx-item, .doc-tab, .tree-doc, .tree-dir, .proj-item, .toc-item, .st-item,
 .sp-file-name, .sp-match, .cd-file, .rd-dir,
-.seg button, .tab-close, .sb-tabs button, .av-mode.seg button, .tb-view-select,
+.seg button, .tab-close, .sb-tabs button, .av-mode.seg button, .tb-view-trigger,
 .switch, .sb-resizer, .ap-resizer, .icon-seg button {
   transition:
     background-color var(--duration-default) var(--ease-out),

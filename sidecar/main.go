@@ -28,7 +28,7 @@ import (
 //
 // 0.4.0：新增 arch insights 端点（组件度量/符号/git churn 热度/IPC 通道配对/循环依赖检测）。
 // 0.3.0：Timber 更名；新增 git log/show 与架构 spec/delta 端点；批注目录 .timber（自动迁移 .awesome-notes）。
-const version = "0.8.2"
+const version = "0.8.3"
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:0", "listen address")

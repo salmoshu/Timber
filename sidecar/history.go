@@ -26,7 +26,9 @@ type CommitInfo struct {
 	Insertions int      `json:"insertions"`
 	Deletions  int      `json:"deletions"`
 	// Entire-Checkpoint trailer（存在即该提交有关联的 AI 会话 checkpoint）
-	EntireCheckpoint string `json:"entireCheckpoint,omitempty"`
+	EntireCheckpoint  string   `json:"entireCheckpoint,omitempty"`
+	EntireCheckpoints []string `json:"entireCheckpoints,omitempty"`
+	Refs              []string `json:"refs,omitempty"`
 }
 
 // CommitFile 单提交内的一个变更文件。
@@ -39,8 +41,28 @@ type CommitFile struct {
 }
 
 // log 记录分隔：\x1e 分记录、\x1f 分字段（提交信息几乎不含控制字符）。
-// 末字段为 Entire-Checkpoint trailer 值（无则空串）。
-const logFormat = "%x1e%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%(trailers:key=Entire-Checkpoint,valueonly)"
+const checkpointTrailers = "%(trailers:key=Entire-Checkpoint,valueonly,separator=%x2c)"
+const logFormat = "%x1e%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f" + checkpointTrailers + "%x1f%D"
+
+func checkpointIDs(trailers string) []string {
+	var ids []string
+	seen := map[string]bool{}
+	for _, value := range strings.Split(trailers, ",") {
+		id := strings.TrimSpace(value)
+		if entireIDRe.MatchString(id) && !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	return ids
+}
+
+func (c *CommitInfo) setCheckpointIDs(trailers string) {
+	c.EntireCheckpoints = checkpointIDs(trailers)
+	if len(c.EntireCheckpoints) > 0 {
+		c.EntireCheckpoint = c.EntireCheckpoints[0]
+	}
+}
 
 // isGitRepo 项目目录是否在 git 工作树内。
 func isGitRepo(projectPath string) bool {
@@ -75,26 +97,36 @@ func (s *server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	if ref != "HEAD" && !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/tags/") {
+	if ref != "HEAD" && ref != "all-branches" && !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/tags/") {
 		writeError(w, 400, "无效的 Git 引用")
 		return
 	}
-	head, err := gitRunContext(r.Context(), p.Path, 10*time.Second, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
-	if err != nil {
-		if ref == "HEAD" {
-			writeJSON(w, 200, map[string]any{"ok": true, "commits": []CommitInfo{}, "total": 0})
-		} else {
-			writeError(w, 404, "未找到分支或标签")
+	var revisions []string
+	if ref == "all-branches" {
+		revisions = []string{"--exclude=entire/checkpoints/*", "--branches", "--exclude=*/entire/checkpoints/*", "--remotes", "--tags"}
+		if head, err := gitRunContext(r.Context(), p.Path, 10*time.Second, "rev-parse", "--verify", "HEAD^{commit}"); err == nil {
+			revisions = append(revisions, strings.TrimSpace(head))
 		}
-		return
+	} else {
+		head, err := gitRunContext(r.Context(), p.Path, 10*time.Second, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+		if err != nil {
+			if ref == "HEAD" {
+				writeJSON(w, 200, map[string]any{"ok": true, "commits": []CommitInfo{}, "total": 0})
+			} else {
+				writeError(w, 404, "未找到分支或标签")
+			}
+			return
+		}
+		revisions = []string{strings.TrimSpace(head)}
 	}
-	head = strings.TrimSpace(head)
-	args := []string{"log", "--format=" + logFormat, "--numstat", "--diff-merges=first-parent"}
+	args := []string{"log", "--format=" + logFormat, "--numstat", "--diff-merges=first-parent", "--decorate=full",
+		"--decorate-refs=HEAD", "--decorate-refs=refs/heads/*", "--decorate-refs=refs/remotes/*", "--decorate-refs=refs/tags/*"}
 	total := 0
 	if query := strings.ToLower(strings.TrimSpace(q.Get("q"))); query != "" {
 		// 先搜索完整提交索引，随后只计算命中页的文件统计。
 		const searchFormat = "%H%x1f%an%x1f%ae%x1f%s"
-		out, err := gitRunContext(r.Context(), p.Path, 60*time.Second, "log", "--format="+searchFormat, head, "--")
+		searchArgs := append([]string{"log", "--date-order", "--format=" + searchFormat}, revisions...)
+		out, err := gitRunContext(r.Context(), p.Path, 60*time.Second, append(searchArgs, "--")...)
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
@@ -108,13 +140,18 @@ func (s *server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "--no-walk=unsorted")
 		args = append(args, matches[skip:min(skip+limit, total)]...)
 	} else {
-		out, err := gitRunContext(r.Context(), p.Path, 30*time.Second, "rev-list", "--count", head)
+		out, err := gitRunContext(r.Context(), p.Path, 30*time.Second, append([]string{"rev-list", "--count"}, revisions...)...)
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}
 		total, _ = strconv.Atoi(strings.TrimSpace(out))
-		args = append(args, "--skip="+itoa(skip), "--max-count="+itoa(limit), head)
+		if skip >= total {
+			writeJSON(w, 200, map[string]any{"ok": true, "commits": []CommitInfo{}, "total": total})
+			return
+		}
+		args = append(args, "--date-order", "--skip="+itoa(skip), "--max-count="+itoa(limit))
+		args = append(args, revisions...)
 	}
 	out, err := gitRunContext(r.Context(), p.Path, 60*time.Second, append(args, "--")...)
 	if err != nil {
@@ -156,8 +193,16 @@ func parseGitLog(out string) []CommitInfo {
 			Subject: fields[6],
 			Parents: []string{},
 		}
-		// 同名 trailer 多个时取首个（值内换行会溢出到后续行，但不影响 numstat 解析）
-		c.EntireCheckpoint = strings.TrimSpace(fields[7])
+		c.setCheckpointIDs(fields[7])
+		if len(fields) > 8 && fields[8] != "" {
+			for _, ref := range strings.Split(fields[8], ", ") {
+				if branch, ok := strings.CutPrefix(ref, "HEAD -> "); ok {
+					c.Refs = append(c.Refs, "HEAD", branch)
+				} else {
+					c.Refs = append(c.Refs, strings.TrimPrefix(ref, "tag: "))
+				}
+			}
+		}
 		if p := strings.TrimSpace(fields[2]); p != "" {
 			c.Parents = strings.Fields(p)
 		}
@@ -278,7 +323,7 @@ func (s *server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 	}
 	// 元信息 + trailer + body（-s 不带 diff；body 放最后，内部可能含换行）
 	meta, err := gitRun(p.Path, 30*time.Second, "show", "-s",
-		"--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%(trailers:key=Entire-Checkpoint,valueonly)%x1f%b", sha)
+		"--format=%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1f"+checkpointTrailers+"%x1f%b", sha)
 	if err != nil {
 		writeError(w, 404, "提交不存在")
 		return
@@ -296,7 +341,7 @@ func (s *server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		c.Parents = strings.Fields(ps)
 	}
 	c.Time, _ = strconv.ParseInt(fields[5], 10, 64)
-	c.EntireCheckpoint = strings.TrimSpace(fields[7])
+	c.setCheckpointIDs(fields[7])
 	body := strings.Trim(fields[8], "\n")
 
 	files := showFiles(p.Path, sha)

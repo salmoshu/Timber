@@ -45,6 +45,7 @@ type entireTokenUsage struct {
 type entireRootMeta struct {
 	CLIVersion   string   `json:"cli_version"`
 	CheckpointID string   `json:"checkpoint_id"`
+	CreatedAt    string   `json:"created_at"`
 	Branch       string   `json:"branch"`
 	FilesTouched []string `json:"files_touched"`
 	Sessions     []struct {
@@ -82,6 +83,7 @@ func (r *entireTokenUsageRaw) out() *entireTokenUsage {
 type entireSessionMeta struct {
 	SessionID      string               `json:"session_id"`
 	CreatedAt      string               `json:"created_at"`
+	Branch         string               `json:"branch"`
 	Agent          string               `json:"agent"`
 	Model          string               `json:"model"`
 	FilesTouched   []string             `json:"files_touched"`
@@ -117,11 +119,16 @@ type entireRef struct {
 // listEntireRefs 枚举全部 checkpoint ref（新到旧）；无 ref 或失败均返回空。
 // for-each-ref 格式不支持 %xNN 转义，字段用空格分隔（refname/sha/时间戳均无空格）。
 func listEntireRefs(dir string) []entireRef {
-	out, err := gitRun(dir, 30*time.Second, "for-each-ref",
+	refs, _ := readEntireRefs(context.Background(), dir)
+	return refs
+}
+
+func readEntireRefs(ctx context.Context, dir string) ([]entireRef, error) {
+	out, err := gitRunContext(ctx, dir, 30*time.Second, "for-each-ref",
 		"--format=%(refname) %(objectname) %(committerdate:unix)",
 		"--sort=-committerdate", entireRefPrefix)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	refs := []entireRef{}
 	for _, ln := range strings.Split(out, "\n") {
@@ -133,15 +140,20 @@ func listEntireRefs(dir string) []entireRef {
 		e.Date, _ = strconv.ParseInt(parts[2], 10, 64)
 		refs = append(refs, e)
 	}
-	return refs
+	return refs, nil
 }
 
 // findEntireRef 按 checkpoint id 找 ref（枚举后缀匹配，不假设 shard 大小写规则）。
 func findEntireRef(dir, id string) string {
-	suffix := "/" + id
 	for _, r := range listEntireRefs(dir) {
-		if strings.HasSuffix(r.Ref, suffix) {
-			return r.Ref
+		if strings.EqualFold(checkpointIDFromRef(r.Ref), id) {
+			return r.Sha
+		}
+	}
+	legacy, _ := listLegacyEntireLocations(context.Background(), dir)
+	for _, location := range legacy {
+		if strings.EqualFold(location.id, id) {
+			return location.tree
 		}
 	}
 	return ""
@@ -149,8 +161,7 @@ func findEntireRef(dir, id string) string {
 
 // entireReadFile 读 checkpoint tree 内文件；rel 允许带前导 /。
 func entireReadFile(dir, ref, rel string) (string, error) {
-	rel = strings.TrimPrefix(rel, "/")
-	return gitRun(dir, 30*time.Second, "show", ref+":"+rel)
+	return gitRun(dir, 30*time.Second, "show", entireObjectFile(ref, rel))
 }
 
 // entireRoot 读并解析根 metadata.json。
@@ -279,8 +290,7 @@ func (s *server) handleEntireTranscript(w http.ResponseWriter, r *http.Request) 
 	}
 	// 先看 blob 大小，决定 truncated 标记
 	size := int64(0)
-	if sz, err := gitRun(p.Path, 15*time.Second, "cat-file", "-s",
-		ref+":"+strings.TrimPrefix(rel, "/")); err == nil {
+	if sz, err := gitRun(p.Path, 15*time.Second, "cat-file", "-s", entireObjectFile(ref, rel)); err == nil {
 		size, _ = strconv.ParseInt(strings.TrimSpace(sz), 10, 64)
 	}
 	raw, err := entireReadFile(p.Path, ref, rel)
@@ -447,11 +457,13 @@ func (s *server) handleEntireSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := gitRun(p.Path, 120*time.Second, "fetch", remote,
-		"+refs/entire/*:refs/entire/*"); err != nil {
+		"+refs/entire/*:refs/entire/*",
+		"+refs/heads/entire/checkpoints/*:refs/remotes/"+remote+"/entire/checkpoints/*"); err != nil {
 		writeJSON(w, 200, map[string]any{"ok": false, "error": "fetch-failed", "detail": err.Error()})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "synced": len(listEntireRefs(p.Path))})
+	locations, _ := listEntireLocations(r.Context(), p.Path)
+	writeJSON(w, 200, map[string]any{"ok": true, "synced": len(locations)})
 }
 
 // ---- 会话内容搜索 ----

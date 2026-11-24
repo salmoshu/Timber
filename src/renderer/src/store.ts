@@ -246,6 +246,7 @@ function startResourceWatcher(): void {
 
 /** 应用主视图：提交历史 / 架构图 / 资源（文档与代码合并，v0.5.9） */
 export type AppView = 'history' | 'architecture' | 'resources'
+export type HistoryMode = 'commits' | 'graph' | 'activity' | 'sessions'
 
 /** 提交「架构影响」懒算结果（提交与其首个 parent 的 spec delta 摘要） */
 export interface CommitImpact {
@@ -410,6 +411,7 @@ interface State {
   annPanelWidth: number
   /** 应用主视图（默认文档） */
   view: AppView
+  historyMode: HistoryMode
   /** 提交历史列表（分页追加） */
   commits: CommitInfo[]
   commitsTotal: number
@@ -436,6 +438,7 @@ interface State {
   archDeltaRequest: ArchDeltaRequest | null
 
   setView(v: AppView): void
+  setHistoryMode(mode: HistoryMode): void
   /** 重新加载提交列表（第一页） */
   loadCommits(query?: string, ref?: string): Promise<void>
   /** 加载更多（skip 分页追加） */
@@ -618,6 +621,7 @@ export const useStore = create<State>((set, get) => ({
   ...loadLayout(),
 
   view: 'resources',
+  historyMode: 'commits',
   commits: [],
   commitsTotal: 0,
   commitsLoading: false,
@@ -664,6 +668,8 @@ export const useStore = create<State>((set, get) => ({
       set({ view: v })
     }
   },
+
+  setHistoryMode: (historyMode) => set({ historyMode }),
 
   async loadCommits(query = get().commitsQuery, ref = get().commitsRef) {
     const id = get().activeProjectId

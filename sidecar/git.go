@@ -180,8 +180,8 @@ type gitPathsReq struct {
 	Paths []string `json:"paths"`
 }
 
-// gitPathOp 校验 paths 均在项目内，换算为仓库相对路径后执行 git 操作。
-func (s *server) gitPathOp(w http.ResponseWriter, r *http.Request, op func(p *Project, repoPaths []string, projPaths []string) error) {
+// gitPathOp 保留项目相对路径，因为 Git 命令的工作目录也是项目目录。
+func (s *server) gitPathOp(w http.ResponseWriter, r *http.Request, op func(p *Project, paths []string) error) {
 	p := s.project(w, r)
 	if p == nil {
 		return
@@ -191,18 +191,15 @@ func (s *server) gitPathOp(w http.ResponseWriter, r *http.Request, op func(p *Pr
 		writeError(w, 400, "请求体需包含 paths")
 		return
 	}
+	paths := make([]string, 0, len(req.Paths))
 	for _, rel := range req.Paths {
 		if _, err := resolveDoc(p.Path, rel); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}
+		paths = append(paths, filepath.ToSlash(filepath.Clean(rel)))
 	}
-	prefix := repoPrefix(p.Path)
-	repoPaths := make([]string, 0, len(req.Paths))
-	for _, rel := range req.Paths {
-		repoPaths = append(repoPaths, prefix+rel)
-	}
-	if err := op(p, repoPaths, req.Paths); err != nil {
+	if err := op(p, paths); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -224,17 +221,14 @@ func (s *server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
-	prefix := repoPrefix(p.Path)
-	repoRel := prefix + rel
-
-	tracked, err := gitRun(p.Path, 20*time.Second, "ls-files", "--", repoRel)
+	tracked, err := gitRun(p.Path, 20*time.Second, "--literal-pathspecs", "ls-files", "-z", "--", rel)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
 	var diff string
 	if strings.TrimSpace(tracked) != "" {
-		out, err := gitRun(p.Path, 20*time.Second, "diff", "HEAD", "--", repoRel)
+		out, err := gitRun(p.Path, 20*time.Second, "--literal-pathspecs", "diff", "HEAD", "--", rel)
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
@@ -282,39 +276,39 @@ func itoa(n int) string {
 }
 
 func (s *server) handleGitAdd(w http.ResponseWriter, r *http.Request) {
-	s.gitPathOp(w, r, func(p *Project, repoPaths, _ []string) error {
-		_, err := gitRun(p.Path, 30*time.Second, append([]string{"add", "--"}, repoPaths...)...)
+	s.gitPathOp(w, r, func(p *Project, paths []string) error {
+		_, err := gitRun(p.Path, 30*time.Second, append([]string{"--literal-pathspecs", "add", "--"}, paths...)...)
 		return err
 	})
 }
 
 func (s *server) handleGitReset(w http.ResponseWriter, r *http.Request) {
-	s.gitPathOp(w, r, func(p *Project, repoPaths, _ []string) error {
-		_, err := gitRun(p.Path, 30*time.Second, append([]string{"reset", "-q", "HEAD", "--"}, repoPaths...)...)
+	s.gitPathOp(w, r, func(p *Project, paths []string) error {
+		_, err := gitRun(p.Path, 30*time.Second, append([]string{"--literal-pathspecs", "reset", "-q", "HEAD", "--"}, paths...)...)
 		return err
 	})
 }
 
 // handleGitDiscard 丢弃工作区改动：未跟踪文件直接删除，已跟踪文件还原到 HEAD。
 func (s *server) handleGitDiscard(w http.ResponseWriter, r *http.Request) {
-	s.gitPathOp(w, r, func(p *Project, repoPaths, projPaths []string) error {
-		tracked, err := gitRun(p.Path, 30*time.Second, append([]string{"ls-files", "--"}, repoPaths...)...)
+	s.gitPathOp(w, r, func(p *Project, paths []string) error {
+		tracked, err := gitRun(p.Path, 30*time.Second, append([]string{"--literal-pathspecs", "ls-files", "-z", "--"}, paths...)...)
 		if err != nil {
 			return err
 		}
 		trackedSet := map[string]bool{}
-		for _, line := range strings.Split(strings.TrimSpace(tracked), "\n") {
-			if line != "" {
-				trackedSet[toSlash(line)] = true
+		for _, name := range strings.Split(tracked, "\x00") {
+			if name != "" {
+				trackedSet[toSlash(name)] = true
 			}
 		}
 		var toRestore []string
-		for i, rel := range repoPaths {
+		for _, rel := range paths {
 			if trackedSet[rel] {
 				toRestore = append(toRestore, rel)
 				continue
 			}
-			abs, err := resolveDoc(p.Path, projPaths[i])
+			abs, err := resolveDoc(p.Path, rel)
 			if err != nil {
 				return err
 			}
@@ -323,7 +317,7 @@ func (s *server) handleGitDiscard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(toRestore) > 0 {
-			_, err := gitRun(p.Path, 30*time.Second, append([]string{"checkout", "-q", "HEAD", "--"}, toRestore...)...)
+			_, err := gitRun(p.Path, 30*time.Second, append([]string{"--literal-pathspecs", "checkout", "-q", "HEAD", "--"}, toRestore...)...)
 			return err
 		}
 		return nil

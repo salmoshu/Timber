@@ -172,6 +172,7 @@ export default function CommitDetail() {
   )
 
   const c = detail.commit
+  const checkpoints = c.entireCheckpoints?.length ? c.entireCheckpoints : c.entireCheckpoint ? [c.entireCheckpoint] : []
   const parent = c.parents[0]
   const date = new Date(c.time * 1000)
   const query = fileQuery.trim().toLowerCase()
@@ -232,9 +233,7 @@ export default function CommitDetail() {
           )}
         </div>
       )}
-      {c.entireCheckpoint && activeProjectId && (
-        <EntireCard key={c.entireCheckpoint} projectId={activeProjectId} checkpointId={c.entireCheckpoint} />
-      )}
+      {activeProjectId && checkpoints.map((id) => <EntireCard key={id} projectId={activeProjectId} checkpointId={id} />)}
       <div className="cd-files">
         <div className="cd-files-head">
           <strong className="cd-files-title">变更文件 <span>{detail.files.length}</span></strong>

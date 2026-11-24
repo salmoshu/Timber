@@ -1168,7 +1168,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
         </>
       )}
 
-      {section === 'history' && <HistoryList />}
+      {section === 'history' && <HistoryList key={active?.id} />}
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />

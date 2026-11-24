@@ -45,16 +45,49 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(projectDir, 'large.png'))
     fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const answer = 42\n')
     for (const name of extraDocs) fs.writeFileSync(path.join(projectDir, name), `# ${name}\n`)
-    const git = (...args) => {
-      const result = spawnSync('git', args, { cwd: projectDir, stdio: 'pipe' })
+    const gitCommand = (args, input) => {
+      const result = spawnSync('git', args, { cwd: projectDir, encoding: 'utf8', input, stdio: 'pipe' })
       if (result.status !== 0) throw new Error('Git fixture setup failed: ' + result.stderr)
+      return result.stdout.trim()
     }
+    const git = (...args) => gitCommand(args)
+    const identity = ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com']
     git('init')
     git('add', '.')
-    git('-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com', 'commit', '-m', 'initial')
+    git(...identity, 'commit', '-m', 'initial')
     git('tag', 'smoke-base')
     fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const answer = 43\n')
-    git('-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com', 'commit', '-am', 'fix: update answer')
+    const checkpoint = '01M0123456789ABCDEFGHJKMNP'
+    const legacy = 'ab0123456789'
+    git(...identity, 'commit', '-am', 'fix: update answer', '-m', `Entire-Checkpoint: ${checkpoint}\nEntire-Checkpoint: ${legacy}`)
+
+    const codeTree = git('rev-parse', 'HEAD^{tree}')
+    const side = git(...identity, 'commit-tree', codeTree, '-p', 'smoke-base', '-m', 'smoke parallel change')
+    const merge = git(...identity, 'commit-tree', codeTree, '-p', 'HEAD', '-p', side, '-m', 'smoke merge')
+    git('update-ref', 'refs/heads/smoke-merge', merge)
+
+    const blob = (content) => gitCommand(['hash-object', '-w', '--stdin'], content)
+    const tree = (...entries) => gitCommand(['mktree'], entries.join('\n') + '\n')
+    const session = tree(
+      `100644 blob ${blob('{"session_id":"codex-smoke","agent":"codex","model":"smoke-model","files_touched":["index.ts"]}')}\tmetadata.json`,
+      `100644 blob ${blob('更新测试用的答案')}\tprompt.txt`,
+      `100644 blob ${blob([
+        { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '更新测试用的答案' }] } },
+        { type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch' } },
+        { type: 'assistant', content: [{ type: 'text', text: '答案已更新。' }] }
+      ].map(JSON.stringify).join('\n'))}\tfull.jsonl`
+    )
+    const checkpointTree = (id) => tree(
+      `040000 tree ${session}\t0`,
+      `100644 blob ${blob(JSON.stringify({
+        checkpoint_id: id, branch: 'smoke',
+        sessions: [{ metadata: '0/metadata.json', prompt: '0/prompt.txt', transcript: '0/full.jsonl' }]
+      }))}\tmetadata.json`
+    )
+    const modernCommit = git(...identity, 'commit-tree', checkpointTree(checkpoint), '-m', 'modern checkpoint')
+    git('update-ref', `refs/entire/checkpoints/01/${checkpoint}`, modernCommit)
+    const legacyTree = tree(`040000 tree ${tree(`040000 tree ${checkpointTree(legacy)}\t${legacy.slice(2)}`)}\t${legacy.slice(0, 2)}`)
+    git('update-ref', 'refs/heads/entire/checkpoints/v1', git(...identity, 'commit-tree', legacyTree, '-m', 'legacy checkpoint'))
     fs.writeFileSync(path.join(temp, 'profile/sidecar-data/projects.json'), JSON.stringify({ projects: [{ id: 'smoke-folder', name: 'Project folder', path: projectDir, addedAt: new Date().toISOString(), docCount: 2 }] }))
   }
   let win
@@ -68,7 +101,15 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     select.value = ${JSON.stringify(value)}
     select.dispatchEvent(new Event('change', { bubbles: true }))
   })()`)
-  const chooseView = value => choose('.tb-view-select', value)
+  const openViewMenu = async () => {
+    await evaluate("if (!document.querySelector('.tb-view-menu')) document.querySelector('.tb-view-trigger').click(); undefined")
+    await wait(() => evaluate("!!document.querySelector('.tb-view-menu')"), 'Workspace menu did not open')
+  }
+  const chooseView = async (value) => {
+    await openViewMenu()
+    await evaluate(`document.querySelector('.tb-view-menu [data-view="' + ${JSON.stringify(value)} + '"]').click()`)
+    await wait(() => evaluate(`document.querySelector('.tb-view-trigger').dataset.view === ${JSON.stringify(value)}`), 'Workspace view did not change')
+  }
   const fill = (selector, value) => evaluate(`(() => {
     const input = document.querySelector(${JSON.stringify(selector)})
     Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value').set.call(input, ${JSON.stringify(value)})
@@ -129,7 +170,10 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => { win = BrowserWindow.getAllWindows()[0]; return !!win }, 'Main window was not created')
       win.webContents.on('console-message', (_event, level, message) => { if (level >= 3) consoleErrors.push(message) })
       await wait(() => evaluate("document.querySelector('.prose')?.textContent.includes('first-open')").catch(() => false), 'Cold-start Markdown argument was not opened')
-      check(await evaluate("document.querySelector('.tb-view-select').value === 'resources' && [...document.querySelectorAll('.tb-view-select option:disabled')].map(option => option.value).join(',') === 'architecture,history'"), 'Project features are enabled for a single file')
+      await openViewMenu()
+      check(await evaluate("document.querySelector('.tb-view-trigger').dataset.view === 'resources' && [...document.querySelectorAll('.tb-view-menu button:disabled')].map(option => option.dataset.view).join(',') === 'architecture,history'"), 'Project features are enabled for a single file')
+      await evaluate("document.querySelector('.tb-view-menu [aria-checked=true]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
+      await wait(() => evaluate("!document.querySelector('.tb-view-menu') && document.activeElement === document.querySelector('.tb-view-trigger')"), 'Workspace menu Escape did not restore focus')
       check(await evaluate("!document.querySelector('.writing-toolbar, .ann-pop')"), 'Removed Timber toolbars remain')
       check(await evaluate("document.querySelector('[aria-label=\"源码模式\"]')?.getAttribute('role') === 'switch' && document.querySelector('[aria-label=\"源码模式\"]')?.querySelectorAll('svg').length === 2 && document.querySelector('[aria-label=\"源码模式\"]')?.textContent.trim() === '' && document.querySelector('[aria-label=\"分页预览\"]')?.tagName === 'BUTTON' && document.querySelector('[aria-label=\"分页预览\"]')?.hasAttribute('aria-pressed') && document.querySelector('[aria-label=\"分页预览\"]')?.querySelector('svg') && document.querySelector('[aria-label=\"分页预览\"]')?.textContent.trim() === ''"), 'Read/source switch and page preview are not accessible icon controls')
       checks.push('cold-start file argument with Chinese, spaces and ampersand; single-file feature gates')
@@ -376,7 +420,8 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       checks.push('actual second process forwards Markdown to the existing application')
 
       await evaluate("[...document.querySelectorAll('.proj-item')].find(button => button.textContent.includes('Project folder')).click()")
-      await wait(() => evaluate("document.querySelectorAll('.tb-view-select option:disabled').length === 0"), 'Project folder did not enable architecture/history')
+      await openViewMenu()
+      check(await evaluate("document.querySelectorAll('.tb-view-menu button:not(:disabled)').length === 3"), 'Project folder did not enable architecture/history')
       await wait(() => evaluate("!!document.querySelector('.tree-doc .doc-icon')"), 'Project file tree did not finish loading')
       check(await evaluate(`(() => {
         const icon = document.querySelector('.tree-doc .doc-icon')?.getBoundingClientRect()
@@ -483,6 +528,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
         window.__archRequests = []
         window.fetch = (input, init) => {
           const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          if (url.includes('/git/log?')) return new Promise(resolve => setTimeout(resolve, 800)).then(() => window.__archOriginalFetch(input, init))
           if (!url.includes('/ai/arch')) return window.__archOriginalFetch(input, init)
           window.__archRequests.push(JSON.parse(init.body))
           const index = window.__archRequests.length
@@ -525,6 +571,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => evaluate("document.querySelectorAll('.ai-thread-select option').length === 2 && !document.querySelector('.ai-turn')"), 'The new thread shows previous messages')
       await fill('.av-ai-input', '保留的草稿')
       await chooseView('history')
+      await wait(() => evaluate("!!document.querySelector('.history-progress[role=progressbar]') && !!document.querySelector('.history-initial-loading')"), 'First history load did not show progress')
       await wait(() => evaluate("!!document.querySelector('.hv-row.selected') && document.querySelector('.cd-subject')?.textContent === 'fix: update answer'"), 'History did not load and select the newest commit')
       await chooseView('architecture')
       await wait(() => evaluate("document.querySelector('.av-ai-input')?.value === '保留的草稿'"), 'Leaving the architecture view did not persist the draft')
@@ -534,7 +581,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       checks.push('persistent project sessions, multi-turn context, Markdown streaming, tool timeline and stop without a real model call')
 
       await chooseView('history')
-      await wait(() => evaluate("document.querySelector('.tb-view-select').value === 'history' && document.querySelectorAll('.hv-row').length === 2 && !!document.querySelector('.hv-day h3')"), 'Folder history navigation or date grouping failed')
+      await wait(() => evaluate("document.querySelector('.tb-view-trigger').dataset.view === 'history' && document.querySelectorAll('.hv-row').length === 2 && !!document.querySelector('.hv-day h3')"), 'Folder history navigation or date grouping failed')
       await fill('[aria-label="搜索提交"]', 'initial')
       await wait(() => evaluate("document.querySelectorAll('.hv-row').length === 1 && document.querySelector('.cd-subject')?.textContent === 'initial'"), 'Git log search did not narrow or select the result')
       await evaluate("document.querySelector('[aria-label=\"清除提交搜索\"]').click()")
@@ -548,8 +595,46 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await evaluate("document.querySelector('.cd-diff-wrap').click()")
       check(await evaluate("document.querySelector('.cd-diff-scroll').classList.contains('wrap') && !!document.querySelector('[aria-label=\"下一处差异\"]')"), 'Diff controls did not apply wrapping or show hunk navigation')
       checks.push('history reference and commit search, auto selection, file filtering and inline diff controls')
+
+      const chooseHistoryView = (label) => evaluate(`[...document.querySelectorAll('.history-view-switch button')].find(button => button.textContent === ${JSON.stringify(label)}).click()`)
+      await choose('[aria-label="历史分支或标签"]', 'all-branches')
+      await chooseHistoryView('分支图')
+      await wait(() => evaluate("document.querySelectorAll('.history-graph-row').length === 4 && !!document.querySelector('.history-node-core') && document.querySelector('.history-graph-rows').textContent.includes('smoke-merge')"), 'All-refs commit graph did not show branch topology')
+      await chooseHistoryView('活动概览')
+      await wait(() => evaluate("document.querySelectorAll('.history-activity-chart > button').length === 28 && document.querySelector('.history-activity-totals dd')?.textContent === '4'"), 'Activity view did not aggregate commits')
+      await evaluate("[...document.querySelectorAll('.history-activity-controls button')].find(button => button.textContent === '变更行').click()")
+      await wait(() => evaluate("!!document.querySelector('.history-activity-add')"), 'Activity metric did not switch to added and removed lines')
+      await chooseHistoryView('AI 会话')
+      await wait(() => evaluate("document.querySelectorAll('.history-session-list button').length === 1 && document.querySelectorAll('.history-checkpoints button').length === 2"), 'Modern and legacy checkpoints did not group into one session')
+      await wait(() => evaluate("!!document.querySelector('.ec-transcript-btn') && document.querySelector('.history-session-commits button')?.textContent.includes('fix: update answer')"), 'Checkpoint could not open its session or link back to Git')
+      await evaluate("document.querySelector('.ec-transcript-btn').click()")
+      await wait(() => evaluate("document.querySelector('.ec-transcript')?.textContent.includes('更新测试用的答案') && document.querySelector('.ec-tool-events code')?.textContent === 'apply_patch'"), 'Codex dialogue or tool call could not be displayed')
+      await evaluate("document.querySelector('.history-session-commits button').click()")
+      await wait(() => evaluate("document.querySelector('.cd-subject')?.textContent === 'fix: update answer' && document.querySelectorAll('.entire-card').length === 2"), 'Session drill-down dropped one of the commit checkpoints')
+
+      await evaluate(`(() => {
+        window.__entireOriginalFetch = window.fetch.bind(window)
+        window.__entireEnabled = false
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          if (!url.includes('/entire/status') && !url.includes('/entire/enable')) return window.__entireOriginalFetch(input, init)
+          if (url.includes('/entire/enable')) window.__entireEnabled = init?.method === 'POST'
+          return Promise.resolve(new Response(JSON.stringify({
+            repo: true, root: 'smoke-folder', cli: true, version: '0.11.5', configured: window.__entireEnabled,
+            enabled: window.__entireEnabled, agents: window.__entireEnabled ? ['Codex'] : [], codexAvailable: true, pushDisabled: true, checkpoints: 2
+          }), { headers: { 'Content-Type': 'application/json' } }))
+        }
+      })()`)
+      await chooseHistoryView('AI 会话')
+      await evaluate("document.querySelector('.entire-setup-trigger').click()")
+      await wait(() => evaluate("!!document.querySelector('.entire-setup-dialog[open] .btn-primary')"), 'Entire setup did not offer Codex activation')
+      await evaluate("document.querySelector('.entire-setup-dialog .btn-primary').click()")
+      await wait(() => evaluate("window.__entireEnabled && document.querySelector('.entire-setup-state strong')?.textContent === '已启用'"), 'Entire setup did not show the verified response')
+      await evaluate("document.querySelector('[aria-label=\"关闭 Entire 配置\"]').click(); window.fetch = window.__entireOriginalFetch; undefined")
+      checks.push('first history progress, branch topology, daily activity, Entire session drill-down and enable dialog')
+
       await evaluate("[...document.querySelectorAll('.proj-item')].find(button => button.textContent.includes('second.markdown')).click()")
-      await wait(() => evaluate("document.querySelector('.tb-view-select').value === 'resources' && document.querySelector('.prose')?.textContent.includes('second-open')"), 'Selecting a file from history did not restore the resource view')
+      await wait(() => evaluate("document.querySelector('.tb-view-trigger').dataset.view === 'resources' && document.querySelector('.prose')?.textContent.includes('second-open')"), 'Selecting a file from history did not restore the resource view')
       checks.push('folder features enable correctly and returning to a single file exits history')
       await wait(() => evaluate("document.querySelector('.prose .mu-inline-image img')?.complete && document.querySelector('.prose .mu-inline-image img')?.naturalWidth > 0"), 'Fullscreen image fixture did not load')
       await evaluate(`(() => {

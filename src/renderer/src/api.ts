@@ -2,7 +2,7 @@
 // Electron 模式下经 preload 桥拿 base/token；纯 Web 预览（dev:web）回退到
 // 手动启动的 sidecar（127.0.0.1:37123 / dev-token）。
 // 远程项目经 apiWith() 走远端 timberd（见 utils/remote.ts 的 apiRoute）。
-import type { ApiInfo, ArchInsights, ArchInsightsResult, ArchRefs, ArchResult, ArchSpec, CommitDetail, CommitInfo, EntireCheckpointResult, EntireCouplingResult, EntireSearchResult, EntireSyncResult, EntireTranscriptResult } from '@shared/types'
+import type { ApiInfo, ArchInsights, ArchInsightsResult, ArchRefs, ArchResult, ArchSpec, CommitDetail, CommitInfo, EntireCatalogResult, EntireCheckpointResult, EntireCouplingResult, EntireSearchResult, EntireSetupStatus, EntireSyncResult, EntireTranscriptResult } from '@shared/types'
 
 let cached: ApiInfo | null = null
 
@@ -150,6 +150,18 @@ export async function gitShow(id: string, sha: string, call: ApiCall = api): Pro
 /** 架构快照可选 ref（HEAD + branches + tags） */
 export async function archRefs(id: string, call: ApiCall = api): Promise<ArchRefs> {
   return call<ArchRefs>('GET', `/api/projects/${id}/arch/refs`)
+}
+
+export function entireStatus(id: string, call: ApiCall, signal: AbortSignal): Promise<EntireSetupStatus> {
+  return call('GET', `/api/projects/${id}/entire/status`, undefined, { signal })
+}
+
+export function entireEnable(id: string, call: ApiCall): Promise<EntireSetupStatus> {
+  return call('POST', `/api/projects/${id}/entire/enable`)
+}
+
+export function entireSessions(id: string, offset: number, call: ApiCall, signal: AbortSignal): Promise<EntireCatalogResult> {
+  return call('GET', `/api/projects/${id}/entire/sessions?offset=${offset}`, undefined, { signal })
 }
 
 /**

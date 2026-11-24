@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore, type AppView } from '../store'
 import Logo from './Logo'
 import { IconChevronDown, IconClose, IconMaximize, IconMinimize, IconPanelLeft, IconPanelRight, IconRestore, IconSettings, WorkspaceIcon } from './icons'
 
-const VIEWS: { key: AppView; label: string }[] = [
-  { key: 'resources', label: '资源' },
-  { key: 'architecture', label: '架构' },
-  { key: 'history', label: '历史' }
+const VIEWS: { key: AppView; label: string; description: string }[] = [
+  { key: 'resources', label: '资源', description: '文件、代码与文档' },
+  { key: 'architecture', label: '架构', description: '项目结构与依赖' },
+  { key: 'history', label: '历史', description: '提交、分支与 AI 会话' }
 ]
 
 export default function TitleBar() {
@@ -24,6 +24,20 @@ export default function TitleBar() {
   const folderProject = useStore((s) => s.projects.some((p) => p.id === s.activeProjectId && p.kind !== 'file'))
   const [version, setVersion] = useState('')
   const [maximized, setMaximized] = useState(false)
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
+  const viewNav = useRef<HTMLElement>(null)
+  const viewTrigger = useRef<HTMLButtonElement>(null)
+  const currentView = VIEWS.find((item) => item.key === view) ?? VIEWS[0]
+
+  useEffect(() => {
+    if (!viewMenuOpen) return
+    viewNav.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')?.focus()
+    const closeOutside = (event: PointerEvent): void => {
+      if (!viewNav.current?.contains(event.target as Node)) setViewMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [viewMenuOpen])
 
   // 标题区版本号（Electron 环境从主进程取；纯 Web 预览不显示）
   useEffect(() => {
@@ -60,25 +74,72 @@ export default function TitleBar() {
         <Logo size={20} animated={false} />
         <span className="tb-name">Timber</span>
         {version && <span className="tb-version">{`v${version}`}</span>}
-        <nav className="tb-views" aria-label="工作区导航">
-          <WorkspaceIcon view={view} />
-          <select
-            className="tb-view-select"
-            aria-label="工作区视图"
-            title={folderProject ? '切换工作区' : '打开项目文件夹后可使用架构和历史'}
-            value={view}
-            onChange={(event) => {
-              setView(event.target.value as AppView)
-              if (settingsOpen) closeSettings()
-            }}
+        <nav
+          ref={viewNav}
+          className="tb-views"
+          aria-label="工作区导航"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setViewMenuOpen(false)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape' && viewMenuOpen) {
+              event.preventDefault()
+              setViewMenuOpen(false)
+              viewTrigger.current?.focus()
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || (viewMenuOpen && ['Home', 'End'].includes(event.key))) {
+              event.preventDefault()
+              if (!viewMenuOpen) {
+                setViewMenuOpen(true)
+                return
+              }
+              const items = Array.from(viewNav.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:not(:disabled)') ?? [])
+              const current = items.indexOf(document.activeElement as HTMLButtonElement)
+              const step = event.key === 'ArrowUp' ? -1 : 1
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + step + items.length) % items.length
+              items[next]?.focus()
+            }
+          }}
+        >
+          <button
+            ref={viewTrigger}
+            type="button"
+            className="tb-view-trigger"
+            aria-label={`工作区视图 · ${currentView.label}`}
+            aria-haspopup="menu"
+            aria-expanded={viewMenuOpen}
+            aria-controls={viewMenuOpen ? 'tb-view-menu' : undefined}
+            data-view={view}
+            onClick={() => setViewMenuOpen((open) => !open)}
           >
-            {VIEWS.map((item) => (
-              <option key={item.key} value={item.key} disabled={item.key !== 'resources' && !folderProject}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <IconChevronDown />
+            <WorkspaceIcon view={view} />
+            <span>{currentView.label}</span>
+            <IconChevronDown />
+          </button>
+          {viewMenuOpen && (
+            <div className="tb-view-menu" id="tb-view-menu" role="menu" aria-label="切换工作区">
+              {VIEWS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={item.key === view}
+                  data-view={item.key}
+                  tabIndex={-1}
+                  disabled={item.key !== 'resources' && !folderProject}
+                  onClick={() => {
+                    setViewMenuOpen(false)
+                    viewTrigger.current?.focus()
+                    setView(item.key)
+                    if (settingsOpen) closeSettings()
+                  }}
+                >
+                  <span className="tb-view-option-icon"><WorkspaceIcon view={item.key} size={16} /></span>
+                  <span className="tb-view-option-text"><strong>{item.label}</strong><small>{item.description}</small></span>
+                  {item.key === view && <span className="tb-view-check" aria-hidden="true">✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
         </nav>
       </div>
       <div className="tb-btns">
