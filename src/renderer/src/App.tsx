@@ -110,9 +110,9 @@ export default function App() {
                 {view === 'history' ? <HistoryView /> : view === 'architecture' ? <ArchitectureView key={activeProjectId} aiPanelHost={archAiHost} /> : <ResourceView />}
               </main>
               {view === 'resources' && annPanelOpen && <Sidebar section="files" />}
-              {view === 'history' && annPanelOpen && <Sidebar section="history" />}
-              {view === 'architecture' && annPanelOpen && activeProjectId && (
-                <aside className="sidebar architecture-sidebar" style={{ width: annPanelWidth }} aria-label="架构 AI 侧栏">
+              {view === 'history' && annPanelOpen && <Sidebar key={activeProjectId} section="history" />}
+              {view === 'architecture' && activeProjectId && (
+                <aside className="sidebar architecture-sidebar" hidden={!annPanelOpen} style={{ width: annPanelWidth }} aria-label="架构 AI 侧栏">
                   <div className="sb-resizer" onMouseDown={startArchAiResize} title="拖拽调整宽度" />
                   <div className="architecture-ai-host" ref={setArchAiHost} />
                 </aside>

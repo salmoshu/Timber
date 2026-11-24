@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CodeDocumentInput, CodeDocumentRef, CodeLanguageId, CodeLocation, CodeRange, CodeSymbol } from '@shared/code'
-import { codeLanguageForPath } from '@shared/code'
+import type { CodeDocumentInput, CodeDocumentRef, CodeLocation, CodeRange, CodeSymbol } from '@shared/code'
+import { codeLanguageForPath, usesClangd } from '@shared/code'
 import type { DocContent } from '@shared/types'
 import { apiFor, origProjectId, useStore } from '../store'
 import { isDarkTheme } from '../utils/settings'
@@ -58,24 +58,22 @@ function monacoRange(range: CodeRange): monaco.IRange {
   }
 }
 
-async function ensureModel(projectId: string, path: string, content?: string): Promise<monaco.editor.ITextModel> {
+async function ensureModel(projectId: string, path: string): Promise<monaco.editor.ITextModel> {
   const uri = codeUri(projectId, path)
   const existing = monaco.editor.getModel(uri)
-  if (existing) {
-    if (content !== undefined && existing.getValue() !== content) existing.setValue(content)
-    return existing
-  }
-  let value = content
-  if (value === undefined) {
-    const doc = await apiFor<DocContent>(projectId)('GET', `/api/projects/${origProjectId(projectId)}/doc?path=${encodeURIComponent(path)}`)
-    value = doc.content
-  }
-  return monaco.editor.createModel(value, monacoLanguageForPath(path), uri)
+  if (existing) return existing
+  const doc = await apiFor<DocContent>(projectId)('GET', `/api/projects/${origProjectId(projectId)}/doc?path=${encodeURIComponent(path)}`)
+  return monaco.editor.getModel(uri) ?? monaco.editor.createModel(doc.content, monacoLanguageForPath(path), uri)
 }
 
 async function monacoLocations(projectId: string, locations: CodeLocation[]): Promise<monaco.languages.Location[]> {
-  await Promise.all(locations.map((location) => ensureModel(projectId, location.path).catch(() => null)))
-  return locations.map((location) => ({ uri: codeUri(projectId, location.path), range: monacoRange(location.range) }))
+  const models = new Map<string, monaco.editor.ITextModel>()
+  const paths = new Set(locations.map((location) => location.path))
+  await Promise.allSettled([...paths].map(async (path) => models.set(path, await ensureModel(projectId, path))))
+  return locations.flatMap((location) => {
+    const model = models.get(location.path)
+    return model ? [{ uri: model.uri, range: monacoRange(location.range) }] : []
+  })
 }
 
 function monacoSymbol(symbol: CodeSymbol): monaco.languages.DocumentSymbol {
@@ -114,8 +112,8 @@ export default function CodeEditor({ path }: Props) {
   const [workspaceSearching, setWorkspaceSearching] = useState(false)
   const content = activeDoc?.path === path ? activeDoc.content : null
   const languageId = codeLanguageForPath(path)
-  const languageLabel = languageId === 'c' ? 'C' : languageId === 'cpp' ? 'C/C++' : languageId === 'objective-c' ? 'Objective-C' : 'TS / JS'
-  const cppLanguage = languageId === 'c' || languageId === 'cpp' || languageId === 'objective-c'
+  const cppLanguage = usesClangd(languageId)
+  const serviceLabel = cppLanguage ? 'clangd' : 'TS / JS'
   const rootPath = project && project.kind !== 'file' && !project.remoteId && projectId && !projectId.includes(':') ? project.path : null
 
   useEffect(() => {
@@ -127,7 +125,8 @@ export default function CodeEditor({ path }: Props) {
       return
     }
     let active = true
-    setServiceState((current) => current === 'ready' ? current : 'loading')
+    setServiceState('loading')
+    setServiceMessage('')
     const input: CodeDocumentInput = { rootPath, path, languageId, content }
     syncRef.current = bridge.codeSyncDocument(input).then((status) => {
       if (!active) return false
@@ -224,20 +223,19 @@ export default function CodeEditor({ path }: Props) {
     const bridge = window.timber
     if (bridge && rootPath && languageId) {
       const document: CodeDocumentRef = { rootPath, path, languageId }
-      const ready = async (): Promise<boolean> => !disposed && await syncRef.current
+      const ready = async (): Promise<boolean> => await syncRef.current && !disposed
       const fail = (error: unknown): void => {
         if (disposed) return
         setServiceState('error')
         setServiceMessage(error instanceof Error ? error.message : String(error))
       }
-      // Monaco 语言 id 与后端语义语言可能不同（C 共用 cpp 语法、objective-c 保留连字符）
-      const selector: monaco.languages.LanguageSelector = [monacoLanguageForPath(path)]
+      const selector = { scheme: model.uri.scheme, language: model.getLanguageId() }
       disposables.push(monaco.languages.registerDefinitionProvider(selector, {
         provideDefinition: async (source, position) => {
           try {
-            if (!await ready()) return null
+            if (source !== model || !await ready()) return null
             const locations = await bridge.codeDefinition(document, { line: position.lineNumber - 1, character: position.column - 1 })
-            return monacoLocations(projectId, locations)
+            return disposed ? null : monacoLocations(projectId, locations)
           } catch (error) { fail(error); return null }
         }
       }))
@@ -245,13 +243,32 @@ export default function CodeEditor({ path }: Props) {
         try {
           if (!await ready()) return
           const locations = await bridge.codeDefinition(document, { line: position.lineNumber - 1, character: position.column - 1 })
+          if (disposed) return
           if (locations.length === 1) {
             await openCodeLocation({ projectId, path: locations[0].path, range: locations[0].range })
           } else if (locations.length > 1) {
-            await monacoLocations(projectId, locations)
             runEditorAction(editor, 'editor.action.peekDefinition')
+          } else {
+            useStore.getState().toast('info', '未找到该符号在项目内的定义')
           }
         } catch (error) { fail(error) }
+      }
+      if (cppLanguage) {
+        disposables.push(editor.addAction({
+          id: 'timber.switchSourceHeader',
+          label: '切换源文件 / 头文件',
+          keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.KeyO],
+          contextMenuGroupId: 'navigation',
+          run: async () => {
+            try {
+              if (!await ready()) return
+              const location = await bridge.codeSwitchSourceHeader(document)
+              if (disposed) return
+              if (location) await openCodeLocation({ projectId, ...location })
+              else useStore.getState().toast('info', '未找到对应的源文件或头文件')
+            } catch (error) { fail(error) }
+          }
+        }))
       }
       const onNavigationKeyDown = (event: KeyboardEvent): void => {
         if (event.key === 'F12') {
@@ -276,23 +293,24 @@ export default function CodeEditor({ path }: Props) {
         if (!position || !event.event.leftButton || (!event.event.ctrlKey && !event.event.metaKey)) return
         event.event.preventDefault()
         event.event.stopPropagation()
+        editor.setPosition(position)
         void goToDefinition(position)
       }))
       disposables.push(monaco.languages.registerReferenceProvider(selector, {
         provideReferences: async (source, position) => {
           try {
-            if (!await ready()) return []
+            if (source !== model || !await ready()) return []
             const locations = await bridge.codeReferences(document, { line: position.lineNumber - 1, character: position.column - 1 })
-            return monacoLocations(projectId, locations)
+            return disposed ? [] : monacoLocations(projectId, locations)
           } catch (error) { fail(error); return [] }
         }
       }))
       disposables.push(monaco.languages.registerHoverProvider(selector, {
         provideHover: async (source, position) => {
           try {
-            if (!await ready()) return null
+            if (source !== model || !await ready()) return null
             const result = await bridge.codeHover(document, { line: position.lineNumber - 1, character: position.column - 1 })
-            return result ? {
+            return !disposed && result ? {
               contents: result.contents.map((value) => ({ value })),
               range: result.range ? monacoRange(result.range) : undefined
             } : null
@@ -300,12 +318,12 @@ export default function CodeEditor({ path }: Props) {
         }
       }))
       disposables.push(monaco.languages.registerDocumentSymbolProvider(selector, {
-        displayName: languageLabel,
-        provideDocumentSymbols: async () => {
+        displayName: serviceLabel,
+        provideDocumentSymbols: async (source) => {
           try {
-            if (!await ready()) return []
+            if (source !== model || !await ready()) return []
             const symbols = await bridge.codeDocumentSymbols(document)
-            return symbols.map(monacoSymbol)
+            return disposed ? [] : symbols.map(monacoSymbol)
           } catch (error) { fail(error); return [] }
         }
       }))
@@ -319,7 +337,7 @@ export default function CodeEditor({ path }: Props) {
       editor.dispose()
       if (editorRef.current === editor) editorRef.current = null
     }
-  }, [path, projectId, content === null])
+  }, [path, projectId, rootPath, languageId, content === null])
 
   useEffect(() => {
     monaco.editor.setTheme(monacoTheme(isDarkTheme(resolvedTheme)))
@@ -381,13 +399,13 @@ export default function CodeEditor({ path }: Props) {
           {languageId && rootPath ? (
             <span
               className={`code-editor-status ${serviceState === 'ready' ? 'ready' : serviceState === 'error' ? 'error' : ''}`}
-              title={serviceMessage || (cppLanguage ? `${languageLabel} 内置索引（定义 / 引用 / 符号）` : 'TypeScript / JavaScript 语言服务')}
+              title={serviceMessage || (cppLanguage ? 'clangd 语言服务。项目引用随后台索引更新。' : 'TypeScript / JavaScript 语言服务')}
             >
               {serviceState === 'ready'
-                ? `${cppLanguage ? 'C/C++' : 'TS'} 导航已就绪`
+                ? `${serviceLabel} 已连接`
                 : serviceState === 'error'
                   ? '仅语法高亮'
-                  : cppLanguage ? 'C/C++ 索引构建中' : 'TS 服务启动中'}
+                  : `${serviceLabel} 启动中`}
             </span>
           ) : '只读'}
         </span>

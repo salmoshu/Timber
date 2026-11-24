@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore, type AppView } from '../store'
 import Logo from './Logo'
-import { IconClose, IconMaximize, IconMinimize, IconPanelLeft, IconPanelRight, IconRestore, IconSettings } from './icons'
+import { IconChevronDown, IconClose, IconMaximize, IconMinimize, IconPanelLeft, IconPanelRight, IconRestore, IconSettings, WorkspaceIcon } from './icons'
 
 const VIEWS: { key: AppView; label: string }[] = [
   { key: 'resources', label: '资源' },
@@ -11,6 +11,7 @@ const VIEWS: { key: AppView; label: string }[] = [
 
 export default function TitleBar() {
   const b = window.timber
+  const mac = b?.platform === 'darwin'
   const openSettings = useStore((s) => s.openSettings)
   const closeSettings = useStore((s) => s.closeSettings)
   const settingsOpen = useStore((s) => s.settingsOpen)
@@ -39,7 +40,7 @@ export default function TitleBar() {
 
   // 最大化状态：初始化查询一次，随后跟随主进程推送（图标在单矩形/重叠矩形间切换）
   useEffect(() => {
-    if (!b) return
+    if (!b || mac) return
     let mounted = true
     b.winIsMaximized()
       .then((m) => {
@@ -51,27 +52,33 @@ export default function TitleBar() {
       mounted = false
       off()
     }
-  }, [b])
+  }, [b, mac])
 
   return (
-    <header className="titlebar">
+    <header className={`titlebar${mac ? ' mac-titlebar' : ''}`}>
       <div className="tb-drag">
         <Logo size={20} animated={false} />
         <span className="tb-name">Timber</span>
         {version && <span className="tb-version">{`v${version}`}</span>}
-        {/* 主视图切换（文档/代码/架构/历史）：左侧挨着版本号；位于拖拽区内需 no-drag */}
-        <nav className="tb-views">
-          {VIEWS.map((v) => (
-            <button
-              key={v.key}
-              className={`tb-view ${view === v.key ? 'active' : ''}`}
-              disabled={v.key !== 'resources' && !folderProject}
-              title={v.key !== 'resources' && !folderProject ? '请打开项目文件夹以使用架构和历史功能' : undefined}
-              onClick={() => setView(v.key)}
-            >
-              {v.label}
-            </button>
-          ))}
+        <nav className="tb-views" aria-label="工作区导航">
+          <WorkspaceIcon view={view} />
+          <select
+            className="tb-view-select"
+            aria-label="工作区视图"
+            title={folderProject ? '切换工作区' : '打开项目文件夹后可使用架构和历史'}
+            value={view}
+            onChange={(event) => {
+              setView(event.target.value as AppView)
+              if (settingsOpen) closeSettings()
+            }}
+          >
+            {VIEWS.map((item) => (
+              <option key={item.key} value={item.key} disabled={item.key !== 'resources' && !folderProject}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          <IconChevronDown />
         </nav>
       </div>
       <div className="tb-btns">
@@ -97,7 +104,7 @@ export default function TitleBar() {
         >
           <IconSettings />
         </button>
-        {b && (
+        {b && !mac && (
           <>
             <button className="tb-window" onClick={() => b.winMinimize()} title="最小化"><IconMinimize /></button>
             <button className="tb-window" onClick={() => b.winToggleMaximize()} title={maximized ? '还原' : '最大化'}>

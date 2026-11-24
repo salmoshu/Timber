@@ -60,7 +60,7 @@ func skipName(name string) bool {
 	return skipDirs[name] || strings.HasPrefix(name, "release-")
 }
 
-// parseExts 解析请求传入的扩展名列表（".md,.html"）；空则用默认全量。
+// parseExts 接收扩展名和使用 = 前缀的完整文件名。空值保留默认文档类型。
 func parseExts(raw string) map[string]bool {
 	if raw == "" {
 		return docExts
@@ -68,10 +68,10 @@ func parseExts(raw string) map[string]bool {
 	m := map[string]bool{}
 	for _, e := range strings.Split(raw, ",") {
 		e = strings.ToLower(strings.TrimSpace(e))
-		if e == "" {
+		if e == "" || e == "=" {
 			continue
 		}
-		if !strings.HasPrefix(e, ".") {
+		if !strings.HasPrefix(e, ".") && !strings.HasPrefix(e, "=") {
 			e = "." + e
 		}
 		m[e] = true
@@ -80,6 +80,11 @@ func parseExts(raw string) map[string]bool {
 		return docExts
 	}
 	return m
+}
+
+func matchesFileType(name string, exts map[string]bool) bool {
+	lower := strings.ToLower(name)
+	return exts[filepath.Ext(lower)] || exts["="+lower]
 }
 
 // registry 项目注册表（projects.json）。
@@ -230,7 +235,7 @@ func countDocsExts(root string, exts map[string]bool) int {
 			}
 			return nil
 		}
-		if exts[strings.ToLower(filepath.Ext(d.Name()))] {
+		if matchesFileType(d.Name(), exts) {
 			n++
 		}
 		return nil
@@ -281,8 +286,7 @@ func scanTree(root string, exts map[string]bool) (*DocNode, error) {
 				node.Children = append(node.Children, sub)
 				continue
 			}
-			ext := strings.ToLower(filepath.Ext(name))
-			if !exts[ext] {
+			if !matchesFileType(name, exts) {
 				continue
 			}
 			if count >= maxDocs {
@@ -296,7 +300,7 @@ func scanTree(root string, exts map[string]bool) (*DocNode, error) {
 			}
 			count++
 			node.Children = append(node.Children, &DocNode{
-				Name: name, Path: childRel, Type: "doc", Ext: ext, Size: size,
+				Name: name, Path: childRel, Type: "doc", Ext: strings.ToLower(filepath.Ext(name)), Size: size,
 			})
 		}
 		return node

@@ -2,14 +2,13 @@ import { useEffect, useState } from 'react'
 import type { UpdateStatusEvent, UpdaterPrefs } from '@shared/types'
 import { DOC_FORMAT_GROUPS } from '@shared/types'
 import { useStore } from '../store'
-import { aiTest } from '../api'
 import { loadUpdaterPrefs, saveUpdaterPrefs } from '../utils/updater-prefs'
-import { DEFAULT_ARCHITECTURE_PROMPT, THEME_PALETTES, type ThemeId } from '../utils/settings'
+import { THEME_PALETTES, type ThemeId } from '../utils/settings'
 import TypographySettings from './TypographySettings'
 import EditorSettings from './EditorSettings'
+import AgentSettings from './AgentSettings'
 
 type Section = 'appearance' | 'typography' | 'reading' | 'editor' | 'ai' | 'version'
-
 const SECTIONS: Array<{ key: Section; icon: Section; label: string }> = [
   { key: 'appearance', icon: 'appearance', label: '外观' },
   { key: 'typography', icon: 'typography', label: '字体与排版' },
@@ -35,36 +34,12 @@ export default function SettingsView() {
 
   // ---- 版本区状态 ----
   const bridge = window.timber
+  const mac = bridge?.platform === 'darwin'
   const [appVersion, setAppVersion] = useState('')
   const [updaterState, setUpdaterState] = useState<UpdateStatusEvent | null>(null)
   const [updaterPrefs, setUpdaterPrefs] = useState<UpdaterPrefs>(loadUpdaterPrefs)
   const [checking, setChecking] = useState(false)
   const [downloading, setDownloading] = useState(false)
-
-  // ---- AI 区状态（v0.6.3） ----
-  const ai = useStore((s) => s.settings.ai)
-  const aiComplete = !!(ai.baseUrl && ai.apiKey && ai.model)
-  const [showKey, setShowKey] = useState(false)
-  const [aiTesting, setAiTesting] = useState(false)
-  const [aiTestMsg, setAiTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
-
-  const testAi = async (): Promise<void> => {
-    if (!aiComplete || aiTesting) return
-    setAiTesting(true)
-    setAiTestMsg(null)
-    try {
-      const r = await aiTest(ai)
-      setAiTestMsg(
-        r.ok
-          ? { ok: true, text: `连接成功（${r.model ?? ai.model} 已响应）` }
-          : { ok: false, text: r.message ?? r.error ?? '测试失败' }
-      )
-    } catch (e) {
-      setAiTestMsg({ ok: false, text: String(e instanceof Error ? e.message : e) })
-    } finally {
-      setAiTesting(false)
-    }
-  }
 
   useEffect(() => {
     bridge?.appVersion().then(setAppVersion).catch(() => {})
@@ -247,96 +222,21 @@ export default function SettingsView() {
 
         {section === 'editor' && <EditorSettings />}
 
-        {section === 'ai' && (
+        {section === 'ai' && <AgentSettings />}
+
+        {section === 'version' && mac && (
           <div className="st-card">
-            <div className="st-card-title">AI 服务</div>
-
-            <div className="st-row">
-              <div className="st-label">API 地址</div>
-              <div className="st-input-wrap">
-                <input
-                  className="st-input"
-                  type="text"
-                  spellCheck={false}
-                  placeholder="https://api.openai.com/v1"
-                  value={ai.baseUrl}
-                  onChange={(e) => setSetting('ai', { ...ai, baseUrl: e.target.value.trim() })}
-                />
-              </div>
-              <div className="st-hint">OpenAI 兼容接口的 Base URL（OpenAI / DeepSeek / Moonshot / 智谱 / 本地 Ollama 等），通常以 /v1 结尾</div>
+            <div className="st-card-title">版本</div>
+            <div className="st-row version-row">
+              <span className="st-label">当前版本 <span className="tag">v{appVersion || '…'}</span></span>
+              <button className="btn-primary sm" onClick={() => void bridge.openInSystemBrowser('https://github.com/salmoshu/Timber/releases/latest')}>
+                前往下载
+              </button>
             </div>
-
-            <div className="st-row">
-              <div className="st-label">API Key</div>
-              <div className="st-input-wrap st-key-row">
-                <input
-                  className="st-input mono"
-                  type={showKey ? 'text' : 'password'}
-                  spellCheck={false}
-                  autoComplete="off"
-                  placeholder="sk-…"
-                  value={ai.apiKey}
-                  onChange={(e) => setSetting('ai', { ...ai, apiKey: e.target.value })}
-                />
-                <button className="btn-ghost sm" onClick={() => setShowKey((v) => !v)}>
-                  {showKey ? '隐藏' : '显示'}
-                </button>
-              </div>
-              <div className="st-hint">仅保存在本机设置中，请求时直接发往所填服务商，不经过其它中间服务</div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">模型</div>
-              <div className="st-input-wrap">
-                <input
-                  className="st-input mono"
-                  type="text"
-                  spellCheck={false}
-                  placeholder="如 gpt-4o / deepseek-chat / glm-4.6 / kimi-k2"
-                  value={ai.model}
-                  onChange={(e) => setSetting('ai', { ...ai, model: e.target.value.trim() })}
-                />
-              </div>
-              <div className="st-hint">填写服务商提供的模型名；生成质量随模型能力差异较大</div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">一键优化提示词</div>
-              <div className="st-input-wrap">
-                <textarea
-                  className="st-input st-prompt-input"
-                  aria-label="一键优化提示词"
-                  spellCheck={false}
-                  value={ai.architecturePrompt}
-                  onChange={(e) => setSetting('ai', { ...ai, architecturePrompt: e.target.value })}
-                />
-                <div className="st-prompt-actions">
-                  <span>仅用于架构视图的「一键优化」，不影响日常 AI 对话。</span>
-                  <button className="btn-ghost sm" onClick={() => setSetting('ai', { ...ai, architecturePrompt: DEFAULT_ARCHITECTURE_PROMPT })}>恢复默认</button>
-                </div>
-              </div>
-              <div className="st-hint">默认要求完全基于源码、配置和 Git 事实重新生成，不参考现有 AI 画布；可按团队架构规范自行调整。</div>
-            </div>
-
-            <div className="st-row">
-              <div className="st-label">连接测试</div>
-              <div className="st-control">
-                <button className="btn-primary sm" disabled={!aiComplete || aiTesting} onClick={() => void testAi()}>
-                  {aiTesting ? '测试中…' : '测试连接'}
-                </button>
-                {aiTestMsg && (
-                  <span className={`st-test-msg ${aiTestMsg.ok ? 'ok' : 'err'}`}>{aiTestMsg.text}</span>
-                )}
-              </div>
-              <div className="st-hint">
-                三项填写齐全后，架构视图的「AI 助手」优先经此接口生成与解释架构；
-                未配置时自动改用本机 kimi / codex CLI（需已安装并登录）。
-              </div>
-            </div>
+            <div className="st-hint">更新时下载与 Mac 芯片对应的 DMG，将 Timber 拖到「应用程序」。</div>
           </div>
         )}
-
-        {section === 'version' && (
+        {section === 'version' && !mac && (
           <div className="st-card">
             <div className="st-card-title">版本</div>
 

@@ -17,6 +17,7 @@ export function lexBlock(
     src: string,
     options: ILexOption = DEFAULT_OPTIONS,
 ): TLexedToken[] {
+    src = src.replace(/\r\n?/g, '\n');
     options = Object.assign({}, DEFAULT_OPTIONS, options);
     const { texMathDollars, texMathGfm, texMathSingleBackslash, texMathDoubleBackslash, frontMatter, footnote, multilineBlockquote, fancyLists } = options;
     let tokens: (Token | IFrontmatterToken)[] = [];

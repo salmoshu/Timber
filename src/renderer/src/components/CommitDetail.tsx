@@ -2,8 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CommitFile } from '@shared/types'
 import { apiFor, useStore } from '../store'
-import { kindColor, relativeTime } from './HistoryView'
 import EntireCard from './EntireCard'
+import { IconChevronDown, IconChevronRight, IconChevronUp, IconCopy, IconSearch } from './icons'
 
 /** 文件变更状态徽章配色（功能色语义） */
 const STATUS_COLORS: Record<string, string> = {
@@ -13,11 +13,7 @@ const STATUS_COLORS: Record<string, string> = {
   R: 'var(--Colors-KMBlue)'
 }
 
-function fullTime(unixSec: number): string {
-  const d = new Date(unixSec * 1000)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
+const fullTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' })
 
 function FileRow({ file, open, onToggle }: { file: CommitFile; open: boolean; onToggle(): void }) {
   const total = file.insertions + file.deletions
@@ -31,24 +27,24 @@ function FileRow({ file, open, onToggle }: { file: CommitFile; open: boolean; on
       title={open ? '收起差异' : '在历史中查看差异'}
       aria-expanded={open}
     >
-      <span className={`cd-chevron ${open ? 'open' : ''}`} aria-hidden="true">▸</span>
+      <span className={`cd-chevron ${open ? 'open' : ''}`}><IconChevronRight size={12} /></span>
       <span
         className="cd-status"
         style={{ background: STATUS_COLORS[file.status] ?? 'var(--Labels-Tertiary)' }}
       >
         {file.status}
       </span>
-      <span className="cd-path">
+      <span className="cd-path" title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
         {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
       </span>
       <span className="cd-nums">
         <span className="ins">+{file.insertions}</span>
         <span className="del">−{file.deletions}</span>
       </span>
-      <span className="cd-bar">
+      {total > 0 && <span className="cd-bar" aria-hidden="true">
         <span className="cd-bar-ins" style={{ width: `${insPct}%` }} />
         <span className="cd-bar-del" style={{ width: `${100 - insPct}%` }} />
-      </span>
+      </span>}
     </button>
   )
 }
@@ -65,20 +61,22 @@ function parseDiff(diff: string): DiffLine[] {
   const out: DiffLine[] = []
   let oldNo = 0
   let newNo = 0
+  let inHunk = false
   const lines = diff.split('\n')
   lines.forEach((raw, i) => {
     if (i === lines.length - 1 && raw === '') return
+    if (raw.startsWith('diff --git ')) inHunk = false
     if (raw.startsWith('@@')) {
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw)
       if (m) {
         oldNo = Number(m[1])
         newNo = Number(m[2])
+        inHunk = true
       }
       out.push({ kind: 'hunk', oldNo: null, newNo: null, text: raw })
       return
     }
-    // 文件头 ---/+++ 属于元信息，不能当删除/新增行
-    if (raw.startsWith('+++') || raw.startsWith('---')) {
+    if (!inHunk) {
       out.push({ kind: 'meta', oldNo: null, newNo: null, text: raw })
       return
     }
@@ -102,11 +100,31 @@ function parseDiff(diff: string): DiffLine[] {
 /** 历史详情内的原地差异视图：双行号 + 增删着色，超长时内部滚动 */
 function InlineDiff({ diff }: { diff: string }) {
   const lines = useMemo(() => parseDiff(diff), [diff])
+  const scroller = useRef<HTMLDivElement>(null)
+  const [wrap, setWrap] = useState(false)
+  const [hunk, setHunk] = useState(-1)
+  const hunks = useMemo(() => lines.filter((line) => line.kind === 'hunk').length, [lines])
+  const jump = (next: number) => {
+    const parent = scroller.current
+    const target = parent?.querySelectorAll<HTMLElement>('.cd-diff-line.hunk')[next]
+    if (!parent || !target) return
+    parent.scrollTop += target.getBoundingClientRect().top - parent.getBoundingClientRect().top
+    setHunk(next)
+  }
   if (!diff.trim()) {
     return <div className="cd-diff-empty">该文件在此提交中没有可显示的文本差异（可能是二进制文件或仅重命名）。</div>
   }
   return (
     <div className="cd-diff">
+      <div className="cd-diff-tools">
+        <span>{hunks > 0 ? `${hunks} 处差异` : '差异'}</span>
+        {!!hunks && <>
+          <button type="button" className="history-icon" aria-label="上一处差异" title="上一处差异" disabled={hunk <= 0} onClick={() => jump(hunk - 1)}><IconChevronUp /></button>
+          <button type="button" className="history-icon" aria-label="下一处差异" title="下一处差异" disabled={hunk >= hunks - 1} onClick={() => jump(hunk + 1)}><IconChevronDown /></button>
+        </>}
+        <button type="button" className="cd-diff-wrap" aria-pressed={wrap} onClick={() => setWrap(!wrap)}>自动换行</button>
+      </div>
+      <div className={`cd-diff-scroll ${wrap ? 'wrap' : ''}`} ref={scroller} tabIndex={0} aria-label="文件差异">
       {lines.map((line, i) => (
         <div key={i} className={`cd-diff-line ${line.kind}`}>
           <span className="cd-diff-no">{line.oldNo ?? ''}</span>
@@ -117,28 +135,24 @@ function InlineDiff({ diff }: { diff: string }) {
           <span className="cd-diff-text">{line.text || ' '}</span>
         </div>
       ))}
+      </div>
     </div>
   )
-}
-
-interface ExpandedDiff {
-  path: string
-  diff: string
-  loading: boolean
-  error: string | null
 }
 
 export default function CommitDetail() {
   const activeProjectId = useStore((s) => s.activeProjectId)
   const detail = useStore((s) => s.commitDetail)
   const loading = useStore((s) => s.commitDetailLoading)
+  const detailError = useStore((s) => s.commitDetailError)
   const selectedSha = useStore((s) => s.selectedSha)
   const ensureCommitImpact = useStore((s) => s.ensureCommitImpact)
   const impact = useStore((s) => (s.selectedSha ? s.commitImpactCache.get(s.selectedSha) : undefined))
   const openArchDelta = useStore((s) => s.openArchDelta)
-  const [copied, setCopied] = useState(false)
-  const [expanded, setExpanded] = useState<ExpandedDiff | null>(null)
-  const diffSeq = useRef(0)
+  const [fileQuery, setFileQuery] = useState('')
+  const [expandedPath, setExpandedPath] = useState<string | null>(null)
+  const [diffs, setDiffs] = useState<Record<string, { diff?: string; error?: string }>>({})
+  const pending = useRef<AbortController | null>(null)
 
   // 选中后确保影响摘要已算（列表未滚到该行时详情卡片也要显示）
   useEffect(() => {
@@ -146,62 +160,64 @@ export default function CommitDetail() {
     if (c) void ensureCommitImpact(c)
   }, [selectedSha, ensureCommitImpact])
 
-  // 切换提交/项目时收起已展开的差异，并让在途请求失效
-  useEffect(() => {
-    diffSeq.current++
-    setExpanded(null)
-  }, [selectedSha, activeProjectId])
+  useEffect(() => () => pending.current?.abort(), [])
 
-  if (!selectedSha) return <div className="hv-empty">选择右侧提交查看详情</div>
-  if (loading || !detail) return <div className="hv-loading">加载中…</div>
+  if (!selectedSha) return <div className="hv-empty">从提交列表选择一条记录</div>
+  if (loading) return <div className="hv-loading" role="status">正在读取提交详情…</div>
+  if (detailError || !detail) return (
+    <div className="hv-empty" role="alert">
+      <p>{detailError ?? '提交详情不可用'}</p>
+      <button className="btn-ghost sm" onClick={() => void useStore.getState().selectCommit(selectedSha)}>重试</button>
+    </div>
+  )
 
   const c = detail.commit
-  const color = kindColor(c.kind)
   const parent = c.parents[0]
+  const date = new Date(c.time * 1000)
+  const query = fileQuery.trim().toLowerCase()
+  const files = detail.files.filter((file) => !query || file.path.toLowerCase().includes(query) || file.oldPath?.toLowerCase().includes(query))
 
-  const toggleDiff = async (file: CommitFile): Promise<void> => {
-    if (expanded?.path === file.path) {
-      diffSeq.current++
-      setExpanded(null)
-      return
-    }
+  const toggleDiff = async (file: CommitFile, retry = false): Promise<void> => {
+    pending.current?.abort()
+    if (expandedPath === file.path && !retry) { setExpandedPath(null); return }
     if (!activeProjectId) return
-    const seq = ++diffSeq.current
-    setExpanded({ path: file.path, diff: '', loading: true, error: null })
+    setExpandedPath(file.path)
+    if (diffs[file.path]?.diff !== undefined && !retry) return
+    setDiffs((current) => ({ ...current, [file.path]: {} }))
+    const request = new AbortController()
+    pending.current = request
     try {
       const old = file.oldPath ? `&old=${encodeURIComponent(file.oldPath)}` : ''
       const r = await apiFor<{ diff: string }>(activeProjectId)(
         'GET',
-        `/api/projects/${activeProjectId}/git/show/${c.sha}/diff?path=${encodeURIComponent(file.path)}${old}`
+        `/api/projects/${activeProjectId}/git/show/${c.sha}/diff?path=${encodeURIComponent(file.path)}${old}`,
+        undefined, { signal: request.signal }
       )
-      if (diffSeq.current !== seq) return
-      setExpanded({ path: file.path, diff: r.diff, loading: false, error: null })
+      if (!request.signal.aborted) setDiffs((current) => ({ ...current, [file.path]: { diff: r.diff ?? '' } }))
     } catch (err) {
-      if (diffSeq.current !== seq) return
-      setExpanded({ path: file.path, diff: '', loading: false, error: String(err) })
+      if (!request.signal.aborted) setDiffs((current) => ({ ...current, [file.path]: { error: String(err) } }))
     }
   }
 
   const copySha = (): void => {
-    void navigator.clipboard?.writeText(c.sha).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
+    void navigator.clipboard.writeText(c.sha)
+      .then(() => useStore.getState().toast('ok', '提交 SHA 已复制'))
+      .catch(() => useStore.getState().toast('err', '无法写入剪贴板'))
   }
 
   return (
     <div className="commit-detail">
       <div className="cd-head">
         <div className="cd-title">
-          <span className="hv-kind" style={{ background: color }}>{c.kind}</span>
-          <span className="cd-subject">{c.subject}</span>
+          <span className={`hv-kind ${c.kind === 'fix' ? 'fix' : ''}`}>{c.kind}</span>
+          <h1 className="cd-subject">{c.subject}</h1>
         </div>
         <div className="cd-meta">
-          <button className="cd-sha" onClick={copySha} title="点击复制完整 SHA">
-            {copied ? '已复制 ✓' : c.short}
+          <button className="cd-sha" onClick={copySha} title={c.sha} aria-label="复制完整提交 SHA">
+            <IconCopy size={13} /> {c.short}
           </button>
-          <span>{c.author}</span>
-          <span>{fullTime(c.time)}（{relativeTime(c.time)}）</span>
+          <span title={c.email}>{c.author}</span>
+          <time dateTime={date.toISOString()}>{fullTime.format(date)}</time>
         </div>
       </div>
       {detail.body && <pre className="cd-body">{detail.body}</pre>}
@@ -220,17 +236,30 @@ export default function CommitDetail() {
         <EntireCard key={c.entireCheckpoint} projectId={activeProjectId} checkpointId={c.entireCheckpoint} />
       )}
       <div className="cd-files">
-        <div className="cd-files-title">变更文件（{detail.files.length}）</div>
-        {detail.files.map((f) => {
-          const isOpen = expanded?.path === f.path
+        <div className="cd-files-head">
+          <strong className="cd-files-title">变更文件 <span>{detail.files.length}</span></strong>
+          <div className="cd-nums">
+            <span className="ins">+{c.insertions}</span><span className="del">−{c.deletions}</span>
+          </div>
+          {detail.files.length > 1 && <div className="history-search">
+            <IconSearch />
+            <input aria-label="筛选变更文件" type="search" placeholder="筛选文件" value={fileQuery} onChange={(event) => setFileQuery(event.target.value)} />
+          </div>}
+        </div>
+        {files.length === 0 && <div className="hv-empty">{query ? '没有匹配的文件' : '此提交没有文件变更'}</div>}
+        {files.map((f) => {
+          const isOpen = expandedPath === f.path
+          const result = diffs[f.path]
           return (
             <div key={f.oldPath + ':' + f.path} className="cd-file-group">
               <FileRow file={f} open={isOpen} onToggle={() => void toggleDiff(f)} />
-              {isOpen && expanded.loading && <div className="cd-diff-loading">加载差异…</div>}
-              {isOpen && !expanded.loading && expanded.error && (
-                <div className="cd-diff-error">差异加载失败：{expanded.error}</div>
+              {isOpen && result?.diff === undefined && !result?.error && <div className="cd-diff-loading" role="status">正在读取差异…</div>}
+              {isOpen && result?.error && (
+                <div className="cd-diff-error" role="alert">
+                  {result.error} <button className="btn-ghost sm" onClick={() => void toggleDiff(f, true)}>重试</button>
+                </div>
               )}
-              {isOpen && !expanded.loading && !expanded.error && <InlineDiff diff={expanded.diff} />}
+              {isOpen && result?.diff !== undefined && <InlineDiff diff={result.diff} />}
             </div>
           )
         })}

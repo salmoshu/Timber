@@ -83,19 +83,20 @@ func (s *server) handleArchRefs(w http.ResponseWriter, r *http.Request) {
 	type refInfo struct {
 		Name string `json:"name"`
 		Sha  string `json:"sha"`
+		Ref  string `json:"ref"`
 	}
 	listRefs := func(namespace string) []refInfo {
 		out, err := gitRun(p.Path, 15*time.Second, "for-each-ref",
 			"--sort=-committerdate", "--count=20",
-			"--format=%(refname:short)%00%(objectname)", namespace)
+			"--format=%(refname:short)%00%(objectname)%00%(refname)", namespace)
 		if err != nil {
 			return []refInfo{}
 		}
 		refs := []refInfo{}
 		for _, ln := range strings.Split(out, "\n") {
-			name, sha, ok := strings.Cut(strings.TrimRight(ln, "\r"), "\x00")
-			if ok && name != "" {
-				refs = append(refs, refInfo{Name: name, Sha: sha})
+			fields := strings.Split(strings.TrimRight(ln, "\r"), "\x00")
+			if len(fields) == 3 && fields[0] != "" {
+				refs = append(refs, refInfo{Name: fields[0], Sha: fields[1], Ref: fields[2]})
 			}
 		}
 		return refs

@@ -299,8 +299,8 @@ export type EntireSearchResult =
 /** 架构快照可选 ref 清单 */
 export interface ArchRefs {
   head: string
-  branches: { name: string; sha: string }[]
-  tags: { name: string; sha: string }[]
+  branches: { name: string; sha: string; ref?: string }[]
+  tags: { name: string; sha: string; ref?: string }[]
 }
 
 /** archify architecture v1 spec（字段宽松，渲染在 main 进程 archify 完成） */
@@ -408,6 +408,7 @@ export interface TimberBridge {
   codeReferences(document: CodeDocumentRef, position: CodePosition): Promise<CodeLocation[]>
   codeHover(document: CodeDocumentRef, position: CodePosition): Promise<CodeHoverResult | null>
   codeDocumentSymbols(document: CodeDocumentRef): Promise<CodeSymbol[]>
+  codeSwitchSourceHeader(document: CodeDocumentRef): Promise<CodeLocation | null>
   codeWorkspaceSymbols(rootPath: string, query: string, languageId?: CodeLanguageId): Promise<CodeSymbol[]>
   browseLocal(path?: string): Promise<{ path: string; parent: string; home: string; roots: string[]; folders: { name: string; path: string }[] }>
   pathExists(path: string): Promise<boolean>

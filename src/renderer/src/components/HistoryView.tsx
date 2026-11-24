@@ -1,127 +1,136 @@
-// 提交历史：右侧栏记录列表（lane 圆点 + kind 徽章 + 统计 + 架构影响懒算），中间提交详情
-import { useEffect, useRef } from 'react'
-import type { CommitInfo } from '@shared/types'
-import { useStore } from '../store'
+import { useEffect, useRef, useState } from 'react'
+import type { ArchRefs, CommitInfo } from '@shared/types'
+import { archRefs } from '../api'
+import { apiCallFor, useStore } from '../store'
 import CommitDetail from './CommitDetail'
+import { IconChevronUp, IconChevronDown, IconClose, IconPanelRight, IconSearch, WorkspaceIcon } from './icons'
 
-/** kind → lane/徽章配色：品牌蓝单色编码，仅 fix 用功能红表达语义 */
-const KIND_COLORS: Record<string, string> = {
-  feat: 'var(--Colors-KMBlue)',
-  fix: 'var(--Colors-Red)',
-  docs: 'var(--Colors-KMBlue)',
-  refactor: 'var(--Colors-KMBlue)',
-  test: 'var(--Colors-KMBlue)',
-  build: 'var(--Colors-KMBlue)',
-  change: 'var(--Colors-KMBlue)'
-}
+const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long' })
+const timeFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
-export function kindColor(kind: string): string {
-  return KIND_COLORS[kind] ?? 'var(--Colors-KMBlue)'
-}
-
-/** unix 秒 → 相对时间 */
-export function relativeTime(unixSec: number): string {
-  const diff = Math.max(0, Date.now() - unixSec * 1000)
-  const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
-  const hour = Math.floor(min / 60)
-  if (hour < 24) return `${hour} 小时前`
-  const day = Math.floor(hour / 24)
-  if (day < 30) return `${day} 天前`
-  const month = Math.floor(day / 30)
-  if (month < 12) return `${month} 个月前`
-  return `${Math.floor(month / 12)} 年前`
-}
-
-/** 单个提交行（进入视口或选中时懒算架构影响） */
 function CommitRow({ commit }: { commit: CommitInfo }) {
-  const selectedSha = useStore((s) => s.selectedSha)
+  const selected = useStore((s) => s.selectedSha === commit.sha)
   const selectCommit = useStore((s) => s.selectCommit)
-  const ensureCommitImpact = useStore((s) => s.ensureCommitImpact)
-  const impact = useStore((s) => s.commitImpactCache.get(commit.sha))
-  const rowRef = useRef<HTMLDivElement | null>(null)
-  const selected = selectedSha === commit.sha
-  const merge = commit.parents.length > 1
-  const color = kindColor(commit.kind)
-
-  // 懒算：进入视口一次或选中时触发（store 内部按 sha 缓存/去重）
-  useEffect(() => {
-    if (selected) void ensureCommitImpact(commit)
-  }, [selected, commit, ensureCommitImpact])
-  useEffect(() => {
-    const el = rowRef.current
-    if (!el || typeof IntersectionObserver === 'undefined') return
-    const ob = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          void ensureCommitImpact(commit)
-          ob.disconnect()
-        }
-      },
-      { root: el.closest('.hv-list') }
-    )
-    ob.observe(el)
-    return () => ob.disconnect()
-  }, [commit, ensureCommitImpact])
-
+  const date = new Date(commit.time * 1000)
   return (
-    <div
-      ref={rowRef}
+    <button
+      type="button"
       className={`hv-row ${selected ? 'selected' : ''}`}
+      data-sha={commit.sha}
+      aria-current={selected ? 'true' : undefined}
       onClick={() => void selectCommit(commit.sha)}
     >
-      {/* lane：merge 提交双环圆点 */}
-      <span className={`hv-lane ${merge ? 'merge' : ''}`} style={{ color }}>
-        <span className="hv-dot" style={{ background: color }} />
-      </span>
-      <div className="hv-main">
-        <div className="hv-line1">
-          <span className="hv-kind" style={{ background: color }}>{commit.kind}</span>
+      <span className={`hv-lane ${commit.parents.length > 1 ? 'merge' : ''}`} aria-hidden="true"><span className="hv-dot" /></span>
+      <span className="hv-main">
+        <span className="hv-line1">
           <span className="hv-subject" title={commit.subject}>{commit.subject}</span>
-          {commit.entireCheckpoint && (
-            <span className="hv-entire" title="含 AI 会话记录（Entire checkpoint）">✨</span>
-          )}
-        </div>
-        <div className="hv-line2">
-          <span className="hv-stat ins">+{commit.insertions}</span>
-          <span className="hv-stat del">−{commit.deletions}</span>
-          <span className="hv-stat files">{commit.files} 文件</span>
-          <span className="hv-time">{relativeTime(commit.time)}</span>
-          {impact && impact.text && <span className="hv-impact">{impact.text}</span>}
-        </div>
-      </div>
-    </div>
+          {commit.entireCheckpoint && <span className="hv-entire" title="含关联的 AI 会话">AI</span>}
+        </span>
+        <span className="hv-line2">
+          <span className="hv-author" title={commit.author}>{commit.author}</span>
+          <code>{commit.short}</code>
+          <time className="hv-time" dateTime={date.toISOString()}>{timeFormat.format(date)}</time>
+        </span>
+      </span>
+    </button>
   )
 }
 
-export function HistoryList() {
-  const activeProjectId = useStore((s) => s.activeProjectId)
-  const commits = useStore((s) => s.commits)
-  const commitsTotal = useStore((s) => s.commitsTotal)
-  const commitsLoading = useStore((s) => s.commitsLoading)
-  const loadMoreCommits = useStore((s) => s.loadMoreCommits)
+function groupByDay(commits: CommitInfo[]) {
+  const groups: { label: string; commits: CommitInfo[] }[] = []
+  for (const commit of commits) {
+    const label = dateFormat.format(new Date(commit.time * 1000))
+    const previous = groups.at(-1)
+    if (previous?.label === label) previous.commits.push(commit)
+    else groups.push({ label, commits: [commit] })
+  }
+  return groups
+}
 
-  if (!activeProjectId) return <div className="hv-empty">请先在左侧选择项目</div>
+export function HistoryList() {
+  const projectId = useStore((s) => s.activeProjectId)
+  const commits = useStore((s) => s.commits)
+  const total = useStore((s) => s.commitsTotal)
+  const loading = useStore((s) => s.commitsLoading)
+  const error = useStore((s) => s.commitsError)
+  const search = useStore((s) => s.commitsQuery)
+  const ref = useStore((s) => s.commitsRef)
+  const selectedSha = useStore((s) => s.selectedSha)
+  const { loadMoreCommits, loadCommits } = useStore.getState()
+  const [query, setQuery] = useState(search)
+  const [refs, setRefs] = useState<ArchRefs | null>(null)
+  const list = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!projectId) return
+    let disposed = false
+    archRefs(projectId, apiCallFor(projectId)).then((value) => {
+      if (!disposed) setRefs(value)
+    }).catch(() => {})
+    return () => { disposed = true }
+  }, [projectId])
+
+  useEffect(() => {
+    if (query.trim() === search) return
+    const timer = window.setTimeout(() => {
+      list.current?.scrollTo({ top: 0 })
+      void loadCommits(query.trim(), ref)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query, search, ref, loadCommits])
+
+  useEffect(() => {
+    list.current?.querySelector('.hv-row.selected')?.scrollIntoView({ block: 'nearest' })
+  }, [selectedSha, commits])
+
+  if (!projectId) return <div className="hv-empty">请先在左侧选择项目</div>
 
   return (
     <>
       <div className="history-side-head">
         <strong>提交历史</strong>
-        {commitsTotal > 0 && <span>{commits.length} / {commitsTotal}</span>}
+        <span aria-live="polite">{loading ? '加载中' : `${total} 条提交`}</span>
+        <button type="button" className="history-icon" aria-label="刷新提交历史" title="刷新提交历史" onClick={() => void loadCommits(query.trim(), ref)}>⟳</button>
       </div>
-      <div className="hv-list">
-        {commits.map((c) => (
-          <CommitRow key={c.sha} commit={c} />
+      <div className="history-filters">
+        <div className="history-search">
+          <IconSearch />
+          <input type="search" aria-label="搜索提交" placeholder="标题、作者或 SHA" value={query} onChange={(event) => setQuery(event.target.value)} />
+          {query && <button type="button" className="history-icon" aria-label="清除提交搜索" onClick={() => setQuery('')}><IconClose size={12} /></button>}
+        </div>
+        <select aria-label="历史分支或标签" value={ref} onChange={(event) => void loadCommits(query.trim(), event.target.value)}>
+          <option value="HEAD">当前分支 · HEAD</option>
+          {!!refs?.branches?.length && <optgroup label="分支">{refs.branches.map((branch) =>
+            <option key={branch.name} value={branch.ref ?? `refs/heads/${branch.name}`}>{branch.name}</option>
+          )}</optgroup>}
+          {!!refs?.tags?.length && <optgroup label="标签">{refs.tags.map((tag) =>
+            <option key={tag.name} value={tag.ref ?? `refs/tags/${tag.name}`}>{tag.name}</option>
+          )}</optgroup>}
+        </select>
+      </div>
+      <div className="hv-list" ref={list} aria-busy={loading} onKeyDown={(event) => {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+        const target = (event.target as HTMLElement).closest('.hv-row')
+        if (!target) return
+        const rows = Array.from(list.current?.querySelectorAll<HTMLButtonElement>('.hv-row') ?? [])
+        const next = rows[rows.indexOf(target as HTMLButtonElement) + (event.key === 'ArrowUp' ? -1 : 1)]
+        event.preventDefault()
+        next?.focus()
+        next?.click()
+      }}>
+        {groupByDay(commits).map((group) => (
+          <section className="hv-day" key={group.commits[0].sha} aria-label={group.label}>
+            <h3>{group.label}</h3>
+            {group.commits.map((commit) => <CommitRow key={commit.sha} commit={commit} />)}
+          </section>
         ))}
-        {commitsLoading && <div className="hv-loading">加载中…</div>}
-        {!commitsLoading && commits.length === 0 && (
-          <div className="hv-empty">暂无提交记录（或该项目不是 Git 仓库）</div>
+        {loading && <div className="hv-loading" role="status">正在读取提交…</div>}
+        {error && <div className="hv-empty" role="alert">{error}</div>}
+        {!loading && !error && commits.length === 0 && (
+          <div className="hv-empty">{search ? '没有匹配的提交' : '当前引用暂无提交'}</div>
         )}
-        {!commitsLoading && commits.length > 0 && commits.length < commitsTotal && (
-          <button className="hv-more" onClick={() => void loadMoreCommits()}>
-            加载更多（{commits.length}/{commitsTotal}）
-          </button>
+        {!loading && commits.length > 0 && commits.length < total && (
+          <button className="hv-more" onClick={() => void loadMoreCommits()}>加载更多（{commits.length}/{total}）</button>
         )}
       </div>
     </>
@@ -129,24 +138,34 @@ export function HistoryList() {
 }
 
 export default function HistoryView() {
-  const activeProjectId = useStore((s) => s.activeProjectId)
-  const commitsProjectId = useStore((s) => s.commitsProjectId)
-  const commitsLoading = useStore((s) => s.commitsLoading)
-  const loadCommits = useStore((s) => s.loadCommits)
+  const projectId = useStore((s) => s.activeProjectId)
+  const loadedProject = useStore((s) => s.commitsProjectId)
+  const commits = useStore((s) => s.commits)
+  const sha = useStore((s) => s.selectedSha)
+  const sidebarOpen = useStore((s) => s.annPanelOpen)
+  const { loadCommits, selectCommit, toggleAnnPanel } = useStore.getState()
+  const detailPane = useRef<HTMLDivElement>(null)
+  const index = commits.findIndex((commit) => commit.sha === sha)
 
-  // 项目切换后（或首次进入）加载第一页
   useEffect(() => {
-    if (activeProjectId && commitsProjectId !== activeProjectId && !commitsLoading) {
-      void loadCommits()
-    }
-  }, [activeProjectId, commitsProjectId, commitsLoading, loadCommits])
-
-  if (!activeProjectId) return <div className="hv-empty">请先在左侧选择项目</div>
+    if (projectId && loadedProject !== projectId) void loadCommits()
+  }, [projectId, loadedProject, loadCommits])
+  useEffect(() => { detailPane.current?.scrollTo({ top: 0 }) }, [sha, projectId])
 
   return (
     <div className="history-view">
-      <div className="hv-detail">
-        <CommitDetail />
+      <div className="history-detail-head">
+        <WorkspaceIcon view="history" />
+        <strong>提交详情</strong>
+        {index >= 0 && <>
+          <span className="history-position">{index + 1} / {commits.length}</span>
+          <button type="button" className="history-icon" aria-label="较新的提交" title="较新的提交" disabled={index === 0} onClick={() => void selectCommit(commits[index - 1].sha)}><IconChevronUp /></button>
+          <button type="button" className="history-icon" aria-label="较旧的提交" title="较旧的提交" disabled={index === commits.length - 1} onClick={() => void selectCommit(commits[index + 1].sha)}><IconChevronDown /></button>
+        </>}
+        {!sidebarOpen && <button className="btn-ghost sm history-open-list" onClick={toggleAnnPanel}><IconPanelRight /> 提交列表</button>}
+      </div>
+      <div className="hv-detail" ref={detailPane}>
+        <CommitDetail key={`${projectId}:${sha}`} />
       </div>
     </div>
   )

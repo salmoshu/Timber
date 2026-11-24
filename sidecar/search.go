@@ -105,7 +105,7 @@ func (s *server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(name))
-		if !exts[ext] || ext == ".xlsx" || ext == ".xls" {
+		if !matchesFileType(name, exts) || ext == ".xlsx" || ext == ".xls" {
 			return nil
 		}
 		info, err := d.Info()

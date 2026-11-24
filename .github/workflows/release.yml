@@ -1,100 +1,157 @@
-# 自动构建与发布：推送 v* 标签（或手动触发）→ 构建 Windows 安装包 → 发布 GitHub Release。
-# 本地应用的 electron-updater 依赖 Release 上的三件套（exe / blockmap / latest.yml）自动更新。
 name: release
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            runner: windows-latest
+            arch: x64
+          - platform: macos-arm64
+            runner: macos-15
+            arch: arm64
+          - platform: macos-x64
+            runner: macos-15-intel
+            arch: x64
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: 安装 Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
+          architecture: ${{ matrix.arch }}
           cache: pnpm
-
-      - name: 安装 Go（sidecar 构建）
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache-dependency-path: sidecar/go.sum
+      - uses: actions/cache@v4
+        with:
+          path: sidecar/bin/clangd
+          key: clangd-${{ matrix.platform }}-${{ hashFiles('scripts/build-code-tools.mjs') }}
+
+      - name: 检查版本标签与构建架构
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          [[ "$(node -p 'process.arch')" == "$TARGET_ARCH" ]]
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$(node -p "require('./package.json').version")" ]]
+          fi
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org
-
-      - name: 检查类型、Markdown 编辑与字体设置
+      - name: 检查类型与功能
+        shell: bash
         run: |
           pnpm typecheck
           pnpm test:markdown
           pnpm test:fonts
-
-      - name: 检查后台服务与图片保存
+          pnpm test:architecture
+          pnpm test:agent-options
+          pnpm test:code
+      - name: 测试本地服务
         working-directory: sidecar
         run: go test ./...
-
-      - name: 检查版本标签
-        if: github.event_name == 'push'
-        shell: pwsh
-        run: |
-          $version = node -p "require('./package.json').version"
-          if ($env:GITHUB_REF_NAME -ne "v$version") { throw "版本标签与 package.json 不一致" }
-
-      - name: 构建（sidecar + 渲染层 + 版本标记校验 + electron-builder）
-        run: node scripts/run-electron-builder.cjs
+      - name: 构建安装包
+        run: pnpm dist
         env:
           OUTPUT_DIR: release-ci
 
-      - name: 验证实际 Markdown 编辑器
-        run: pnpm test:markdown:ui
-
-      - name: 验证文件打开、主界面和单文件模式
-        run: pnpm test:app:ui
-
-      - name: 保存编辑器失败截图
-        if: failure()
+      - name: 验证 Windows 编辑器与主界面
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TIMBER_CODE_SMOKE_PACKAGE: release-ci/win-unpacked
+        run: |
+          pnpm test:markdown:ui
+          pnpm test:code:ui
+          pnpm test:app:ui
+      - name: 验证 macOS 安装包与二进制
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          apps=(release-ci/mac*/Timber.app)
+          app="${apps[0]}"
+          test -d "$app"
+          codesign --verify --deep "$app"
+          "$app/Contents/Resources/sidecar/timberd" -h
+          "$app/Contents/Resources/sidecar/clangd/bin/clangd" --version
+          hdiutil verify release-ci/Timber-*.dmg
+      - name: 保存 Windows 界面测试诊断
+        if: failure() && runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: markdown-smoke-diagnostics
+          name: windows-ui-diagnostics
           path: |
-            tmp/markdown-smoke-*/result.json
-            tmp/markdown-smoke-*/failure.png
-            tmp/app-smoke-*/result.json
-            tmp/app-smoke-*/failure.png
+            tmp/*smoke-*/result.json
+            tmp/*smoke-*/failure.png
           if-no-files-found: ignore
+      - name: 上传安装包
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: |
+            release-ci/Timber-Setup-*.exe
+            release-ci/Timber-Setup-*.exe.blockmap
+            release-ci/latest.yml
+            release-ci/Timber-*.dmg
+          if-no-files-found: error
+          compression-level: 0
 
-      - name: 确定发布标签
-        id: tag
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          if (-not $tag) { $tag = "${{ inputs.tag }}" }
-          if (-not $tag) { $tag = "v$(node -p "require('./package.json').version")" }
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-
-      - name: 发布 Release（安装包三件套）
-        shell: pwsh
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: release-assets
+          merge-multiple: true
+      - name: 发布 GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          $exe = Get-ChildItem "release-ci/Timber-Setup-*.exe" | Where-Object { $_.Name -notlike "*.blockmap" } | Select-Object -First 1
-          $blockmap = "$($exe.FullName).blockmap"
-          gh release create $env:TAG $exe.FullName $blockmap "release-ci/latest.yml" `
-            --title "Timber $env:TAG" --notes-file release-notes.md --latest `
-            2>&1 | Write-Host
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "release 已存在，改为覆盖上传资产"
-            gh release upload $env:TAG $exe.FullName $blockmap "release-ci/latest.yml" --clobber
-          }
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          assets=(
+            "release-assets/Timber-Setup-$version.exe"
+            "release-assets/Timber-Setup-$version.exe.blockmap"
+            "release-assets/latest.yml"
+            "release-assets/Timber-$version-arm64.dmg"
+            "release-assets/Timber-$version-x64.dmg"
+          )
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --verify-tag \
+              --title "Timber $tag" --notes-file release-notes.md --latest
+          fi

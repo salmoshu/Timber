@@ -26,7 +26,7 @@ export interface ApiOpts {
   onEvent?: (event: Record<string, unknown>) => void
 }
 
-async function readNdjson<T>(response: Response, onEvent: ApiOpts['onEvent']): Promise<T> {
+async function readNdjson<T>(response: Response, { onEvent, signal }: ApiOpts): Promise<T> {
   if (!response.body) throw new Error('AI 服务未返回过程流')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -44,17 +44,31 @@ async function readNdjson<T>(response: Response, onEvent: ApiOpts['onEvent']): P
       onEvent?.(event)
     }
   }
-  while (true) {
-    const { done, value } = await reader.read()
-    buffer += decoder.decode(value, { stream: !done })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-    lines.forEach(consume)
-    if (done) break
+  const cancel = () => { void reader.cancel().catch(() => {}) }
+  signal?.addEventListener('abort', cancel, { once: true })
+  try {
+    signal?.throwIfAborted()
+    while (!hasResult) {
+      const { done, value } = await reader.read()
+      signal?.throwIfAborted()
+      buffer += decoder.decode(value, { stream: !done })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        consume(line)
+        if (hasResult) break
+      }
+      if (done) {
+        if (!hasResult) consume(buffer)
+        break
+      }
+    }
+    if (!hasResult) throw new Error('AI 服务连接中断，请重试')
+    return result as T
+  } finally {
+    signal?.removeEventListener('abort', cancel)
+    cancel()
   }
-  consume(buffer)
-  if (!hasResult) throw new Error('AI 服务连接中断，请重试')
-  return result as T
 }
 
 export async function apiWith<T = unknown>(
@@ -87,7 +101,7 @@ export async function apiWith<T = unknown>(
     throw new Error(data.error ?? `HTTP ${r.status}`)
   }
   if (opts?.onEvent && (r.headers.get('content-type') ?? '').includes('application/x-ndjson')) {
-    return readNdjson<T>(r, opts.onEvent)
+    return readNdjson<T>(r, opts)
   }
   return (await r.json().catch(() => ({}))) as T
 }
@@ -118,13 +132,13 @@ export type ApiCall = <T = unknown>(
 /** git log 分页列表 */
 export async function gitLog(
   id: string,
-  skip = 0,
-  limit = 100,
+  { skip = 0, limit = 100, query = '', ref = 'HEAD', signal }: { skip?: number; limit?: number; query?: string; ref?: string; signal?: AbortSignal },
   call: ApiCall = api
-): Promise<{ commits: CommitInfo[]; total: number }> {
-  return call<{ commits: CommitInfo[]; total: number }>(
+): Promise<{ commits?: CommitInfo[]; total?: number; error?: string }> {
+  const params = new URLSearchParams({ limit: String(limit), skip: String(skip), q: query, ref })
+  return call(
     'GET',
-    `/api/projects/${id}/git/log?limit=${limit}&skip=${skip}`
+    `/api/projects/${id}/git/log?${params}`, undefined, { signal }
   )
 }
 
@@ -226,12 +240,24 @@ export async function entireSearch(
 
 // ---- AI 架构图（sidecar 生成 archify spec；优先 OpenAI 兼容接口，回退本机 agent CLI） ----
 
+export interface AiArchUsage {
+  inputTokens: number
+  outputTokens: number
+}
+
+export interface AiConversationExchange {
+  prompt: string
+  answer: string
+}
+
 export interface AiArchProgress {
   stage: string
   status?: 'running' | 'done' | 'error'
   label: string
   detail?: string
   toolId?: string
+  text?: string
+  usage?: AiArchUsage
 }
 
 /** AI 架构生成结果；ok:false 时 error 分层：no-cli / exec / timeout / parse / api */
@@ -270,24 +296,32 @@ export async function archAiGenerate(
     options?: AiArchAgentOptions
     context: import('./components/ArchAiPanel').ArchAiContext
     ai?: import('./utils/settings').AiSettings
+    history?: AiConversationExchange[]
     onProgress?: (event: AiArchProgress) => void
   }
 ): Promise<AiArchResult> {
   return call<AiArchResult>(
     'POST',
     `/api/projects/${id}/ai/arch`,
-    { prompt, action: options?.action, agent: options?.agent, options: options?.options, context: options?.context, ref: options?.context.ref, ai: options?.ai, stream: true },
+    {
+      prompt, action: options?.action, agent: options?.agent, options: options?.options,
+      context: options?.context, ref: options?.context.ref, ai: options?.ai, stream: true, markdown: true, history: options?.history
+    },
     {
       signal,
       onEvent: (event) => {
         if (event.event !== 'progress' || typeof event.label !== 'string') return
         const status = event.status === 'running' || event.status === 'done' || event.status === 'error' ? event.status : undefined
+        const usage = event.usage as Partial<AiArchUsage> | undefined
         options?.onProgress?.({
           stage: typeof event.stage === 'string' ? event.stage : 'agent',
           status,
           label: event.label,
           detail: typeof event.detail === 'string' ? event.detail : undefined,
-          toolId: typeof event.toolId === 'string' ? event.toolId : undefined
+          toolId: typeof event.toolId === 'string' ? event.toolId : undefined,
+          text: typeof event.text === 'string' ? event.text : undefined,
+          usage: typeof usage?.inputTokens === 'number' && typeof usage.outputTokens === 'number'
+            ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens } : undefined
         })
       }
     }
@@ -302,6 +336,19 @@ export async function aiTest(
 }
 
 /** agent CLI 探测（AI 面板提示当前可用后端；远程项目探测的是远端机器） */
-export async function aiCliStatus(projectId: string, call: ApiCall = api, agent?: 'kimi' | 'codex'): Promise<{ cli: string | null }> {
-  return call<{ cli: string | null }>('GET', `/api/projects/${projectId}/ai/cli${agent ? `?agent=${agent}` : ''}`)
+export interface AiCliConnectionStatus {
+  cli: 'kimi' | 'codex' | null
+  installed: boolean
+  authenticated: boolean
+  version?: string
+  path?: string
+}
+
+export async function aiCliStatus(projectId: string | null, call: ApiCall = api, agent?: 'kimi' | 'codex', signal?: AbortSignal): Promise<AiCliConnectionStatus> {
+  const prefix = projectId ? `/api/projects/${projectId}` : '/api'
+  return call<AiCliConnectionStatus>('GET', `${prefix}/ai/cli${agent ? `?agent=${agent}` : ''}`, undefined, { signal })
+}
+
+export async function aiCliLogin(agent: 'kimi' | 'codex'): Promise<{ ok: boolean; message?: string }> {
+  return api('POST', '/api/ai/cli/login', { agent })
 }

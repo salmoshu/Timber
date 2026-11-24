@@ -55,7 +55,10 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects/{id}/arch/insights", s.auth(s.handleArchInsights))
 	mux.HandleFunc("POST /api/projects/{id}/ai/arch", s.auth(s.handleAiArch))
 	mux.HandleFunc("POST /api/ai/test", s.auth(s.handleAiTest))
+	mux.HandleFunc("GET /api/ai/cli", s.auth(s.handleAiCli))
+	mux.HandleFunc("POST /api/ai/cli/login", s.auth(s.handleAiCliLogin))
 	mux.HandleFunc("GET /api/projects/{id}/ai/cli", s.auth(s.handleAiCli))
+	mux.HandleFunc("POST /api/projects/{id}/ai/cli/login", s.auth(s.handleAiCliLogin))
 	mux.HandleFunc("GET /api/wsl/distros", s.auth(s.handleWslDistros))
 	mux.HandleFunc("GET /api/wsl/home", s.auth(s.handleWslHome))
 	mux.HandleFunc("GET /api/fs/list", s.auth(s.handleFsList))
@@ -233,19 +236,11 @@ func (s *server) handleReadDoc(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"path":    r.URL.Query().Get("path"),
-		"ext":     strings.ToLower(strings.TrimPrefix(filepath_Ext(abs), ".")),
+		"ext":     strings.ToLower(strings.TrimPrefix(filepath.Ext(abs), ".")),
 		"content": string(data),
 		"size":    info.Size(),
 		"mtime":   info.ModTime(),
 	})
-}
-
-func filepath_Ext(p string) string {
-	i := strings.LastIndex(p, ".")
-	if i < 0 {
-		return ""
-	}
-	return p[i:]
 }
 
 func (s *server) handleWriteDoc(w http.ResponseWriter, r *http.Request) {

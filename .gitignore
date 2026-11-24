@@ -8,6 +8,8 @@ sidecar/data*/
 *.log
 .DS_Store
 release-v*/
+release-ai-fix/
+release-ci/
 
 # 本地个人文件，不入库
 .zcodeignore

@@ -5,6 +5,7 @@ package main
 
 import (
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -70,20 +71,68 @@ func (s *server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 	if skip < 0 {
 		skip = 0
 	}
-	out, err := gitRun(p.Path, 60*time.Second, "log",
-		"--format="+logFormat, "--numstat",
-		"--skip="+itoa(skip), "--max-count="+itoa(limit))
-	if err != nil {
-		// 无提交的空仓库：返回空列表而非错误
-		writeJSON(w, 200, map[string]any{"ok": true, "commits": []CommitInfo{}, "total": 0})
+	ref := q.Get("ref")
+	if ref == "" {
+		ref = "HEAD"
+	}
+	if ref != "HEAD" && !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/tags/") {
+		writeError(w, 400, "无效的 Git 引用")
 		return
 	}
-	commits := parseGitLog(out)
-	total := 0
-	if out, err := gitRun(p.Path, 30*time.Second, "rev-list", "--count", "HEAD"); err == nil {
-		total, _ = strconv.Atoi(strings.TrimSpace(out))
+	head, err := gitRunContext(r.Context(), p.Path, 10*time.Second, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	if err != nil {
+		if ref == "HEAD" {
+			writeJSON(w, 200, map[string]any{"ok": true, "commits": []CommitInfo{}, "total": 0})
+		} else {
+			writeError(w, 404, "未找到分支或标签")
+		}
+		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "commits": commits, "total": total})
+	head = strings.TrimSpace(head)
+	args := []string{"log", "--format=" + logFormat, "--numstat", "--diff-merges=first-parent"}
+	total := 0
+	if query := strings.ToLower(strings.TrimSpace(q.Get("q"))); query != "" {
+		// 先搜索完整提交索引，随后只计算命中页的文件统计。
+		const searchFormat = "%H%x1f%an%x1f%ae%x1f%s"
+		out, err := gitRunContext(r.Context(), p.Path, 60*time.Second, "log", "--format="+searchFormat, head, "--")
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		matches := matchCommitLog(out, query)
+		total = len(matches)
+		if skip >= total {
+			writeJSON(w, 200, map[string]any{"ok": true, "commits": []CommitInfo{}, "total": total})
+			return
+		}
+		args = append(args, "--no-walk=unsorted")
+		args = append(args, matches[skip:min(skip+limit, total)]...)
+	} else {
+		out, err := gitRunContext(r.Context(), p.Path, 30*time.Second, "rev-list", "--count", head)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		total, _ = strconv.Atoi(strings.TrimSpace(out))
+		args = append(args, "--skip="+itoa(skip), "--max-count="+itoa(limit), head)
+	}
+	out, err := gitRunContext(r.Context(), p.Path, 60*time.Second, append(args, "--")...)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "commits": parseGitLog(out), "total": total})
+}
+
+func matchCommitLog(log, query string) []string {
+	var matches []string
+	for _, row := range strings.Split(log, "\n") {
+		sha, fields, ok := strings.Cut(row, "\x1f")
+		if ok && (strings.HasPrefix(sha, query) || strings.Contains(strings.ToLower(fields), query)) {
+			matches = append(matches, sha)
+		}
+	}
+	return matches
 }
 
 // parseGitLog 解析 --format=logFormat --numstat 的输出。
@@ -211,7 +260,7 @@ func isBuildFile(f string) bool {
 	return strings.HasSuffix(base, ".mk")
 }
 
-var shaRe = regexp.MustCompile(`^[0-9a-fA-F]{4,40}$`)
+var shaRe = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
 
 func (s *server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 	p := s.project(w, r)
@@ -278,23 +327,26 @@ func (s *server) handleGitShowDiff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "无效的提交 sha")
 		return
 	}
-	rel := strings.TrimSpace(r.URL.Query().Get("path"))
+	rel := r.URL.Query().Get("path")
 	if rel == "" {
 		writeError(w, 400, "缺少 path 参数")
 		return
 	}
-	if _, err := resolveDoc(p.Path, rel); err != nil {
-		writeError(w, 400, err.Error())
+	root, err := gitRunContext(r.Context(), p.Path, 10*time.Second, "rev-parse", "--show-toplevel")
+	if err != nil {
+		writeNotRepo(w)
 		return
 	}
-	prefix := repoPrefix(p.Path)
-	args := []string{"show", "--format=", "--no-color", "--patch", sha, "--", prefix + rel}
-	if old := strings.TrimSpace(r.URL.Query().Get("old")); old != "" && old != rel {
-		if _, err := resolveDoc(p.Path, old); err == nil {
-			args = append(args, prefix+old)
-		}
+	root = strings.TrimRight(root, "\r\n")
+	if !filepath.IsLocal(filepath.FromSlash(rel)) {
+		writeError(w, 400, "无效的文件路径")
+		return
 	}
-	out, err := gitRun(p.Path, 30*time.Second, args...)
+	args := []string{"show", "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "--diff-merges=first-parent", "--patch", sha, "--", ":(literal)" + rel}
+	if old := r.URL.Query().Get("old"); old != "" && old != rel && filepath.IsLocal(filepath.FromSlash(old)) {
+		args = append(args, ":(literal)"+old)
+	}
+	out, err := gitRunContext(r.Context(), root, 30*time.Second, args...)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -304,12 +356,12 @@ func (s *server) handleGitShowDiff(w http.ResponseWriter, r *http.Request) {
 
 // showFiles 组合 --name-status 与 --numstat（均 -z，避免路径转义问题）解析文件列表。
 func showFiles(dir, sha string) []CommitFile {
-	nsOut, err := gitRun(dir, 30*time.Second, "show", "--format=", "-z", "--name-status", sha)
+	nsOut, err := gitRun(dir, 30*time.Second, "show", "--format=", "-z", "--diff-merges=first-parent", "--name-status", sha)
 	if err != nil {
 		return []CommitFile{}
 	}
 	stats := map[string][2]int{} // path -> [ins, del]
-	if stOut, err := gitRun(dir, 30*time.Second, "show", "--format=", "-z", "--numstat", sha); err == nil {
+	if stOut, err := gitRun(dir, 30*time.Second, "show", "--format=", "-z", "--diff-merges=first-parent", "--numstat", sha); err == nil {
 		toks := strings.Split(stOut, "\x00")
 		for i := 0; i < len(toks); i++ {
 			parts := strings.SplitN(toks[i], "\t", 3)

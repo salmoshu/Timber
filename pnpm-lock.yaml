@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  monaco-editor@0.52.2: 25e34fcc5d43dd87abe61a02b45718ad35e4aa074fde6ebf2f9b01f7483c1fd8
+
 importers:
 
   .:
@@ -28,7 +31,7 @@ importers:
         version: 11.12.0
       monaco-editor:
         specifier: 0.52.2
-        version: 0.52.2
+        version: 0.52.2(patch_hash=25e34fcc5d43dd87abe61a02b45718ad35e4aa074fde6ebf2f9b01f7483c1fd8)
       pagedjs:
         specifier: ^0.4.3
         version: 0.4.3
@@ -6635,7 +6638,7 @@ snapshots:
 
   mkdirp@1.0.4: {}
 
-  monaco-editor@0.52.2: {}
+  monaco-editor@0.52.2(patch_hash=25e34fcc5d43dd87abe61a02b45718ad35e4aa074fde6ebf2f9b01f7483c1fd8): {}
 
   ms@2.1.3: {}
 

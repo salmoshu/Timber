@@ -245,9 +245,17 @@ function ImageLightbox({ info, onClose }: { info: LightboxInfo; onClose: () => v
       <img src={info.src} alt={info.alt} onClick={(event) => { event.stopPropagation(); setOriginalSize((value) => !value) }} />
     </div>
     <div className="img-lightbox-meta" onClick={(event) => event.stopPropagation()}>
-      <span>{info.original || info.alt}</span>
-      <button onClick={() => void navigator.clipboard.writeText(info.original || info.src)}>复制路径</button>
-      {window.timber && <button onClick={() => void window.timber!.copyImage(info.src)}>复制图片</button>}
+      <span title={info.original || info.alt}>{info.original || info.alt}</span>
+      <div className="img-lightbox-actions">
+        <button type="button" className="img-lightbox-action" onClick={() => void navigator.clipboard.writeText(info.original || info.src)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1.1-1.1" /></svg>
+          <span>复制路径</span>
+        </button>
+        {window.timber && <button type="button" className="img-lightbox-action" onClick={() => void window.timber!.copyImage(info.src)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></svg>
+          <span>复制图片</span>
+        </button>}
+      </div>
     </div>
   </div>
 }

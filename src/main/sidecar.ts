@@ -3,7 +3,7 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { ApiInfo } from '@shared/types'
 
@@ -22,15 +22,13 @@ export function setSidecarReadyListener(cb: (info: ApiInfo) => void): void {
 export async function startSidecar(): Promise<ApiInfo> {
   const token = lastToken || randomBytes(16).toString('hex')
   lastToken = token
-  const exe = app.isPackaged
-    ? join(process.resourcesPath, 'sidecar', 'timberd.exe')
-    : join(app.getAppPath(), 'sidecar', 'bin', 'timberd.exe')
+  const binary = process.platform === 'win32' ? 'timberd.exe' : 'timberd'
+  const assetsDir = app.isPackaged ? join(process.resourcesPath, 'sidecar') : join(app.getAppPath(), 'sidecar', 'bin')
+  const exe = join(assetsDir, binary)
   if (!existsSync(exe)) {
     throw new Error(`sidecar 二进制不存在：${exe}（请先执行 pnpm build:sidecar）`)
   }
   const dataDir = join(app.getPath('userData'), 'sidecar-data')
-  // 部署资源目录 = 二进制所在目录（timberd-linux-* 用于推送到 WSL/SSH 远端）
-  const assetsDir = dirname(exe)
 
   // 优先复用上次端口（渲染层缓存了 base/token，减少失效）；被占用则回退随机端口
   const addr = lastPort > 0 ? `127.0.0.1:${lastPort}` : '127.0.0.1:0'

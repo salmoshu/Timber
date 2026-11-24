@@ -172,7 +172,7 @@ export class UpdateService {
   private maybeAutoCheck(): void {
     if (this.autoCheckDone || !this.prefsReceived) return
     this.autoCheckDone = true
-    if (app.isPackaged && this.prefs.autoCheck) {
+    if (app.isPackaged && process.platform === 'win32' && this.prefs.autoCheck) {
       autoUpdater.checkForUpdates().catch(() => {})
     }
   }

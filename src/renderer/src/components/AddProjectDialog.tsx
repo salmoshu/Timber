@@ -17,6 +17,7 @@ const KIND_CARDS: Record<RemoteKind, { icon: string; name: string; desc: string 
 
 /** 添加项目：本地文件夹，或 zcode 式远程连接向导（选方式 → 配置 → 连接日志 → 选远程目录） */
 export default function AddProjectDialog() {
+  const supportsWsl = window.timber?.platform === 'win32' || !window.timber
   const store = useStore()
   const {
     addProjectOpen,
@@ -207,21 +208,20 @@ export default function AddProjectDialog() {
             <button className="rd-choice" onClick={() => void onPickLocal()}>
               <span className="rd-choice-icon"><IconFolder size={19} /></span>
               <span className="rd-choice-name">本地文件夹</span>
-              <span className="rd-choice-desc">导入本机目录（含 WSL/网络路径可直接粘贴）</span>
+              <span className="rd-choice-desc">{supportsWsl ? '导入本机目录或粘贴 WSL / 网络路径' : '导入本机目录'}</span>
             </button>
             <button className="rd-choice" onClick={() => setMode('kind')}>
               <span className="rd-choice-icon"><IconRemote size={19} /></span>
               <span className="rd-choice-name">远程连接</span>
-              <span className="rd-choice-desc">WSL / SSH 自动接入，Docker / 自定义 timberd 直连</span>
+              <span className="rd-choice-desc">{supportsWsl ? 'WSL / SSH 自动接入，Docker / 自定义 timberd 直连' : 'SSH 自动接入，Docker / 自定义 timberd 直连'}</span>
             </button>
           </div>
         )}
 
         {mode === 'kind' && (
           <>
-            <div className="rd-sub">选择连接方式（WSL / SSH 会自动部署 timberd 到远端）</div>
             <div className="rd-choose">
-              {(Object.keys(KIND_CARDS) as RemoteKind[]).map((k) => (
+              {(Object.keys(KIND_CARDS) as RemoteKind[]).filter((item) => supportsWsl || item !== 'wsl').map((k) => (
                 <button
                   key={k}
                   className="rd-choice"

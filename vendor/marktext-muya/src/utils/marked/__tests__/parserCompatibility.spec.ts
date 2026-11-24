@@ -24,6 +24,43 @@ function roundTrip(markdown: string) {
 }
 
 describe('markdown parser compatibility', () => {
+    it.each(['\r\n', '\r'])('normalizes %j line endings before block parsing', (lineEnding) => {
+        const lf = [
+            '---',
+            'title: Line endings',
+            '---',
+            '',
+            '# Heading',
+            '',
+            '| Name | Value |',
+            '| --- | ---: |',
+            '| first | 1 |',
+            '',
+            '- one',
+            '- two',
+            '',
+            '1. first',
+            '2. second',
+            '',
+            '```powershell',
+            '$exe = "rnx2rtkp.exe"',
+            '```',
+            '',
+        ].join('\n');
+        const parseDocument = (markdown: string) => new MarkdownToState({ ...options, frontMatter: true }).generate(markdown);
+        const states = parseDocument(lf.replace(/\n/g, lineEnding));
+
+        expect(states).toEqual(parseDocument(lf));
+        expect(states.map(state => state.name)).toEqual([
+            'frontmatter',
+            'atx-heading',
+            'table',
+            'bullet-list',
+            'order-list',
+            'code-block',
+        ]);
+    });
+
     it.each(['===', '---'])('preserves a Setext heading with trailing tabs: %s', (underline) => {
         const markdown = `Heading\n${underline}\t\n`;
         expect(roundTrip(markdown)).toEqual([{

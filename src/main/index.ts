@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, ipcMain, nativeImage, net, session, shell } from 'electron'
 import { cpSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { dirname, join, resolve, isAbsolute } from 'node:path'
+import { delimiter, dirname, join, resolve, isAbsolute } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
 import { startSidecar, stopSidecar, setSidecarReadyListener } from './sidecar.js'
 import { renderArchHtml, compareArchDelta } from './archify.js'
@@ -85,7 +85,6 @@ if (!app.requestSingleInstanceLock()) {
   }
   app.on('window-all-closed', () => {
     stopCodeService()
-    stopSidecar()
     if (process.platform !== 'darwin') app.quit()
   })
   app.on('before-quit', () => {
@@ -120,11 +119,11 @@ app.on('web-contents-created', (_e, contents) => {
   })
   // 标签快捷键：Ctrl+W / Ctrl+Tab 拦截后转发渲染层（默认会关窗口/切焦点）
   contents.on('before-input-event', (e, input) => {
-    if (input.type !== 'keyDown' || !input.control) return
-    if (input.key === 'w') {
+    if (input.type !== 'keyDown') return
+    if (input.key === 'w' && (process.platform === 'darwin' ? input.meta : input.control)) {
       e.preventDefault()
       mainWindow?.webContents.send('tab-shortcut', 'close')
-    } else if (input.key === 'Tab') {
+    } else if (input.key === 'Tab' && input.control) {
       e.preventDefault()
       mainWindow?.webContents.send('tab-shortcut', 'next')
     }
@@ -150,7 +149,9 @@ function createWindow(): void {
     height: 920,
     minWidth: 1080,
     minHeight: 680,
-    frame: false,
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 14, y: 15 } }
+      : { frame: false }),
     roundedCorners: false,
     backgroundColor: '#f7f8fb',
     show: false,
@@ -191,13 +192,19 @@ ipcMain.handle('api:info', () => {
 let codeLanguageService: CodeLanguageService | null = null
 function codeService(): CodeLanguageService {
   if (codeLanguageService) return codeLanguageService
-  const candidates = [
-    join(process.resourcesPath ?? '', 'sidecar', 'lsp', 'typescript-language-server.mjs'),
-    join(app.getAppPath(), 'sidecar', 'bin', 'lsp', 'typescript-language-server.mjs')
+  const resources = [join(process.resourcesPath, 'sidecar'), join(app.getAppPath(), 'sidecar', 'bin')]
+  const executable = process.platform === 'win32' ? 'clangd.exe' : 'clangd'
+  const explicitClangd = process.env.TIMBER_CLANGD_PATH?.trim()
+  const clangdCandidates = [
+    ...resources.map((dir) => join(dir, 'clangd', 'bin', executable)),
+    ...(process.env.PATH ?? '').split(delimiter).map((dir) => dir.replace(/^"(.*)"$/, '$1'))
+      .filter(isAbsolute).map((dir) => join(dir, executable))
   ]
-  const cliPath = candidates.find(existsSync)
-  if (!cliPath) throw new Error('TypeScript 语言服务资源缺失，请先执行 pnpm build:code-tools')
-  codeLanguageService = new CodeLanguageService(cliPath)
+  codeLanguageService = new CodeLanguageService({
+    typescriptPath: resources.map((dir) => join(dir, 'lsp', 'typescript-language-server.mjs')).find(existsSync),
+    clangdPath: explicitClangd ? (isAbsolute(explicitClangd) ? explicitClangd : undefined) : clangdCandidates.find(existsSync),
+    queryDriver: process.env.TIMBER_CLANGD_QUERY_DRIVER?.trim()
+  })
   return codeLanguageService
 }
 
@@ -220,6 +227,9 @@ ipcMain.handle('code:hover', (_event, document: CodeDocumentRef, position: CodeP
 )
 ipcMain.handle('code:document-symbols', (_event, document: CodeDocumentRef) =>
   codeService().documentSymbols(document)
+)
+ipcMain.handle('code:switch-source-header', (_event, document: CodeDocumentRef) =>
+  codeService().switchSourceHeader(document)
 )
 ipcMain.handle('code:workspace-symbols', (_event, rootPath: string, query: string, languageId?: CodeLanguageId) =>
   codeService().workspaceSymbols(rootPath, query, languageId)

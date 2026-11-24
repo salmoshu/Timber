@@ -1,6 +1,6 @@
 {
   "name": "timber",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Timber —— 项目理解工具：Git 历史 × 架构图 × 代码阅读 × 文档渲染，看清每一次提交如何塑造你的项目",
   "author": "Winchell.Hu <winchell.hu@outlook.com>",
   "license": "MIT",
@@ -18,6 +18,8 @@
     "prebuild": "node scripts/build-sidecar.mjs && node scripts/build-code-tools.mjs",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
+    "test:architecture": "node --test scripts/test-architecture.mjs",
+    "test:agent-options": "node --experimental-strip-types --test scripts/test-agent-options.mjs",
     "test:code": "node scripts/build-code-tools.mjs && node scripts/test-code-intelligence.mjs && node scripts/test-code-navigation.mjs",
     "test:code:ui": "node scripts/smoke-code.cjs",
     "test:markdown": "node scripts/test-markdown.mjs",

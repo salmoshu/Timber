@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -139,7 +141,7 @@ func TestArchitectureOptimizeRequiresSourceFacts(t *testing.T) {
 	context := json.RawMessage(`{"mode":"current","spec":{"components":[{"id":"old_ai_layout"}]}}`)
 	req := aiArchRequest{Action: "optimize", Prompt: "完全基于源码重新生成", Context: context}
 	for _, prompt := range []string{buildAiArchRequestPrompt(req), buildAiArchApiPrompt(req, "\n\n项目结构上下文：源码静态分析")} {
-		for _, text := range []string{"全量再生成", "源码、配置、Git 事实", "不要参考或沿用现有 AI 画布", "没有源码或配置证据"} {
+		for _, text := range []string{"全量再生成", "源码、配置、Git 事实", "不要参考或沿用现有 AI 画布", "没有源码或配置证据", "最多 12 个"} {
 			if !strings.Contains(prompt, text) {
 				t.Errorf("optimize prompt missing %q", text)
 			}
@@ -182,5 +184,102 @@ func TestDetectNamedAiCliAtSelectsRequestedAgent(t *testing.T) {
 	})
 	if cli == nil || cli.name != "codex" || cli.path != "/usr/local/bin/codex" {
 		t.Fatalf("unexpected CLI: %#v", cli)
+	}
+}
+
+func TestDetectNamedAiCliAtPrefersNativeKimiOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows command shim regression")
+	}
+	home := t.TempDir()
+	native := filepath.Join(home, ".kimi-code", "bin", "kimi.exe")
+	if err := os.MkdirAll(filepath.Dir(native), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(native, []byte("native"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cli := detectNamedAiCliAt(home, "kimi", func(string) (string, error) {
+		return `C:\tools\kimi.cmd`, nil
+	})
+	if cli == nil || cli.path != native {
+		t.Fatalf("command shim selected instead of native Kimi: %#v", cli)
+	}
+}
+
+func TestSingleLineAiCliPromptPreservesLaterContract(t *testing.T) {
+	prompt := "第一段\r\n\r\n第二段\n{\"diagram_type\":\"architecture\"}"
+	got := singleLineAiCliPrompt(prompt)
+	if strings.ContainsAny(got, "\r\n") || !strings.Contains(got, "第二段") || !strings.Contains(got, `"diagram_type":"architecture"`) {
+		t.Fatalf("prompt contract was not preserved: %q", got)
+	}
+}
+
+func TestAiCliAuthenticatedAtChecksCredentialsWithoutReturningSecrets(t *testing.T) {
+	for _, name := range []string{"kimi", "codex"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv(map[string]string{"kimi": "KIMI_CODE_HOME", "codex": "CODEX_HOME"}[name], "")
+			if aiCliAuthenticatedAt(name, home) {
+				t.Fatal("missing credentials reported as authenticated")
+			}
+			root := map[string]string{"kimi": ".kimi-code", "codex": ".codex"}[name]
+			relative := map[string]string{"kimi": filepath.Join("credentials", "kimi-code.json"), "codex": "auth.json"}[name]
+			credentialPath := filepath.Join(home, root, relative)
+			if err := os.MkdirAll(filepath.Dir(credentialPath), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(credentialPath, []byte(`{"tokens":{"access_token":"test-token"}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if !aiCliAuthenticatedAt(name, home) {
+				t.Fatal("nested access token was not detected")
+			}
+			if err := os.WriteFile(credentialPath, []byte(`{"tokens":{}}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if aiCliAuthenticatedAt(name, home) {
+				t.Fatal("empty credentials reported as authenticated")
+			}
+		})
+	}
+}
+
+func TestStartAiCliLoginUsesOfficialLoginCommand(t *testing.T) {
+	for _, name := range []string{"kimi", "codex"} {
+		var args []string
+		err := startAiCliLogin(context.Background(), &aiCli{name: name, path: "/usr/bin/" + name}, func(cmd *exec.Cmd) error {
+			args = append([]string(nil), cmd.Args...)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(args, " "), "login") {
+			t.Fatalf("unexpected login arguments for %s: %#v", name, args)
+		}
+	}
+}
+
+func TestShouldRetryKimiWithoutEffort(t *testing.T) {
+	cases := []struct {
+		name    string
+		cli     string
+		raw     string
+		options aiCliOptions
+		want    bool
+	}{
+		{name: "kimi rejected medium", cli: "kimi", raw: "Prompt turn ended with reason: failed", options: aiCliOptions{Effort: "medium"}, want: true},
+		{name: "kimi rejected xhigh", cli: "kimi", raw: "provider.api_error: Invalid request Error", options: aiCliOptions{Effort: "xhigh"}, want: true},
+		{name: "kimi default needs no retry", cli: "kimi", raw: "Prompt turn ended with reason: failed", want: false},
+		{name: "codex does not share retry", cli: "codex", raw: "Prompt turn ended with reason: failed", options: aiCliOptions{Effort: "medium"}, want: false},
+		{name: "other errors stay failed", cli: "kimi", raw: "network unavailable", options: aiCliOptions{Effort: "medium"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldRetryKimiWithoutEffort(tc.cli, tc.raw, tc.options); got != tc.want {
+				t.Fatalf("unexpected retry decision: got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

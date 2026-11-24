@@ -8,6 +8,7 @@ const temp = path.join(root, 'tmp', 'app-smoke-' + (process.env.TIMBER_APP_SMOKE
 const projectDir = path.join(temp, 'folder with spaces')
 const first = path.join(projectDir, '首次打开 & 空格.md')
 const second = path.join(projectDir, 'second.markdown')
+const extraDocs = Array.from({ length: 18 }, (_, index) => `overflow-${String(index + 1).padStart(2, '0')}.md`)
 
 if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
   fs.mkdirSync(temp, { recursive: true })
@@ -40,12 +41,20 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     fs.mkdirSync(path.join(temp, 'profile/sidecar-data'), { recursive: true })
     fs.mkdirSync(projectDir, { recursive: true })
     fs.writeFileSync(first, '# first-open\n\nAnnotation text.\n')
-    fs.writeFileSync(second, '# second-open\n')
+    fs.writeFileSync(second, '# second-open\n\n![large](large.png)\n')
+    fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(projectDir, 'large.png'))
     fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const answer = 42\n')
-    for (const args of [['init'], ['add', '.'], ['-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com', 'commit', '-m', 'initial']]) {
+    for (const name of extraDocs) fs.writeFileSync(path.join(projectDir, name), `# ${name}\n`)
+    const git = (...args) => {
       const result = spawnSync('git', args, { cwd: projectDir, stdio: 'pipe' })
       if (result.status !== 0) throw new Error('Git fixture setup failed: ' + result.stderr)
     }
+    git('init')
+    git('add', '.')
+    git('-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com', 'commit', '-m', 'initial')
+    git('tag', 'smoke-base')
+    fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const answer = 43\n')
+    git('-c', 'user.name=Smoke', '-c', 'user.email=smoke@example.com', 'commit', '-am', 'fix: update answer')
     fs.writeFileSync(path.join(temp, 'profile/sidecar-data/projects.json'), JSON.stringify({ projects: [{ id: 'smoke-folder', name: 'Project folder', path: projectDir, addedAt: new Date().toISOString(), docCount: 2 }] }))
   }
   let win
@@ -54,6 +63,17 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
   const screenshotWarnings = []
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
   const evaluate = source => win.webContents.executeJavaScript(source, true)
+  const choose = (selector, value) => evaluate(`(() => {
+    const select = document.querySelector(${JSON.stringify(selector)})
+    select.value = ${JSON.stringify(value)}
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  const chooseView = value => choose('.tb-view-select', value)
+  const fill = (selector, value) => evaluate(`(() => {
+    const input = document.querySelector(${JSON.stringify(selector)})
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value').set.call(input, ${JSON.stringify(value)})
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
   const screenshot = async (name, optional = false) => {
     // Wake a hidden compositor before taking the review image. A capture without
     // priming can return the previous page, and an invisible RAF can stay paused.
@@ -109,7 +129,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => { win = BrowserWindow.getAllWindows()[0]; return !!win }, 'Main window was not created')
       win.webContents.on('console-message', (_event, level, message) => { if (level >= 3) consoleErrors.push(message) })
       await wait(() => evaluate("document.querySelector('.prose')?.textContent.includes('first-open')").catch(() => false), 'Cold-start Markdown argument was not opened')
-      check(await evaluate("[...document.querySelectorAll('.tb-view')].filter(button => ['架构','历史'].includes(button.textContent)).every(button => button.disabled)"), 'Project features are enabled for a single file')
+      check(await evaluate("document.querySelector('.tb-view-select').value === 'resources' && [...document.querySelectorAll('.tb-view-select option:disabled')].map(option => option.value).join(',') === 'architecture,history'"), 'Project features are enabled for a single file')
       check(await evaluate("!document.querySelector('.writing-toolbar, .ann-pop')"), 'Removed Timber toolbars remain')
       check(await evaluate("document.querySelector('[aria-label=\"源码模式\"]')?.getAttribute('role') === 'switch' && document.querySelector('[aria-label=\"源码模式\"]')?.querySelectorAll('svg').length === 2 && document.querySelector('[aria-label=\"源码模式\"]')?.textContent.trim() === '' && document.querySelector('[aria-label=\"分页预览\"]')?.tagName === 'BUTTON' && document.querySelector('[aria-label=\"分页预览\"]')?.hasAttribute('aria-pressed') && document.querySelector('[aria-label=\"分页预览\"]')?.querySelector('svg') && document.querySelector('[aria-label=\"分页预览\"]')?.textContent.trim() === ''"), 'Read/source switch and page preview are not accessible icon controls')
       checks.push('cold-start file argument with Chinese, spaces and ampersand; single-file feature gates')
@@ -138,7 +158,8 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       key('A', ['control'])
       await win.webContents.insertText('# edited-native\n')
       await wait(() => evaluate("document.querySelector('.CodeMirror')?.textContent.includes('edited-native')"), 'Native source input did not reach the editor')
-      check(await evaluate("document.querySelector('.titlebar').getBoundingClientRect().height === 44"), 'Titlebar does not use the standard 44px height')
+      const titlebarHeight = await evaluate("document.querySelector('.titlebar').getBoundingClientRect().height")
+      check(Math.abs(titlebarHeight - 44) < 1, 'Titlebar does not use the standard 44px height: ' + titlebarHeight)
       check(await evaluate(`(() => {
         const preview = document.querySelector('.reader-preview-button').getBoundingClientRect()
         return [...document.querySelectorAll('.tabs-actions .rt-btn')].every(button => {
@@ -196,9 +217,33 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, '自定义架构提示词')
         input.dispatchEvent(new Event('input', {bubbles:true}))
       })()`)
-      await evaluate("[...document.querySelectorAll('.st-prompt-actions button')].find(button => button.textContent === '恢复默认').click()")
+      await evaluate("[...document.querySelectorAll('.ai-settings-heading button')].find(button => button.textContent === '恢复默认').click()")
       check(await evaluate("document.querySelector('[aria-label=\"一键优化提示词\"]').value") === defaultPrompt, 'Optimization prompt reset did not restore the default')
       checks.push('configurable source-backed optimization prompt and reset')
+      await evaluate(`(() => {
+        const originalFetch = window.fetch.bind(window)
+        window.__agentLoginCalls = 0
+        window.__agentStatusOriginal = originalFetch
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const agent = /[?&]agent=(kimi|codex)(?:&|$)/.exec(url)?.[1]
+          if (url.includes('/ai/cli/login')) {
+            window.__agentLoginCalls++
+            return Promise.resolve(new Response(JSON.stringify({ ok: true, message: 'login mocked' }), { status: 202, headers: { 'Content-Type': 'application/json' } }))
+          }
+          if (agent) return Promise.resolve(new Response(JSON.stringify({ ok: true, cli: agent, installed: true, authenticated: false }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+          return originalFetch(input, init)
+        }
+      })()`)
+      await wait(() => evaluate("[...document.querySelectorAll('.ai-settings-heading button')].some(button => button.textContent === '重新检测' && !button.disabled)"), 'Initial Agent status check did not settle')
+      await evaluate("[...document.querySelectorAll('.ai-settings-heading button')].find(button => button.textContent === '重新检测').click()")
+      await wait(() => evaluate("document.querySelectorAll('.st-agent-card').length === 2 && [...document.querySelectorAll('.st-agent-status')].every(status => status.textContent === '未登录')"), 'Direct Kimi and Codex agent cards did not load their connection state')
+      await evaluate("[...document.querySelectorAll('.st-agent-card')].find(card => card.textContent.includes('Kimi Code')).querySelector('.btn-primary').click()")
+      await wait(() => evaluate("window.__agentLoginCalls === 1"), 'Agent card did not invoke the login endpoint')
+      await fill('[aria-label="Codex 模型"]', 'codex-default-smoke')
+      check(await evaluate("JSON.parse(localStorage.getItem('timber-settings')).aiAgent.providers.codex.model === 'codex-default-smoke'"), 'AI defaults were not persisted')
+      await evaluate("window.fetch = window.__agentStatusOriginal; undefined")
+      checks.push('Kimi/Codex cards expose direct connection state and login action without launching a real login in tests')
       await evaluate("document.querySelector('[data-section=\"editor\"]').click()")
       await wait(() => evaluate("!!document.querySelector('.editor-settings .typography-settings') && !!document.querySelector('#editor-codeBlockLineNumbers')"), 'Editor settings do not include fonts and behavior controls')
       const fonts = await evaluate('window.timber.listFontFamilies()')
@@ -331,7 +376,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       checks.push('actual second process forwards Markdown to the existing application')
 
       await evaluate("[...document.querySelectorAll('.proj-item')].find(button => button.textContent.includes('Project folder')).click()")
-      await wait(() => evaluate("[...document.querySelectorAll('.tb-view')].filter(button => ['架构','历史'].includes(button.textContent)).every(button => !button.disabled)"), 'Project folder did not enable architecture/history')
+      await wait(() => evaluate("document.querySelectorAll('.tb-view-select option:disabled').length === 0"), 'Project folder did not enable architecture/history')
       await wait(() => evaluate("!!document.querySelector('.tree-doc .doc-icon')"), 'Project file tree did not finish loading')
       check(await evaluate(`(() => {
         const icon = document.querySelector('.tree-doc .doc-icon')?.getBoundingClientRect()
@@ -359,62 +404,185 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       })()`)
       await wait(() => evaluate("[...document.querySelectorAll('.tree-dir .dir-name')].some(name => name.textContent === 'empty-smoke')"), 'New empty folder is missing from the file tree')
       checks.push('centered file-tree rows, unobstructed tab menu and visible empty directories')
+      for (const name of extraDocs) {
+        await evaluate(`document.querySelector('.tree-doc[title="${name}"]').dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))`)
+      }
+      await wait(() => evaluate("document.querySelectorAll('.doc-tab').length >= 18 && !!document.querySelector('.tabs-overflow')"), 'Tab overflow controls did not appear')
+      check(await evaluate("getComputedStyle(document.querySelector('.tabs-scroll')).scrollbarWidth === 'none'"), 'The old scrollbar remains visible')
+      const beforeScroll = await evaluate("document.querySelector('.tabs-scroll').scrollLeft")
+      await evaluate("document.querySelector('[aria-label=\"向左滚动标签\"]').click()")
+      await wait(() => evaluate(`document.querySelector('.tabs-scroll').scrollLeft < ${beforeScroll}`), 'Tab arrow did not scroll the tab strip')
+      await wait(() => evaluate("document.querySelector('.prose')?.textContent.includes('overflow-18.md')"), 'The active overflow tab did not load')
+      await evaluate("document.querySelector('[aria-label=\"源码模式\"]').click()")
+      await wait(() => evaluate("!!document.querySelector('.CodeMirror')?.CodeMirror"), 'Source editor did not mount for the active tab')
+      await evaluate("document.querySelector('.CodeMirror').CodeMirror.setValue('# unsaved tab draft\\n')")
+      const requestCloseAll = async () => {
+        await evaluate("document.querySelector('.doc-tab.active').dispatchEvent(new MouseEvent('contextmenu', { bubbles:true, cancelable:true, clientX:420, clientY:92 }))")
+        await evaluate("[...document.querySelectorAll('.ctx-item')].find(button => button.textContent === '关闭所有标签').click()")
+      }
+      await requestCloseAll()
+      await wait(() => evaluate("document.querySelector('#dialog-description')?.textContent.includes('未保存')"), 'Close all tabs did not confirm unsaved changes')
+      await evaluate("document.querySelector('.app-dialog [data-cancel]').click()")
+      check(await evaluate("document.querySelectorAll('.doc-tab').length >= 18 && !!document.querySelector('.tab-close.dirty')"), 'Canceling close all lost the open tabs or unsaved edit')
+      await requestCloseAll()
+      await evaluate("document.querySelector('.app-dialog button[type=submit]').click()")
+      await wait(() => evaluate("!document.querySelector('.doc-tab, .tabs-overflow')"), 'Close all tabs left documents or controls behind')
+      check(fs.readFileSync(path.join(projectDir, extraDocs.at(-1)), 'utf-8') === '# overflow-18.md\n', 'Closing all tabs wrote a discarded edit to disk')
+      checks.push('scrollable overflow controls, close all tabs and unsaved changes confirmation')
       await evaluate(`(() => {
         const originalFetch = window.fetch.bind(window)
         window.fetch = (input, init) => {
           const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
           const agent = url.includes('/ai/cli') && /[?&]agent=(kimi|codex)(?:&|$)/.exec(url)?.[1]
-          if (agent) return Promise.resolve(new Response(JSON.stringify({ ok: true, cli: agent }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+          if (agent) return Promise.resolve(new Response(JSON.stringify({ ok: true, cli: agent, installed: true, authenticated: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
           return originalFetch(input, init)
         }
         window.__archRenderOriginal = window.timber.archRender
         window.timber.archRender = (...args) => new Promise(resolve => setTimeout(() => resolve(window.__archRenderOriginal(...args)), 900))
         return undefined
       })()`)
-      await evaluate("[...document.querySelectorAll('.tb-view')].find(button => button.textContent === '架构').click()")
+      await chooseView('architecture')
       await wait(() => evaluate("document.querySelector('.av-load-progress')?.getAttribute('aria-valuenow') === '65'"), 'Architecture initialization did not reach the data-ready progress stage')
       check(await evaluate("document.querySelector('.av-load-progress-track span')?.style.width === '65%'"), 'Architecture progress bar is not rendering its stage percentage')
       check(await evaluate("document.querySelector('.av-ai-title')?.textContent === 'AI 对话' && !!document.querySelector('.av-ai-optimize') && !document.querySelector('.av-ai-footnote') && ![...document.querySelectorAll('.av-ai-mode button')].length"), 'AI panel did not merge into a unified conversation with one-click optimization')
       check(await evaluate("document.querySelector('.architecture-sidebar .av-ai-panel') && !document.querySelector('.arch-view .av-ai-panel') && !document.querySelector('.tb-set[title=\"AI 对话侧栏\"]').disabled"), 'AI conversation did not move to the reusable application right sidebar')
-      check(await evaluate("document.querySelector('.av-ai-optimize path')?.getAttribute('d') !== 'M12 5v14M5 12h14' && document.querySelector('.av-ai-resize-handle')?.getAttribute('role') === 'separator' && getComputedStyle(document.querySelector('.av-ai-input')).resize === 'none'"), 'Optimization icon or input resize anchor was not updated')
-      await evaluate("document.querySelector('.av-ai-resize-handle').focus(); document.querySelector('.av-ai-resize-handle').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowUp',bubbles:true,cancelable:true}))")
-      await wait(() => evaluate("document.querySelector('.av-ai-input').style.height === '112px'"), 'Input resize anchor did not adjust the textarea height')
-      check(await evaluate("getComputedStyle(document.querySelector('.av-ai-model-field')).display === 'none'"), 'Compact AI sidebar still shows crowded model controls')
-      await evaluate("document.querySelector('.architecture-sidebar').style.width = '560px'")
-      await wait(() => evaluate("getComputedStyle(document.querySelector('.av-ai-model-field')).display !== 'none' && getComputedStyle(document.querySelector('.av-ai-action-label')).display !== 'none'"), 'Wide AI sidebar did not reveal additional controls')
-      await evaluate("document.querySelector('.architecture-sidebar').style.width = '280px'")
-      await wait(() => evaluate("getComputedStyle(document.querySelector('.av-ai-model-field')).display === 'none'"), 'AI sidebar did not restore its compact layout')
-      checks.push('application-level AI sidebar, rocket action, top-left resize anchor and responsive controls')
-      await wait(() => evaluate("document.querySelector('[aria-label=\"架构 Agent\"] option[value=\"codex\"]') && !document.querySelector('[aria-label=\"架构 Agent\"] option[value=\"codex\"]').disabled"), 'Codex was not detected as an available agent')
-      const chooseAgent = async value => evaluate(`(() => {
-        const select = document.querySelector('[aria-label="架构 Agent"]')
-        select.value = ${JSON.stringify(value)}
-        select.dispatchEvent(new Event('change', {bubbles:true}))
-        return undefined
-      })()`)
-      await chooseAgent('codex')
-      check(await evaluate("!document.querySelector('[aria-label=\"速度\"]').disabled && !document.querySelector('[aria-label=\"权限\"]').disabled && !document.querySelector('[aria-label=\"思考强度\"]').disabled"), 'Codex speed, permission and effort controls are not enabled')
-      check(await evaluate("document.querySelector('[aria-label=\"权限\"] option[value=\"workspace-write\"]') !== null"), 'Codex workspace permission option is missing')
-      await chooseAgent('kimi')
-      check(await evaluate("document.querySelector('[aria-label=\"权限\"]').disabled && document.querySelector('[aria-label=\"权限\"]').value === 'auto' && document.querySelector('[aria-label=\"速度\"]').disabled && !document.querySelector('[aria-label=\"思考强度\"]').disabled"), 'Kimi noninteractive permission and speed constraints are not presented correctly')
+      check(await evaluate("document.querySelector('.av-ai-optimize path')?.getAttribute('d') !== 'M12 5v14M5 12h14' && !!document.querySelector('.av-ai-model-menu') && getComputedStyle(document.querySelector('.av-ai-input')).resize === 'none'"), 'Optimization icon or unified model menu was not updated')
       await evaluate(`(() => {
-        const input = document.querySelector('[aria-label="架构模型"]')
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'smoke-agent-model')
+        const input = document.querySelector('.av-ai-input')
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, 'one\\ntwo\\nthree\\nfour')
         input.dispatchEvent(new Event('input', {bubbles:true}))
       })()`)
-      check(await evaluate("JSON.parse(localStorage.getItem('timber-arch-agent-options-v1')).model === 'smoke-agent-model'"), 'Agent model selection was not persisted')
-      await chooseAgent('auto')
+      await wait(() => evaluate("document.querySelector('.av-ai-input').getBoundingClientRect().height > 64"), 'Input did not grow automatically with multiline content')
+      check(await evaluate("getComputedStyle(document.querySelector('.av-ai-current-model')).display === 'none'"), 'Compact AI sidebar still shows crowded model controls')
+      await evaluate("document.querySelector('.architecture-sidebar').style.width = '560px'")
+      await wait(() => evaluate("getComputedStyle(document.querySelector('.av-ai-current-model')).display !== 'none' && getComputedStyle(document.querySelector('.av-ai-action-label')).display !== 'none'"), 'Wide AI sidebar did not reveal additional controls')
+      await evaluate("document.querySelector('.architecture-sidebar').style.width = '280px'")
+      await wait(() => evaluate("getComputedStyle(document.querySelector('.av-ai-current-model')).display === 'none'"), 'AI sidebar did not restore its compact layout')
+      checks.push('application-level AI sidebar, rocket action, automatic input growth and responsive controls')
+      await evaluate("document.querySelector('.av-ai-model-menu > summary').click()")
+      await choose('[aria-label="架构 Agent"]', 'codex')
+      check(await evaluate("document.querySelector('[aria-label=\"架构模型\"]').value === 'codex-default-smoke' && !!document.querySelector('[aria-label=\"速度\"]') && !!document.querySelector('[aria-label=\"权限\"]')"), 'Codex defaults or runtime options are missing')
+      await choose('[aria-label="速度"]', 'priority')
+      await choose('[aria-label="权限"]', 'workspace-write')
+      await choose('[aria-label="思考强度"]', 'high')
+      await choose('[aria-label="架构 Agent"]', 'kimi')
+      check(await evaluate("!document.querySelector('[aria-label=\"速度\"], [aria-label=\"权限\"]') && !document.querySelector('[aria-label=\"架构模型\"]').value && !!document.querySelector('[aria-label=\"思考强度\"] option[value=\"max\"]')"), 'Kimi is showing unsupported Codex options')
+      await fill('[aria-label="架构模型"]', 'kimi-session-smoke')
+      await choose('[aria-label="架构 Agent"]', 'codex')
+      check(await evaluate("document.querySelector('[aria-label=\"速度\"]').value === 'priority' && document.querySelector('[aria-label=\"权限\"]').value === 'workspace-write' && document.querySelector('[aria-label=\"思考强度\"]').value === 'high' && document.querySelector('[aria-label=\"架构模型\"]').value === 'codex-default-smoke'"), 'Switching providers dropped the existing per-provider preferences')
+      await choose('[aria-label="架构 Agent"]', 'kimi')
+      check(await evaluate("document.querySelector('[aria-label=\"架构模型\"]').value === 'kimi-session-smoke'"), 'Kimi session model was not restored')
       await screenshot('architecture-agent-options.png', true)
-      checks.push('Kimi and Codex expose their actual model, effort, speed and permission capabilities')
+      checks.push('AI settings and per-conversation Kimi/Codex options remain independent')
       await wait(() => evaluate("!!document.querySelector('.av-frame')"), 'Architecture diagram did not render after initialization')
       await evaluate("window.timber.archRender = window.__archRenderOriginal; undefined")
       check(await evaluate("!document.querySelector('.av-load-progress')"), 'Architecture progress stayed visible after rendering completed')
       checks.push('real architecture initialization progress and unified AI conversation')
-      await evaluate("[...document.querySelectorAll('.tb-view')].find(button => button.textContent === '历史').click()")
-      await wait(() => evaluate("document.querySelector('.tb-view.active')?.textContent === '历史'"), 'Folder history view did not open')
+      await evaluate(`(() => {
+        window.__archOriginalFetch = window.fetch.bind(window)
+        window.__archRequests = []
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          if (!url.includes('/ai/arch')) return window.__archOriginalFetch(input, init)
+          window.__archRequests.push(JSON.parse(init.body))
+          const index = window.__archRequests.length
+          const encoder = new TextEncoder()
+          const stream = new ReadableStream({
+            start(controller) {
+              const emit = value => controller.enqueue(encoder.encode(JSON.stringify(value) + '\\n'))
+              emit({ event: 'progress', stage: 'tool', status: 'running', label: '执行命令', detail: 'git status', toolId: 'smoke-tool' })
+              if (index >= 3) return
+              setTimeout(() => {
+                emit({ event: 'progress', stage: 'tool', status: 'done', label: '工具执行完成', detail: 'clean', toolId: 'smoke-tool' })
+                emit({ event: 'progress', stage: 'answer', status: 'running', label: '正在整理回答', text: '**模拟**' })
+              }, 500)
+              setTimeout(() => {
+                emit({ event: 'result', result: { ok: true, answer: '**模拟**完成 ' + index, backend: 'cli', cli: 'kimi' } })
+                controller.close()
+              }, 1000)
+            }
+          })
+          return Promise.resolve(new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } }))
+        }
+      })()`)
+      await choose('[aria-label="会话模式"]', 'ask')
+      await fill('.av-ai-input', '当前架构如何工作？')
+      await evaluate("document.querySelector('[aria-label=\"发送\"]').click()")
+      await wait(() => evaluate("document.querySelector('.av-ai-live-time')?.textContent.length > 0 && document.querySelector('.av-ai-live-detail')?.textContent === 'git status'"), 'Live Agent stage, elapsed time and tool preview did not render')
+      await wait(() => evaluate("document.querySelector('.av-ai-answer strong')?.textContent === '模拟' && !!document.querySelector('.av-ai-live')"), 'Partial Markdown did not render while the request was running')
+      await wait(() => evaluate("document.querySelector('.av-ai-answer')?.textContent === '模拟完成 1'"), 'Streamed Agent answer did not complete')
+      await fill('.av-ai-input', '进一步说明调用链')
+      await evaluate("document.querySelector('[aria-label=\"发送\"]').click()")
+      await wait(() => evaluate("document.querySelectorAll('.av-ai-answer').length === 2 && document.querySelector('.ai-turn:last-child .av-ai-answer')?.textContent === '模拟完成 2'"), 'A follow-up replaced the previous turn or did not finish')
+      check(await evaluate("window.__archRequests[1]?.history?.[0]?.prompt === '当前架构如何工作？' && window.__archRequests[1]?.options.model === 'kimi-session-smoke'"), 'A follow-up did not carry the session context and model')
+      await fill('.av-ai-input', '停止这轮请求')
+      await evaluate("document.querySelector('[aria-label=\"发送\"]').click()")
+      await wait(() => evaluate("window.__archRequests.length === 3 && !!document.querySelector('[aria-label=\"停止当前请求\"]')"), 'Stop control did not appear')
+      await evaluate("document.querySelector('[aria-label=\"停止当前请求\"]').click()")
+      await wait(() => evaluate("document.querySelector('.ai-turn:last-child .ai-outcome')?.textContent === '已停止'"), 'Stopping a turn lost its status')
+      const sessionId = await evaluate("document.querySelector('.ai-thread-select').value")
+      await evaluate("document.querySelector('[aria-label=\"新建会话\"]').click()")
+      await wait(() => evaluate("document.querySelectorAll('.ai-thread-select option').length === 2 && !document.querySelector('.ai-turn')"), 'The new thread shows previous messages')
+      await fill('.av-ai-input', '保留的草稿')
+      await chooseView('history')
+      await wait(() => evaluate("!!document.querySelector('.hv-row.selected') && document.querySelector('.cd-subject')?.textContent === 'fix: update answer'"), 'History did not load and select the newest commit')
+      await chooseView('architecture')
+      await wait(() => evaluate("document.querySelector('.av-ai-input')?.value === '保留的草稿'"), 'Leaving the architecture view did not persist the draft')
+      await choose('.ai-thread-select', sessionId)
+      await wait(() => evaluate("document.querySelectorAll('.ai-turn').length === 3 && document.querySelectorAll('.av-ai-answer').length === 2"), 'Reopening a session lost turns or answers')
+      await evaluate("window.fetch = window.__archOriginalFetch; undefined")
+      checks.push('persistent project sessions, multi-turn context, Markdown streaming, tool timeline and stop without a real model call')
+
+      await chooseView('history')
+      await wait(() => evaluate("document.querySelector('.tb-view-select').value === 'history' && document.querySelectorAll('.hv-row').length === 2 && !!document.querySelector('.hv-day h3')"), 'Folder history navigation or date grouping failed')
+      await fill('[aria-label="搜索提交"]', 'initial')
+      await wait(() => evaluate("document.querySelectorAll('.hv-row').length === 1 && document.querySelector('.cd-subject')?.textContent === 'initial'"), 'Git log search did not narrow or select the result')
+      await evaluate("document.querySelector('[aria-label=\"清除提交搜索\"]').click()")
+      await wait(() => evaluate("document.querySelectorAll('.hv-row').length === 2 && !!document.querySelector('[aria-label=\"历史分支或标签\"] option[value=\"refs/tags/smoke-base\"]')"), 'Commit search reset or tag discovery failed')
+      await choose('[aria-label="历史分支或标签"]', 'refs/tags/smoke-base')
+      await wait(() => evaluate("document.querySelectorAll('.hv-row').length === 1 && document.querySelector('.cd-subject')?.textContent === 'initial'"), 'Commit history did not follow the selected tag')
+      await fill('[aria-label="筛选变更文件"]', 'index.ts')
+      await wait(() => evaluate("document.querySelectorAll('.cd-file').length === 1 && document.querySelector('.cd-path')?.textContent.trim() === 'index.ts'"), 'Changed-file filter did not work')
+      await evaluate("document.querySelector('.cd-file').click()")
+      await wait(() => evaluate("document.querySelector('.cd-diff-line.add')?.textContent.includes('answer = 42')"), 'Inline diff does not show the selected file')
+      await evaluate("document.querySelector('.cd-diff-wrap').click()")
+      check(await evaluate("document.querySelector('.cd-diff-scroll').classList.contains('wrap') && !!document.querySelector('[aria-label=\"下一处差异\"]')"), 'Diff controls did not apply wrapping or show hunk navigation')
+      checks.push('history reference and commit search, auto selection, file filtering and inline diff controls')
       await evaluate("[...document.querySelectorAll('.proj-item')].find(button => button.textContent.includes('second.markdown')).click()")
-      await wait(() => evaluate("document.querySelector('.tb-view.active')?.textContent === '资源' && document.querySelector('.prose')?.textContent.includes('second-open')"), 'Selecting a file from history did not restore the resource view')
+      await wait(() => evaluate("document.querySelector('.tb-view-select').value === 'resources' && document.querySelector('.prose')?.textContent.includes('second-open')"), 'Selecting a file from history did not restore the resource view')
       checks.push('folder features enable correctly and returning to a single file exits history')
+      await wait(() => evaluate("document.querySelector('.prose .mu-inline-image img')?.complete && document.querySelector('.prose .mu-inline-image img')?.naturalWidth > 0"), 'Fullscreen image fixture did not load')
+      await evaluate(`(() => {
+        const toolbar = document.querySelector('.mu-image-toolbar-container') || document.body.appendChild(document.createElement('div'))
+        toolbar.classList.add('mu-float-wrapper', 'mu-image-toolbar-container')
+        toolbar.style.opacity = '1'
+      })()`)
+      check(await evaluate("getComputedStyle(document.querySelector('.mu-image-toolbar-container')).display !== 'none'"), 'Muya image toolbar fixture is not visible before fullscreen')
+      await evaluate("document.querySelector('.prose .mu-inline-image img').dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,detail:2}))")
+      await wait(() => evaluate("!!document.querySelector('.img-lightbox-stage img')"), 'Image lightbox did not open in the application')
+      await pause(100)
+      const lightboxLayout = await evaluate(`(() => {
+        const image = document.querySelector('.img-lightbox-stage img').getBoundingClientRect()
+        const stage = document.querySelector('.img-lightbox-stage').getBoundingClientRect()
+        const toolbar = document.querySelector('.img-lightbox-meta')
+        const toolbarRect = toolbar.getBoundingClientRect()
+        const actions = [...document.querySelectorAll('.img-lightbox-action')]
+        return {
+          imageBottom: image.bottom, stageBottom: stage.bottom, toolbarTop: toolbarRect.top, toolbarPosition: getComputedStyle(toolbar).position,
+          muyaToolbarDisplay: getComputedStyle(document.querySelector('.mu-image-toolbar-container')).display,
+          actionCount: actions.length,
+          actionStyles: actions.map(button => ({ display: getComputedStyle(button).display, icons: button.querySelectorAll('svg').length })),
+          styledActions: actions.length === 2 && actions.every(button => ['flex', 'inline-flex'].includes(getComputedStyle(button).display) && button.querySelector('svg')),
+        }
+      })()`)
+      check(lightboxLayout.muyaToolbarDisplay === 'none', 'Muya edit/alignment toolbar is still visible over the fullscreen image: ' + JSON.stringify(lightboxLayout))
+      check(lightboxLayout.toolbarPosition === 'static' && lightboxLayout.stageBottom <= lightboxLayout.toolbarTop && lightboxLayout.imageBottom <= lightboxLayout.toolbarTop, 'Fullscreen image toolbar still covers the picture: ' + JSON.stringify(lightboxLayout))
+      check(lightboxLayout.styledActions, 'Fullscreen copy actions still use native buttons: ' + JSON.stringify(lightboxLayout))
+      await screenshot('image-lightbox.png', true)
+      await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))")
+      await wait(() => evaluate("!document.querySelector('.img-lightbox')"), 'Image lightbox did not close')
+      check(await evaluate("getComputedStyle(document.querySelector('.mu-image-toolbar-container')).display !== 'none'"), 'Muya image toolbar did not restore after fullscreen closed')
+      checks.push('fullscreen hides Muya image controls and uses separate styled copy actions without covering picture content')
       await screenshot('editor-nord.png', true)
       check(consoleErrors.length === 0, 'Renderer errors: ' + consoleErrors.join('\n'))
       fs.writeFileSync(path.join(temp, 'result.json'), JSON.stringify({ passed: true, checks, consoleErrors, screenshots: temp, screenshotWarnings }, null, 2))

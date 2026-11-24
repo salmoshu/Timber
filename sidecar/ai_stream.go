@@ -12,12 +12,19 @@ import (
 )
 
 type aiArchProgress struct {
-	Event  string `json:"event"`
-	Stage  string `json:"stage"`
-	Status string `json:"status,omitempty"`
-	Label  string `json:"label"`
-	Detail string `json:"detail,omitempty"`
-	ToolID string `json:"toolId,omitempty"`
+	Event  string       `json:"event"`
+	Stage  string       `json:"stage"`
+	Status string       `json:"status,omitempty"`
+	Label  string       `json:"label"`
+	Detail string       `json:"detail,omitempty"`
+	ToolID string       `json:"toolId,omitempty"`
+	Text   string       `json:"text,omitempty"`
+	Usage  *aiArchUsage `json:"usage,omitempty"`
+}
+
+type aiArchUsage struct {
+	InputTokens  int64 `json:"inputTokens"`
+	OutputTokens int64 `json:"outputTokens"`
 }
 
 type aiArchEmitter struct {
@@ -66,9 +73,16 @@ func (e *aiArchEmitter) result(v aiArchResponse) {
 }
 
 func processDetail(text string) string {
-	text = strings.TrimSpace(text)
-	if len(text) > 500 {
-		return text[:500] + "…"
+	return limitRunes(strings.TrimSpace(text), 500)
+}
+
+func limitRunes(text string, limit int) string {
+	count := 0
+	for offset := range text {
+		if count == limit {
+			return text[:offset] + "…"
+		}
+		count++
 	}
 	return text
 }
@@ -76,7 +90,7 @@ func processDetail(text string) string {
 func aiToolLabel(name string) string {
 	switch strings.ToLower(name) {
 	case "bash", "shell", "command_execution", "exec":
-		return "执行只读命令"
+		return "执行命令"
 	case "read", "readfile", "read_file":
 		return "读取项目文件"
 	case "glob", "list", "ls":
@@ -124,7 +138,7 @@ func parseAiCliProgress(cliName, line string) []aiArchProgress {
 		case "assistant":
 			progress := make([]aiArchProgress, 0, 2)
 			if content, ok := event["content"].(string); ok && strings.TrimSpace(content) != "" {
-				progress = append(progress, aiArchProgress{Stage: "answer", Status: "running", Label: "正在整理回答"})
+				progress = append(progress, aiArchProgress{Stage: "answer", Status: "running", Label: "正在整理回答", Detail: processDetail(content), Text: content})
 			}
 			if calls, ok := event["tool_calls"].([]any); ok {
 				for _, rawCall := range calls {
@@ -156,7 +170,15 @@ func parseAiCliProgress(cliName, line string) []aiArchProgress {
 	case "turn.started":
 		return []aiArchProgress{{Stage: "agent", Status: "running", Label: "Codex 已开始执行"}}
 	case "turn.completed":
-		return []aiArchProgress{{Stage: "agent", Status: "done", Label: "Codex 执行完成"}}
+		progress := aiArchProgress{Stage: "agent", Status: "done", Label: "Codex 执行完成"}
+		if usage, ok := event["usage"].(map[string]any); ok {
+			input, inputOK := usage["input_tokens"].(float64)
+			output, outputOK := usage["output_tokens"].(float64)
+			if inputOK && outputOK {
+				progress.Usage = &aiArchUsage{InputTokens: int64(input), OutputTokens: int64(output)}
+			}
+		}
+		return []aiArchProgress{progress}
 	case "error":
 		message, _ := event["message"].(string)
 		return []aiArchProgress{{Stage: "agent", Status: "error", Label: "Codex 执行失败", Detail: processDetail(message)}}
@@ -178,11 +200,15 @@ func parseAiCliProgress(cliName, line string) []aiArchProgress {
 				if output := codexItemText(item, "aggregated_output", "output"); output != "" {
 					detail = output
 				}
+				if item["status"] == "failed" {
+					status = "error"
+				}
 			}
 			return []aiArchProgress{{Stage: "tool", Status: status, Label: aiToolLabel(itemType), Detail: processDetail(detail), ToolID: id}}
 		case "agent_message":
 			if status == "done" {
-				return []aiArchProgress{{Stage: "answer", Status: "running", Label: "正在整理回答"}}
+				text := codexItemText(item, "text")
+				return []aiArchProgress{{Stage: "answer", Status: "running", Label: "正在整理回答", Detail: processDetail(text), Text: text}}
 			}
 		case "reasoning":
 			label := "正在分析项目结构"

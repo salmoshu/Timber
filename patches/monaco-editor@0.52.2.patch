@@ -1,0 +1,21 @@
+diff --git a/esm/vs/base/browser/ui/tree/abstractTree.js b/esm/vs/base/browser/ui/tree/abstractTree.js
+index e0ce7c28e1dcec30f03cd623b19bfe38d161205e..824383ce313a030af97dd383ba8cd3c37274c424 100644
+--- a/esm/vs/base/browser/ui/tree/abstractTree.js
++++ b/esm/vs/base/browser/ui/tree/abstractTree.js
+@@ -18,6 +18,7 @@ import { distinct, equals, range } from '../../../common/arrays.js';
+ import { Delayer, disposableTimeout, timeout } from '../../../common/async.js';
+ import { Codicon } from '../../../common/codicons.js';
+ import { ThemeIcon } from '../../../common/themables.js';
++import { onUnexpectedError } from '../../../common/errors.js';
+ import { SetMap } from '../../../common/map.js';
+ import { Emitter, Event, EventBufferer, Relay } from '../../../common/event.js';
+ import { fuzzyScore, FuzzyScore } from '../../../common/filters.js';
+@@ -1807,7 +1808,7 @@ export class AbstractTree {
+                     set.add(node);
+                 }
+                 activeNodesEmitter.fire([...set.values()]);
+-            });
++            }).catch(onUnexpectedError);
+         }));
+         onDidChangeActiveNodes.input = activeNodesEmitter.event;
+         if (_options.keyboardSupport !== false) {

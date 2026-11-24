@@ -3,6 +3,7 @@ import { isDocumentTabPath, useStore, type DocTab } from '../store'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import { exportActiveDocument } from '../utils/documentExport'
 import { filterDocsForProject } from '../utils/settings'
+import { IconChevronRight } from './icons'
 
 /** 文档标签栏（VSCode 语义：斜体 = 预览标签，随单击复用；双击固定）；
  *  children 渲染为行右端操作区（阅读模式|编辑模式 / 标签等）。
@@ -20,9 +21,11 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
   // 文档过滤（项目级设置）开启时，非文档标签暂时隐藏但不关闭；关闭过滤后按原位置恢复（v0.8.1）
   const docsOnly = project ? filterDocsForProject(settings, project) : false
   const visibleTabs = docsOnly ? tabs.filter((t) => isDocumentTabPath(t.path, settings)) : tabs
-  const { activateTab, closeTab, closeOtherTabs, closeTabsToRight, pinTab, reorderTabs, toast } =
+  const { activateTab, closeTab, closeOtherTabs, closeTabsToRight, closeAllTabs, pinTab, reorderTabs, toast } =
     useStore.getState()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const navRef = useRef<HTMLDivElement>(null)
+  const [scroll, setScroll] = useState({ left: false, right: false })
   const [drag, setDrag] = useState<{ from: string; over: string | null; pos: 'before' | 'after' } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; tabId: string } | null>(null)
 
@@ -30,6 +33,47 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
     const el = scrollRef.current?.querySelector('.doc-tab.active')
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [activeTabId, visibleTabs.length])
+
+  useEffect(() => {
+    const rail = scrollRef.current
+    if (!rail) return
+    const update = () => {
+      const remaining = rail.scrollWidth - rail.clientWidth
+      const room = (navRef.current?.offsetWidth ?? 0) + (navRef.current ? 1 : 0)
+      const overflow = remaining > room + 1
+      setScroll((state) => {
+        const left = overflow && rail.scrollLeft > 1
+        const right = overflow && remaining - rail.scrollLeft > 1
+        return state.left === left && state.right === right ? state : { left, right }
+      })
+    }
+    const wheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.deltaX || !event.deltaY) return
+      const remaining = rail.scrollWidth - rail.clientWidth
+      if ((event.deltaY < 0 && rail.scrollLeft <= 0) || (event.deltaY > 0 && rail.scrollLeft >= remaining - 1)) return
+      event.preventDefault()
+      rail.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 24 : 1)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(rail)
+    rail.addEventListener('scroll', update)
+    rail.addEventListener('wheel', wheel, { passive: false })
+    update()
+    return () => {
+      observer.disconnect()
+      rail.removeEventListener('scroll', update)
+      rail.removeEventListener('wheel', wheel)
+    }
+  }, [visibleTabs.length])
+
+  const scrollByPage = (direction: -1 | 1) => {
+    const rail = scrollRef.current
+    if (!rail) return
+    rail.scrollBy({
+      left: direction * Math.max(96, rail.clientWidth * 0.75),
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'
+    })
+  }
 
   /** tab 右键菜单项（VSCode 风格）；远程项目无本地文件路径，隐藏「在文件管理器中显示」 */
   const tabMenuItems = (t: DocTab): MenuItem[] => {
@@ -39,6 +83,7 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
       { key: 'close', label: '关闭', onClick: () => closeTab(t.id) },
       { key: 'close-others', label: '关闭其他标签', onClick: () => closeOtherTabs(t.id) },
       { key: 'close-right', label: '关闭右侧标签', onClick: () => closeTabsToRight(t.id) },
+      { key: 'close-all', label: '关闭所有标签', onClick: () => void closeAllTabs() },
       {
         key: 'copy-path',
         label: '复制路径',
@@ -161,6 +206,16 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
           </div>
         ))}
       </div>
+      {(scroll.left || scroll.right) && (
+        <div className="tabs-overflow" ref={navRef} role="group" aria-label="滚动标签">
+          <button type="button" aria-label="向左滚动标签" title="向左滚动标签" disabled={!scroll.left} onClick={() => scrollByPage(-1)}>
+            <IconChevronRight />
+          </button>
+          <button type="button" aria-label="向右滚动标签" title="向右滚动标签" disabled={!scroll.right} onClick={() => scrollByPage(1)}>
+            <IconChevronRight />
+          </button>
+        </div>
+      )}
       {children && <div className="tabs-actions">{children}</div>}
       {menu && menuTab && (
         <ContextMenu x={menu.x} y={menu.y} items={tabMenuItems(menuTab)} onClose={() => setMenu(null)} />

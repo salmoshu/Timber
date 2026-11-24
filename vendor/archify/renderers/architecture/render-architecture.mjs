@@ -45,6 +45,33 @@ const componentTextFit = {
   tagMinimum: 6,
 };
 
+function normalizeAutomaticCanvas() {
+  if (arch.meta?.viewBox) return;
+  const components = asArray(arch.components);
+  const positions = components.map((component) => resolveComponentPos(component, grid));
+  if (!positions.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))) return;
+  const boundaryPads = asArray(arch.boundaries).map((boundary) => Math.max(
+    boundary.pad ?? layout.boundaryPad,
+    layout.boundaryLabelBaseline + layout.boundaryLabelClearance,
+  ));
+  const origin = Math.max(layout.margin, ...boundaryPads.map((pad) => pad + 10));
+  const dx = Math.max(0, origin - Math.min(...positions.map(([x]) => x)));
+  const dy = Math.max(0, origin - Math.min(...positions.map(([, y]) => y)));
+  if (!dx && !dy) return;
+  arch.components = components.map((component, index) => ({
+    ...component,
+    pos: [positions[index][0] + dx, positions[index][1] + dy],
+  }));
+  arch.connections = asArray(arch.connections).map((connection) => ({
+    ...connection,
+    ...(Array.isArray(connection.via)
+      ? { via: connection.via.map(([x, y]) => [x + dx, y + dy]) }
+      : {}),
+    ...(Number.isFinite(connection.channelX) ? { channelX: connection.channelX + dx } : {}),
+    ...(Number.isFinite(connection.channelY) ? { channelY: connection.channelY + dy } : {}),
+  }));
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const layoutJsonMode = process.argv.includes('--layout-json');
 const cliArgs = process.argv.filter((arg) => arg !== '--layout-json');
@@ -92,6 +119,7 @@ function measureComponent(c) {
   return { ...c, x, y, width: w, height: h, cx: x + w / 2, cy: y + h / 2 };
 }
 
+normalizeAutomaticCanvas();
 const components = new Map(asArray(arch.components).map((c) => [c.id, measureComponent(c)]));
 const enforcesBoundaryTitleComposition = Boolean(arch.meta?.quality_profile);
 const componentSteps = new Map();
@@ -381,6 +409,46 @@ function resolveBoundaryTitles() {
 
 const resolvedBoundaryTitles = resolveBoundaryTitles();
 const boundaries = resolvedBoundaryTitles.boundaries;
+
+function normalizeResolvedAutomaticCanvas() {
+  if (arch.meta?.viewBox) return;
+  const boxes = [...components.values(), ...boundaries, ...connectionGeometry];
+  const minX = Math.min(...boxes.map((box) => box.x));
+  const minY = Math.min(...boxes.map((box) => box.y));
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+  const dx = Math.max(0, -minX);
+  const dy = Math.max(0, -minY);
+  if (!dx && !dy) return;
+  const move = (box) => {
+    box.x += dx;
+    box.y += dy;
+  };
+  for (const component of components.values()) {
+    move(component);
+    component.cx += dx;
+    component.cy += dy;
+    if (Array.isArray(component.pos)) component.pos = [component.x, component.y];
+  }
+  for (const boundary of [...rawBoundaries, ...boundaries]) {
+    move(boundary);
+    boundary.memberTop += dy;
+  }
+  for (const boundary of boundaries) move(boundary.title);
+  for (const connection of asArray(arch.connections)) {
+    if (!components.has(connection.from) || !components.has(connection.to)) continue;
+    for (const point of pathFor(connection).points) {
+      point[0] += dx;
+      point[1] += dy;
+    }
+  }
+  for (const box of connectionGeometry) {
+    move(box);
+    if (box.lx !== undefined) box.lx += dx;
+    if (box.ly !== undefined) box.ly += dy;
+  }
+}
+
+normalizeResolvedAutomaticCanvas();
 const compositionFrames = boundaries.map((boundary, index) => ({
   ...boundary,
   id: boundary.id || index,

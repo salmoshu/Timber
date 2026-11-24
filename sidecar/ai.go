@@ -21,8 +21,8 @@ import (
 	"time"
 )
 
-// aiArchTimeout 单次生成上限；读文件/调接口再成图，给足 3 分钟
-const aiArchTimeout = 180 * time.Second
+// aiArchTimeout 单次生成上限；读文件/调接口再成图，给足 10 分钟
+const aiArchTimeout = 10 * time.Minute
 
 // aiConfig 渲染端设置页下发的 OpenAI 兼容接口配置
 type aiConfig struct {
@@ -42,15 +42,22 @@ type aiCliOptions struct {
 	Permission string `json:"permission,omitempty"`
 }
 
+type aiConversationExchange struct {
+	Prompt string `json:"prompt"`
+	Answer string `json:"answer"`
+}
+
 type aiArchRequest struct {
-	Prompt  string          `json:"prompt"`
-	Ref     string          `json:"ref,omitempty"`
-	Action  string          `json:"action,omitempty"`
-	Agent   string          `json:"agent,omitempty"`
-	Options aiCliOptions    `json:"options,omitempty"`
-	Context json.RawMessage `json:"context,omitempty"`
-	AI      aiConfig        `json:"ai,omitempty"`
-	Stream  bool            `json:"stream,omitempty"`
+	Prompt   string                   `json:"prompt"`
+	Ref      string                   `json:"ref,omitempty"`
+	Action   string                   `json:"action,omitempty"`
+	Agent    string                   `json:"agent,omitempty"`
+	Options  aiCliOptions             `json:"options,omitempty"`
+	Context  json.RawMessage          `json:"context,omitempty"`
+	AI       aiConfig                 `json:"ai,omitempty"`
+	Stream   bool                     `json:"stream,omitempty"`
+	Markdown bool                     `json:"markdown,omitempty"`
+	History  []aiConversationExchange `json:"history,omitempty"`
 }
 
 // aiArchResponse 统一 200 返回（错误在 error 字段分层：no-cli/exec/timeout/parse/api），前端按类提示
@@ -82,9 +89,13 @@ func aiCliCandidates(home, name string) []string {
 	if home == "" {
 		return nil
 	}
-	paths := make([]string, 0, 12)
+	paths := make([]string, 0, 13)
 	if name == "kimi" {
-		paths = append(paths, filepath.Join(home, ".kimi-code", "bin", name))
+		official := filepath.Join(home, ".kimi-code", "bin", name)
+		if runtime.GOOS == "windows" {
+			paths = append(paths, official+".exe")
+		}
+		paths = append(paths, official)
 	}
 	paths = append(paths,
 		filepath.Join(home, ".local", "bin", name),
@@ -94,6 +105,9 @@ func aiCliCandidates(home, name string) []string {
 		filepath.Join(home, ".asdf", "shims", name),
 		filepath.Join(home, ".local", "share", "mise", "shims", name),
 	)
+	if runtime.GOOS == "darwin" {
+		paths = append(paths, filepath.Join("/opt/homebrew/bin", name), filepath.Join("/usr/local/bin", name))
+	}
 	appendNewestFirst := func(pattern string) {
 		matches, _ := filepath.Glob(pattern)
 		for i := len(matches) - 1; i >= 0; i-- {
@@ -106,10 +120,18 @@ func aiCliCandidates(home, name string) []string {
 }
 
 func detectNamedAiCliAt(home, name string, lookPath func(string) (string, error)) *aiCli {
+	candidates := aiCliCandidates(home, name)
+	if name == "kimi" && runtime.GOOS == "windows" {
+		for _, p := range candidates {
+			if executableAiCli(p) {
+				return &aiCli{name: name, path: p}
+			}
+		}
+	}
 	if p, err := lookPath(name); err == nil {
 		return &aiCli{name: name, path: p}
 	}
-	for _, p := range aiCliCandidates(home, name) {
+	for _, p := range candidates {
 		if executableAiCli(p) {
 			return &aiCli{name: name, path: p}
 		}
@@ -137,6 +159,83 @@ func detectNamedAiCli(name string) *aiCli {
 	return detectNamedAiCliAt(home, name, exec.LookPath)
 }
 
+func hasAiCredential(value any) bool {
+	switch current := value.(type) {
+	case map[string]any:
+		for key, item := range current {
+			switch strings.ToLower(strings.ReplaceAll(key, "_", "")) {
+			case "accesstoken", "refreshtoken", "apikey", "openaiapikey":
+				if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+					return true
+				}
+			}
+			if hasAiCredential(item) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range current {
+			if hasAiCredential(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func aiCliAuthenticatedAt(name, home string) bool {
+	var root, relative string
+	switch name {
+	case "kimi":
+		root = ".kimi-code"
+		relative = filepath.Join("credentials", "kimi-code.json")
+	case "codex":
+		root = ".codex"
+		relative = "auth.json"
+	default:
+		return false
+	}
+	base := filepath.Join(home, root)
+	envName := map[string]string{"kimi": "KIMI_CODE_HOME", "codex": "CODEX_HOME"}[name]
+	if custom := strings.TrimSpace(os.Getenv(envName)); custom != "" {
+		base = custom
+	}
+	raw, err := os.ReadFile(filepath.Join(base, relative))
+	if err != nil {
+		return false
+	}
+	var data any
+	return json.Unmarshal(raw, &data) == nil && hasAiCredential(data)
+}
+
+func startAiCliLogin(ctx context.Context, cli *aiCli, start func(*exec.Cmd) error) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		const launch = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath $env:TIMBER_LOGIN_CLI -ArgumentList 'login' -WindowStyle Normal`
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", launch)
+		cmd.Env = append(aiCliEnv(cli), "TIMBER_LOGIN_CLI="+cli.path)
+		hideWindow(cmd)
+	case "darwin":
+		const launch = `on run argv
+  set commandText to "export PATH=" & quoted form of (item 2 of argv) & ":$PATH; "
+  if (item 4 of argv) is not "" then set commandText to commandText & "export " & (item 3 of argv) & "=" & quoted form of (item 4 of argv) & "; "
+  set commandText to commandText & quoted form of (item 1 of argv) & " login"
+  tell application "Terminal"
+    activate
+    do script commandText
+  end tell
+end run`
+		homeEnv := map[string]string{"kimi": "KIMI_CODE_HOME", "codex": "CODEX_HOME"}[cli.name]
+		path := filepath.Dir(cli.path) + ":/opt/homebrew/bin:/usr/local/bin"
+		cmd = exec.CommandContext(ctx, "/usr/bin/osascript", "-e", launch, cli.path, path, homeEnv, os.Getenv(homeEnv))
+	default:
+		cmd = wrapCmd(ctx, cli.path, "login")
+		cmd.Env = aiCliEnv(cli)
+	}
+	return start(cmd)
+}
+
 // wrapCmd Windows 上 npm 垫片（.cmd/.bat）无法被 CreateProcess 直接执行，经 cmd /c 启动
 func wrapCmd(ctx context.Context, path string, args ...string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
@@ -161,7 +260,11 @@ func withAiCliPath(env []string, cliDir string) []string {
 }
 
 func aiCliEnv(cli *aiCli) []string {
-	return withAiCliPath(os.Environ(), filepath.Dir(cli.path))
+	env := os.Environ()
+	if runtime.GOOS == "darwin" {
+		env = withAiCliPath(env, "/opt/homebrew/bin:/usr/local/bin")
+	}
+	return withAiCliPath(env, filepath.Dir(cli.path))
 }
 
 // aiArchSpecRules 给模型的 spec 契约硬性要求（CLI 与 API 模式共用）。
@@ -184,7 +287,7 @@ const aiArchSpecRules = `硬性要求：
   "connections": [ { "from": "web", "to": "api", "label": "HTTP" }, { "from": "api", "to": "db" } ]
 }
 3. 字段约束：schema_version 是数字 1；cols 是 1~12 的整数；row/col 是非负整数且 col < cols；id 必须匹配 ^[a-zA-Z][a-zA-Z0-9_-]*$；type 只能是 frontend|backend|database|cloud|security|messagebus|external 之一；boundaries 的 kind 只能是 "region"；connections 的 variant 可省略，取值限 default|emphasis|security|dashed|return。
-4. 每个组件必须占唯一的 (row, col) 格子；components 建议 4~12 个；connections 的 from/to 与 boundaries 的 wraps 必须引用已声明的组件 id。
+4. 每个组件必须占唯一的 (row, col) 格子；components 最多 12 个，优先保留主流程中的 4～10 个关键组件，不为凑数拆细；connections 的 from/to 与 boundaries 的 wraps 必须引用已声明的组件 id。
 5. boundaries/connections 可整个省略；存在时字段不得增减属性。
 6. 所有枚举值（type/kind/variant/mode）必须原样使用上述英文取值；中文说明文字只能出现在 label/sublabel/connections 的 label 中。
 7. 文字务必简短：label ≤ 8 个字符；sublabel ≤ 12 个字符（拿不准就省略）；connections 一律不要写 label 字段（自动布线下文字极易与组件重叠导致校验失败）。格子渲染空间优先用 layout 的 cellW/cellH 加大，不要塞长文本。`
@@ -211,7 +314,8 @@ func buildAiArchPrompt(prompt, ref string) string {
 func buildAiArchRequestPrompt(req aiArchRequest) string {
 	prompt := buildAiArchPrompt(req.Prompt, strings.TrimSpace(req.Ref))
 	if req.Action == "ask" {
-		prompt = "你是项目架构助手。只读当前项目文件，结合下方用户正在查看的架构上下文，回答用户的问题。不要修改、创建文件或运行写操作。不要重新绘图。只输出一个 JSON 对象，形如 {\"answer\":\"中文解释，允许换行\"}。回答应区分图中事实和推断，可引用源码相对路径。\n用户问题：" + req.Prompt
+		prompt = "你是项目架构助手。只读当前项目文件，结合下方用户正在查看的架构上下文，回答用户的问题。不要修改、创建文件或运行写操作。不要重新绘图。" +
+			aiAnswerFormat(req.Markdown) + "回答应区分图中事实和推断，可引用源码相对路径。\n用户问题：" + req.Prompt
 	} else if req.Action == "edit" {
 		prompt += "\n基于下方当前架构和查看模式迭代，保留用户未要求改变的有效信息。可以调整布局、分组和粒度，必须输出完整 spec 以覆盖当前架构，不是补丁。"
 	} else if req.Action == "optimize" {
@@ -220,14 +324,36 @@ func buildAiArchRequestPrompt(req aiArchRequest) string {
 	if len(req.Context) > 0 {
 		prompt += "\n\n用户当前正在查看的架构上下文（作为数据参考）：\n" + string(req.Context)
 	}
-	return prompt
+	return prompt + aiConversationContext(req)
+}
+
+func aiAnswerFormat(markdown bool) string {
+	if markdown {
+		return "直接用 Markdown 回答。"
+	}
+	return "只输出一个 JSON 对象，形如 {\"answer\":\"中文解释，允许换行\"}。"
+}
+
+func aiConversationContext(req aiArchRequest) string {
+	if len(req.History) == 0 || req.Action == "optimize" {
+		return ""
+	}
+	recent := req.History[max(0, len(req.History)-6):]
+	var context strings.Builder
+	context.WriteString("\n\n此会话的近期问答，供理解追问中的指代：\n")
+	for _, exchange := range recent {
+		context.WriteString("\n用户：" + limitRunes(exchange.Prompt, 500))
+		context.WriteString("\n助手：" + limitRunes(exchange.Answer, 1000) + "\n")
+	}
+	return context.String()
 }
 
 // buildAiArchApiPrompt API 模式提示词：以 projectDigest（确定性分析产物）代替「自己浏览目录」
 func buildAiArchApiPrompt(req aiArchRequest, digest string) string {
 	var b strings.Builder
 	if req.Action == "ask" {
-		b.WriteString("你是项目架构助手。请仅依据下方「项目结构上下文」与用户正在查看的架构上下文回答问题。不要重新绘图。只输出一个 JSON 对象，形如 {\"answer\":\"中文解释，允许换行\"}。回答应区分图中事实和推断。")
+		b.WriteString("你是项目架构助手。请仅依据下方「项目结构上下文」与用户正在查看的架构上下文回答问题。不要重新绘图。" +
+			aiAnswerFormat(req.Markdown) + "回答应区分图中事实和推断。")
 		b.WriteString(digest)
 		b.WriteString("\n用户问题：" + req.Prompt + "\n")
 	} else {
@@ -245,7 +371,7 @@ func buildAiArchApiPrompt(req aiArchRequest, digest string) string {
 	if len(req.Context) > 0 {
 		b.WriteString("\n\n用户当前正在查看的架构上下文（作为数据参考）：\n" + string(req.Context))
 	}
-	return b.String()
+	return b.String() + aiConversationContext(req)
 }
 
 // projectDigest 为 API 模式生成项目上下文：优先复用/生成确定性架构 spec
@@ -404,12 +530,28 @@ func validateAiCliOptions(cliName string, options aiCliOptions) error {
 	return nil
 }
 
+func shouldRetryKimiWithoutEffort(cliName, raw string, options aiCliOptions) bool {
+	if cliName != "kimi" || strings.TrimSpace(options.Effort) == "" {
+		return false
+	}
+	return strings.Contains(raw, "Prompt turn ended with reason: failed") ||
+		strings.Contains(raw, "provider.api_error: Invalid request Error")
+}
+
+func singleLineAiCliPrompt(prompt string) string {
+	return strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(prompt)
+}
+
 // runAiArchCli 非交互执行 agent CLI：kimi 走 -p argv（shell:false 等价），codex 走 exec -（stdin 传 prompt）。
 // 原始输出与过程事件同时保留；回调在工具开始/结束时触发，无需等待整个进程结束。
 func runAiArchCli(ctx context.Context, cli *aiCli, dir, prompt string, options aiCliOptions, onProgress func(aiArchProgress)) (string, error) {
 	var cmd *exec.Cmd
 	env := aiCliEnv(cli)
 	if cli.name == "kimi" {
+		lowerPath := strings.ToLower(cli.path)
+		if runtime.GOOS == "windows" && (strings.HasSuffix(lowerPath, ".cmd") || strings.HasSuffix(lowerPath, ".bat")) {
+			prompt = singleLineAiCliPrompt(prompt)
+		}
 		args := []string{"-p", prompt, "--output-format", "stream-json"}
 		if model := strings.TrimSpace(options.Model); model != "" {
 			args = append(args, "--model", model)
@@ -605,7 +747,7 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 			cli = detectAiCli()
 		}
 		if cli == nil {
-			emitter.result(aiArchResponse{Ok: false, Error: "no-cli", Message: "未配置 AI：请在 设置 → AI 配置 OpenAI 兼容接口，或安装并登录 kimi / codex CLI"})
+			emitter.result(aiArchResponse{Ok: false, Error: "no-cli", Message: "未检测到可用的 Kimi Code 或 Codex CLI"})
 			return
 		}
 		if err := validateAiCliOptions(cli.name, req.Options); err != nil {
@@ -651,9 +793,21 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 		emitter.progress(aiArchProgress{Stage: "context", Status: "done", Label: "项目上下文已就绪"})
 		emitter.progress(aiArchProgress{Stage: "agent", Status: "running", Label: aiBackendLabel("cli", cli.name, "") + " 正在分析项目"})
 		var err error
-		raw, err = runAiArchCli(ctx, cli, p.Path, prompt, req.Options, emitter.progress)
+		onProgress := func(progress aiArchProgress) {
+			if req.Action != "ask" || !req.Markdown {
+				progress.Text = ""
+			}
+			emitter.progress(progress)
+		}
+		raw, err = runAiArchCli(ctx, cli, p.Path, prompt, req.Options, onProgress)
+		if shouldRetryKimiWithoutEffort(cli.name, raw, req.Options) && ctx.Err() == nil {
+			emitter.progress(aiArchProgress{Stage: "agent", Status: "running", Label: "模型未接受当前思考强度，改用默认设置重试", Detail: "原始强度：" + req.Options.Effort})
+			retryOptions := req.Options
+			retryOptions.Effort = ""
+			raw, err = runAiArchCli(ctx, cli, p.Path, prompt, retryOptions, onProgress)
+		}
 		if ctx.Err() == context.DeadlineExceeded {
-			base.Ok, base.Error, base.Message, base.Output = false, "timeout", "AI 生成超时（180 秒），可简化描述后重试", tailStr(raw, 500)
+			base.Ok, base.Error, base.Message, base.Output = false, "timeout", "AI 生成超时（10 分钟），可简化描述后重试", tailStr(raw, 500)
 			emitter.result(base)
 			return
 		}
@@ -671,6 +825,12 @@ func (s *server) handleAiArch(w http.ResponseWriter, r *http.Request) {
 
 	emitter.progress(aiArchProgress{Stage: "agent", Status: "done", Label: "Agent 执行完成"})
 	if req.Action == "ask" {
+		if req.Markdown && strings.TrimSpace(text) != "" {
+			base.Ok, base.Answer = true, strings.TrimSpace(text)
+			emitter.progress(aiArchProgress{Stage: "answer", Status: "done", Label: "回答已生成"})
+			emitter.result(base)
+			return
+		}
 		var result struct {
 			Answer string `json:"answer"`
 		}
@@ -721,7 +881,7 @@ func (s *server) handleAiTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "model": cfg.Model, "reply": tailStr(reply, 80)})
 }
 
-// handleAiCli AI 后端状态：本机 agent CLI 探测结果（渲染端在 AI 面板提示当前可用后端）
+// handleAiCli AI 后端状态：安装与凭证检测不返回任何密钥内容。
 func (s *server) handleAiCli(w http.ResponseWriter, r *http.Request) {
 	agent := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("agent")))
 	var cli *aiCli
@@ -731,8 +891,64 @@ func (s *server) handleAiCli(w http.ResponseWriter, r *http.Request) {
 		cli = detectAiCli()
 	}
 	if cli != nil {
-		writeJSON(w, 200, map[string]any{"ok": true, "cli": cli.name})
+		home, _ := os.UserHomeDir()
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		cmd := wrapCmd(ctx, cli.path, "--version")
+		cmd.Env = aiCliEnv(cli)
+		hideWindow(cmd)
+		version, _ := cmd.Output()
+		authenticated := aiCliAuthenticatedAt(cli.name, home)
+		if !authenticated && cli.name == "codex" {
+			login := wrapCmd(ctx, cli.path, "login", "status")
+			login.Env = cmd.Env
+			hideWindow(login)
+			authenticated = login.Run() == nil
+		}
+		writeJSON(w, 200, map[string]any{
+			"ok": true, "cli": cli.name, "installed": true, "authenticated": authenticated,
+			"path": cli.path, "version": processDetail(string(version)),
+		})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "cli": nil})
+	writeJSON(w, 200, map[string]any{"ok": true, "cli": nil, "installed": false, "authenticated": false})
+}
+
+// handleAiCliLogin 启动官方 CLI 的交互登录；子进程独立运行，HTTP 请求不等待登录完成。
+func (s *server) handleAiCliLogin(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Agent string `json:"agent"`
+	}
+	if err := readJSON(r, &request); err != nil {
+		writeJSON(w, 400, map[string]any{"ok": false, "message": "请求体需要包含 agent"})
+		return
+	}
+	agent := strings.ToLower(strings.TrimSpace(request.Agent))
+	if agent != "kimi" && agent != "codex" {
+		writeJSON(w, 400, map[string]any{"ok": false, "message": "不支持的 agent"})
+		return
+	}
+	cli := detectNamedAiCli(agent)
+	if cli == nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": "未检测到 " + agent + " CLI，请先安装"})
+		return
+	}
+	if runtime.GOOS == "linux" {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": "请在项目所在机器的终端运行 " + agent + " login"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	err := startAiCliLogin(ctx, cli, func(cmd *exec.Cmd) error {
+		output, err := cmd.CombinedOutput()
+		if err != nil && len(output) > 0 {
+			return fmt.Errorf("%s", processDetail(string(output)))
+		}
+		return err
+	})
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "message": "登录进程启动失败：" + err.Error()})
+		return
+	}
+	writeJSON(w, 202, map[string]any{"ok": true, "agent": agent, "message": "已启动官方登录流程；完成后请点击重新检测"})
 }

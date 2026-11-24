@@ -2,6 +2,7 @@
 // 由 ResourceView 按活动标签文件类型分发挂载（key=tab.id，切文件整体重建，无需手动复位查找条）
 import { useEffect, useMemo, useState } from 'react'
 import hljs from 'highlight.js/lib/common'
+import { buildLanguageForPath, codeLanguageForPath, usesClangd } from '@shared/code'
 import { useStore } from '../store'
 import FindBar from './FindBar'
 import TabsBar from './TabsBar'
@@ -10,9 +11,7 @@ import TabsBar from './TabsBar'
 const LANG_BY_EXT: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript', mjs: 'javascript',
   cjs: 'javascript', go: 'go', py: 'python', rs: 'rust', java: 'java', kt: 'kotlin',
-  c: 'c', cc: 'cpp', cp: 'cpp', cpp: 'cpp', cxx: 'cpp', 'c++': 'cpp', h: 'c', hpp: 'cpp', hh: 'cpp',
-  hxx: 'cpp', 'h++': 'cpp', ipp: 'cpp', inl: 'cpp', tpp: 'cpp', txx: 'cpp', cu: 'cpp', cuh: 'cpp',
-  m: 'objectivec', mm: 'objectivec', cs: 'csharp', rb: 'ruby',
+  cs: 'csharp', rb: 'ruby',
   php: 'php', swift: 'swift', scala: 'scala', sh: 'bash', ps1: 'powershell',
   css: 'css', scss: 'scss', html: 'xml', vue: 'xml', svelte: 'xml',
   md: 'markdown', markdown: 'markdown', json: 'json', yaml: 'yaml', yml: 'yaml',
@@ -52,7 +51,10 @@ export default function CodeReader({ path }: { path: string }) {
   const highlighted = useMemo(() => {
     if (content === null) return null
     const ext = (path.split('.').pop() ?? '').toLowerCase()
-    const lang = LANG_BY_EXT[ext]
+    const languageId = codeLanguageForPath(path)
+    const lang = usesClangd(languageId)
+      ? (languageId === 'objective-c' || languageId === 'objective-cpp' ? 'objectivec' : languageId)
+      : buildLanguageForPath(path) ?? LANG_BY_EXT[ext]
     try {
       if (lang && hljs.getLanguage(lang)) return hljs.highlight(content, { language: lang }).value
       return hljs.highlightAuto(content).value

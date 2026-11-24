@@ -65,7 +65,11 @@ const gitNotFound = "未找到 git 命令（请安装 Git 并确保在 PATH 中�
 
 // gitRun 在 dir 内执行 git，返回 stdout；stderr 一并包进错误便于 UI 展示。
 func gitRun(dir string, timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return gitRunContext(context.Background(), dir, timeout, args...)
+}
+
+func gitRunContext(parent context.Context, dir string, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

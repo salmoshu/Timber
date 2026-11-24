@@ -1,5 +1,6 @@
 import { askConfirm } from './utils/dialogs'
 import { create } from 'zustand'
+import { BUILD_FILE_SELECTORS, CLANGD_EXTENSIONS, buildLanguageForPath } from '@shared/code'
 import type { Project, RemoteConfig } from '@shared/types'
 import type { Annotation, AnnotationKind, ArchDeltaReceipt, ArchResult, ArchSpec, CommitDetail, CommitInfo, DocContent, DocNode } from '@shared/types'
 import { api, apiWith, apiInfo, archSpec, gitLog, gitShow, type ApiCall, type ApiOpts } from './api'
@@ -33,13 +34,12 @@ function extsQuery(): string {
 /** 源码 + 文本扩展名（代码视图树请求参数；原在 CodeView，v0.5.6 收敛到 store 供侧栏复用） */
 export const CODE_EXTS = [
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.py', '.pyi', '.rs', '.java', '.kt', '.kts',
-  '.vue', '.svelte', '.astro', '.c', '.cc', '.cp', '.cpp', '.cxx', '.c++', '.h', '.hpp', '.hh', '.hxx', '.h++',
-  '.ipp', '.inl', '.tpp', '.txx', '.cu', '.cuh', '.m', '.mm', '.cs', '.rb', '.php', '.swift',
+  '.vue', '.svelte', '.astro', ...CLANGD_EXTENSIONS, '.cs', '.rb', '.php', '.swift',
   '.dart', '.scala', '.clj', '.ex', '.exs', '.lua', '.pl', '.r',
   '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd', '.css', '.scss', '.sass', '.less', '.html', '.htm',
   '.md', '.markdown', '.mdown', '.mkd', '.mdx', '.rst', '.txt', '.json', '.jsonl', '.yaml', '.yml',
   '.toml', '.ini', '.cfg', '.conf', '.env', '.csv', '.tsv', '.log', '.sql', '.graphql', '.gql',
-  '.proto', '.properties', '.cmake', '.mk', '.gitignore', '.gitattributes', '.editorconfig',
+  '.proto', '.properties', ...BUILD_FILE_SELECTORS, '.gitignore', '.gitattributes', '.editorconfig',
   '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.xlsx', '.xls'
 ]
 
@@ -47,7 +47,7 @@ export const CODE_EXTS = [
 const READER_EXTS = new Set(['md', 'markdown', 'mdown', 'mkd', 'txt', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico', 'xlsx', 'xls'])
 
 export function isReaderPath(path: string): boolean {
-  return READER_EXTS.has((path.split('.').pop() ?? '').toLowerCase())
+  return !buildLanguageForPath(path) && READER_EXTS.has((path.split('.').pop() ?? '').toLowerCase())
 }
 
 export type ViewMode = 'read' | 'source'
@@ -130,6 +130,8 @@ const projectWorkspaces = loadProjectWorkspaces()
 
 /** 提交历史分页大小 */
 const COMMIT_PAGE_SIZE = 100
+let historyRequest: AbortController | null = null
+let commitDetailRequest = 0
 /** 架构影响懒算并发去重（sha 级） */
 const pendingImpacts = new Set<string>()
 
@@ -414,9 +416,13 @@ interface State {
   commitsLoading: boolean
   /** commits 所属项目（项目切换后需重载） */
   commitsProjectId: string | null
+  commitsQuery: string
+  commitsRef: string
+  commitsError: string | null
   selectedSha: string | null
   commitDetail: CommitDetail | null
   commitDetailLoading: boolean
+  commitDetailError: string | null
   /** 架构 spec 缓存：ref（或 sha）→ spec；archRender/archDelta 复用 */
   archSpecCache: Map<string, ArchSpec>
   /** 架构 HTML 缓存：`<projectId>:<ref或sha对>` → 自包含 HTML */
@@ -431,7 +437,7 @@ interface State {
 
   setView(v: AppView): void
   /** 重新加载提交列表（第一页） */
-  loadCommits(): Promise<void>
+  loadCommits(query?: string, ref?: string): Promise<void>
   /** 加载更多（skip 分页追加） */
   loadMoreCommits(): Promise<void>
   /** 选中提交并加载详情 */
@@ -486,6 +492,7 @@ interface State {
   closeTab(id: string): void
   /** 关闭除 id 外的所有标签（含未保存修改的标签需确认；激活标签被关时切到 id） */
   closeOtherTabs(id: string): void
+  closeAllTabs(): Promise<void>
   /** 关闭 id 右侧的所有标签（含未保存修改的标签需确认；激活标签被关时切到 id） */
   closeTabsToRight(id: string): void
   /** 固定标签（双击标签名，等效文件树双击） */
@@ -615,9 +622,13 @@ export const useStore = create<State>((set, get) => ({
   commitsTotal: 0,
   commitsLoading: false,
   commitsProjectId: null,
+  commitsQuery: '',
+  commitsRef: 'HEAD',
+  commitsError: null,
   selectedSha: null,
   commitDetail: null,
   commitDetailLoading: false,
+  commitDetailError: null,
   archSpecCache: new Map(),
   archHtmlCache: new Map(),
   commitImpactCache: new Map(),
@@ -644,23 +655,34 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setView(v) {
-    const project = get().projects.find((item) => item.id === get().activeProjectId)
+    const s = get()
+    const project = s.projects.find((item) => item.id === s.activeProjectId)
     if (v !== 'resources' && (!project || project.kind === 'file')) return
-    set({ view: v })
+    if (v !== 'resources' && s.view !== v && !s.annPanelOpen) {
+      set({ view: v, annPanelOpen: true, annPanelWidth: clamp(s.annPanelWidth, ANN_MIN_W, annDynMax(s.sidebarCollapsed, s.sidebarWidth)) })
+    } else {
+      set({ view: v })
+    }
   },
 
-  async loadCommits() {
+  async loadCommits(query = get().commitsQuery, ref = get().commitsRef) {
     const id = get().activeProjectId
     if (!id) return
-    set({ commitsLoading: true, commits: [], commitsTotal: 0, commitsProjectId: id })
+    historyRequest?.abort()
+    const request = new AbortController()
+    historyRequest = request
+    set({ commitsLoading: true, commits: [], commitsTotal: 0, commitsProjectId: id, commitsQuery: query, commitsRef: ref, commitsError: null })
     try {
-      const r = await gitLog(id, 0, COMMIT_PAGE_SIZE, apiCallFor(id))
-      if (get().activeProjectId !== id) return
-      set({ commits: r.commits ?? [], commitsTotal: r.total ?? 0, commitsLoading: false })
+      const r = await gitLog(id, { limit: COMMIT_PAGE_SIZE, query, ref, signal: request.signal }, apiCallFor(id))
+      if (request.signal.aborted || get().activeProjectId !== id) return
+      const commits = r.commits ?? []
+      set({ commits, commitsTotal: r.total ?? 0, commitsLoading: false, commitsError: r.error === 'not-a-repo' ? '当前项目不是 Git 仓库' : r.error ?? null })
+      if (!commits.some((commit) => commit.sha === get().selectedSha)) {
+        void get().selectCommit(commits[0]?.sha ?? null)
+      }
     } catch (err) {
-      if (get().activeProjectId !== id) return
-      set({ commitsLoading: false })
-      get().toast('err', `提交历史加载失败：${err}`)
+      if (request.signal.aborted || get().activeProjectId !== id) return
+      set({ commitsLoading: false, commitsError: err instanceof Error ? err.message : String(err) })
     }
   },
 
@@ -668,31 +690,33 @@ export const useStore = create<State>((set, get) => ({
     const s = get()
     const id = s.activeProjectId
     if (!id || s.commitsLoading || s.commits.length >= s.commitsTotal) return
-    set({ commitsLoading: true })
+    const request = new AbortController()
+    historyRequest = request
+    set({ commitsLoading: true, commitsError: null })
     try {
-      const r = await gitLog(id, s.commits.length, COMMIT_PAGE_SIZE, apiCallFor(id))
-      if (get().activeProjectId !== id) return
-      set({ commits: [...get().commits, ...(r.commits ?? [])], commitsTotal: r.total ?? s.commitsTotal, commitsLoading: false })
+      const r = await gitLog(id, { skip: s.commits.length, limit: COMMIT_PAGE_SIZE, query: s.commitsQuery, ref: s.commitsRef, signal: request.signal }, apiCallFor(id))
+      if (request.signal.aborted || get().activeProjectId !== id) return
+      const seen = new Set(s.commits.map((commit) => commit.sha))
+      set({ commits: [...s.commits, ...(r.commits ?? []).filter((commit) => !seen.has(commit.sha))],
+        commitsTotal: r.total ?? s.commitsTotal, commitsLoading: false, commitsError: r.error ?? null })
     } catch (err) {
-      if (get().activeProjectId !== id) return
-      set({ commitsLoading: false })
-      get().toast('err', `提交历史加载失败：${err}`)
+      if (request.signal.aborted || get().activeProjectId !== id) return
+      set({ commitsLoading: false, commitsError: err instanceof Error ? err.message : String(err) })
     }
   },
 
   async selectCommit(sha) {
-    const s = get()
-    const id = s.activeProjectId
-    set({ selectedSha: sha, commitDetail: null, commitDetailLoading: sha !== null })
+    const id = get().activeProjectId
+    const request = ++commitDetailRequest
+    set({ selectedSha: sha, commitDetail: null, commitDetailLoading: sha !== null, commitDetailError: null })
     if (!sha || !id) return
     try {
       const detail = await gitShow(id, sha, apiCallFor(id))
-      // 防止加载期间用户改选其它提交
-      if (get().activeProjectId === id && get().selectedSha === sha) set({ commitDetail: detail, commitDetailLoading: false })
+      if (!detail.commit) throw new Error('提交详情不可用')
+      if (get().activeProjectId === id && request === commitDetailRequest) set({ commitDetail: detail, commitDetailLoading: false })
     } catch (err) {
-      if (get().activeProjectId !== id) return
-      if (get().selectedSha === sha) set({ commitDetailLoading: false })
-      get().toast('err', `提交详情加载失败：${err}`)
+      if (get().activeProjectId !== id || request !== commitDetailRequest) return
+      set({ commitDetailLoading: false, commitDetailError: err instanceof Error ? err.message : String(err) })
     }
   },
 
@@ -1107,9 +1131,15 @@ export const useStore = create<State>((set, get) => ({
       // 历史/架构/代码域随项目切换清空（缓存按项目隔离，重进时重新加载）
       commits: [],
       commitsTotal: 0,
+      commitsLoading: false,
       commitsProjectId: null,
+      commitsQuery: '',
+      commitsRef: 'HEAD',
+      commitsError: null,
       selectedSha: null,
       commitDetail: null,
+      commitDetailLoading: false,
+      commitDetailError: null,
       archSpecCache: new Map(),
       archHtmlCache: new Map(),
       commitImpactCache: new Map(),
@@ -1301,6 +1331,25 @@ export const useStore = create<State>((set, get) => ({
     } else {
       set({ tabs: kept })
     }
+  },
+
+  async closeAllTabs() {
+    flushMarkdownEditor()
+    const s = get()
+    if (s.tabs.length === 0) return
+    const dirtyCount = s.tabs.filter((tab) => tab.dirty).length
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer)
+      autoSaveTimer = null
+    }
+    const confirmed = dirtyCount === 0 || await askConfirm(`有 ${dirtyCount} 个标签包含未保存的修改，关闭全部标签将丢弃这些修改。继续？`)
+    const current = get()
+    if (current.activeProjectId !== s.activeProjectId) return
+    if (!confirmed || current.tabs !== s.tabs) {
+      scheduleAutoSave()
+      return
+    }
+    set({ tabs: [], activeTabId: null, activeDoc: null, docLoading: false, docError: null, draft: '', dirty: false, annotations: [], composeQuote: null })
   },
 
   pinTab(id) {

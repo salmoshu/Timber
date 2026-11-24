@@ -123,7 +123,7 @@ export default function ArchitectureView({ aiPanelHost }: { aiPanelHost: HTMLDiv
     const result = await ensureArchSpec(ref)
     if (!result.ok) return { ref, mode, sourceError: archErrorText(result.error) }
     const context: ArchAiContext = { spec: result.spec, ref, mode: optimize ? 'current' : mode }
-    if (mode === 'delta') {
+    if (!optimize && mode === 'delta') {
       const base = await ensureArchSpec(baseRef)
       if (!base.ok) throw new Error(archErrorText(base.error))
       context.baseSpec = base.spec
@@ -348,7 +348,8 @@ export default function ArchitectureView({ aiPanelHost }: { aiPanelHost: HTMLDiv
         </div>
       </div>
       {aiPanelHost && createPortal(
-        <ArchAiPanel projectId={activeProjectId} getContext={getAiContext} onRendered={(html, spec, prompt) => {
+        <ArchAiPanel projectId={activeProjectId} projectKey={projectKey} contextRef={mode === 'delta' ? `${baseRef} → ${headRef}` : snapRef}
+          getContext={getAiContext} onRendered={(html, spec, prompt) => {
           const next = { spec, prompt, updatedAt: new Date().toISOString() }
           saveCurrentArchitecture(projectKey, next)
           setCurrent(next)

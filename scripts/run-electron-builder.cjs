@@ -39,17 +39,25 @@ function verifyBuildStamp() {
   console.log(`[dist] 版本标记校验通过：${entryFile} 含 ${pkg.version}`)
 }
 
+if (process.platform !== 'win32' && process.platform !== 'darwin') {
+  throw new Error('Timber installers are built on Windows and macOS hosts')
+}
 run('node', ['scripts/build-sidecar.mjs'])
+run('node', ['scripts/build-code-tools.mjs'])
 run('npx', ['electron-vite', 'build'])
 verifyBuildStamp()
 
-const { build, Platform } = require('electron-builder')
+const { Arch, build, Platform } = require('electron-builder')
 const publish = process.argv.includes('--publish') ? 'always' : 'never'
 const override = process.env.OUTPUT_DIR
   ? { config: { directories: { output: process.env.OUTPUT_DIR } } }
   : {}
 
-build({ targets: Platform.WINDOWS.createTarget(['nsis']), publish, ...override })
+const arch = process.arch === 'arm64' ? Arch.arm64 : Arch.x64
+const targets = process.platform === 'darwin'
+  ? Platform.MAC.createTarget(['dmg'], arch)
+  : Platform.WINDOWS.createTarget(['nsis'], arch)
+build({ targets, publish, ...override })
   .then((artifacts) => {
     console.log('构建完成，产物：')
     for (const a of artifacts) console.log('  ' + a)

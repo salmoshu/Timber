@@ -6,6 +6,7 @@ export type CodeLanguageId =
   | 'c'
   | 'cpp'
   | 'objective-c'
+  | 'objective-cpp'
 
 export interface CodePosition {
   line: number
@@ -54,8 +55,59 @@ export interface CodeServiceStatus {
   message?: string
 }
 
+const clangdLanguages = {
+  c: 'c', h: 'c',
+  cc: 'cpp', cp: 'cpp', cpp: 'cpp', cxx: 'cpp', 'c++': 'cpp',
+  hpp: 'cpp', hh: 'cpp', hxx: 'cpp', 'h++': 'cpp',
+  ipp: 'cpp', inl: 'cpp', tpp: 'cpp', txx: 'cpp',
+  ixx: 'cpp', cppm: 'cpp', ccm: 'cpp', cxxm: 'cpp', 'c++m': 'cpp',
+  cu: 'cpp', cuh: 'cpp', m: 'objective-c', mm: 'objective-cpp'
+} as const satisfies Record<string, CodeLanguageId>
+
+export const CLANGD_EXTENSIONS = Object.keys(clangdLanguages).map((ext) => `.${ext}`)
+
+export function usesClangd(languageId: CodeLanguageId | null | undefined): languageId is 'c' | 'cpp' | 'objective-c' | 'objective-cpp' {
+  return languageId === 'c' || languageId === 'cpp' || languageId === 'objective-c' || languageId === 'objective-cpp'
+}
+
+const buildFileLanguages: Record<string, string> = {
+  'cmakelists.txt': 'cmake',
+  makefile: 'makefile',
+  gnumakefile: 'makefile',
+  'meson.build': 'python',
+  'meson.options': 'python',
+  'meson_options.txt': 'python'
+}
+
+const buildExtensionLanguages: Record<string, string> = {
+  '.cmake': 'cmake', '.mk': 'makefile', '.ninja': 'ini',
+  '.sln': 'plaintext', '.slnx': 'xml', '.vcxproj': 'xml', '.vcxitems': 'xml',
+  '.props': 'xml', '.targets': 'xml', '.filters': 'xml',
+  '.clangd': 'yaml', '.clang-format': 'yaml', '.clang-tidy': 'yaml'
+}
+
+export const BUILD_FILE_SELECTORS = [
+  ...Object.keys(buildFileLanguages).map((name) => `=${name}`),
+  ...Object.keys(buildExtensionLanguages)
+]
+
+export function buildLanguageForPath(path: string): string | null {
+  const name = path.split(/[/\\]/).pop()?.toLowerCase() ?? ''
+  if (Object.hasOwn(buildFileLanguages, name)) return buildFileLanguages[name]
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return null
+  const ext = name.slice(dot)
+  return Object.hasOwn(buildExtensionLanguages, ext) ? buildExtensionLanguages[ext] : null
+}
+
 export function codeLanguageForPath(path: string): CodeLanguageId | null {
-  const ext = path.split('.').pop()?.toLowerCase()
+  const name = path.split(/[/\\]/).pop() ?? ''
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return null
+  const suffix = name.slice(dot + 1)
+  if (suffix === 'C' || suffix === 'H') return 'cpp'
+  const ext = suffix.toLowerCase()
+  if (Object.hasOwn(clangdLanguages, ext)) return clangdLanguages[ext as keyof typeof clangdLanguages]
   switch (ext) {
     case 'ts': return 'typescript'
     case 'tsx': return 'typescriptreact'
@@ -63,25 +115,6 @@ export function codeLanguageForPath(path: string): CodeLanguageId | null {
     case 'mjs':
     case 'cjs': return 'javascript'
     case 'jsx': return 'javascriptreact'
-    case 'c': return 'c'
-    case 'h': return 'c'
-    case 'cc':
-    case 'cp':
-    case 'cpp':
-    case 'cxx':
-    case 'c++':
-    case 'hpp':
-    case 'hh':
-    case 'hxx':
-    case 'h++':
-    case 'ipp':
-    case 'inl':
-    case 'tpp':
-    case 'txx':
-    case 'cu':
-    case 'cuh': return 'cpp'
-    case 'm':
-    case 'mm': return 'objective-c'
     default: return null
   }
 }

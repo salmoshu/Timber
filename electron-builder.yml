@@ -35,3 +35,15 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   include: build/file-associations.nsh
+mac:
+  artifactName: "Timber-${version}-${arch}.${ext}"
+  sign: scripts/sign-mac.cjs
+  hardenedRuntime: false
+  notarize: false
+  category: public.app-category.developer-tools
+  extendInfo:
+    NSAppleEventsUsageDescription: "Timber opens Terminal to sign in to the selected AI provider."
+  fileAssociations:
+    - ext: [md, markdown, mdown, mkd]
+      name: Markdown
+      role: Editor

@@ -2,6 +2,7 @@
 import { DOC_FORMAT_GROUPS } from '@shared/types'
 import { normalizeEditorWidth, normalizeFontStack, resolveFontStack } from '@shared/fontFamilies'
 import { THEME_PALETTES, type ThemeId } from './themePalettes'
+import { DEFAULT_AGENT_PREFERENCES, loadArchAgentPreferences, type ArchAgentPreferences } from './archAgentOptions'
 export { THEME_PALETTES, type ThemeId } from './themePalettes'
 
 /** AI 服务配置（OpenAI 兼容接口，v0.6.3）：架构 AI 助手经此生成/解释；
@@ -52,6 +53,7 @@ export interface AppSettings {
   resourceFilterDocsByProject: Record<string, boolean>
   /** AI 服务（OpenAI 兼容接口） */
   ai: AiSettings
+  aiAgent: ArchAgentPreferences
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -72,7 +74,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSaveDelayMs: 2000,
   docFormats: ['md', 'html', 'txt'],
   resourceFilterDocsByProject: {},
-  ai: { baseUrl: '', apiKey: '', model: '', architecturePrompt: DEFAULT_ARCHITECTURE_PROMPT }
+  ai: { baseUrl: '', apiKey: '', model: '', architecturePrompt: DEFAULT_ARCHITECTURE_PROMPT },
+  aiAgent: DEFAULT_AGENT_PREFERENCES
 }
 
 const SETTINGS_KEY = 'timber-settings'
@@ -164,13 +167,14 @@ export function loadSettings(): AppSettings {
         defaultMode: saved.defaultMode === 'source' || saved.defaultMode === 'edit' ? 'source' : 'read',
         docFormats: normalizeFormats(saved.docFormats),
         resourceFilterDocsByProject: normalizeFilterMap(saved.resourceFilterDocsByProject),
-        ai: normalizeAi(saved.ai)
+        ai: normalizeAi(saved.ai),
+        aiAgent: loadArchAgentPreferences(saved.aiAgent)
       }
     }
   } catch {
     /* 损坏数据回退默认 */
   }
-  return { ...DEFAULT_SETTINGS }
+  return { ...DEFAULT_SETTINGS, aiAgent: loadArchAgentPreferences() }
 }
 
 export function saveSettings(s: AppSettings): void {

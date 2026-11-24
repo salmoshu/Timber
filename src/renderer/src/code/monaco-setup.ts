@@ -4,7 +4,7 @@ import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
-import { codeLanguageForPath } from '@shared/code'
+import { buildLanguageForPath, codeLanguageForPath } from '@shared/code'
 
 let configured = false
 
@@ -23,18 +23,48 @@ export function configureMonaco(): void {
   for (const defaults of [monaco.languages.typescript.typescriptDefaults, monaco.languages.typescript.javascriptDefaults]) {
     defaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: true })
   }
+  monaco.languages.register({ id: 'cmake' })
+  monaco.languages.setMonarchTokensProvider('cmake', {
+    tokenizer: {
+      root: [
+        [/#.*$/, 'comment'],
+        [/\$\{[^}]*\}|\$<[^>]*>/, 'variable'],
+        [/[A-Za-z_]\w*(?=\s*\()/, 'keyword'],
+        [/"(?:[^"\\]|\\.)*"/, 'string'],
+        [/[()]/, 'delimiter']
+      ]
+    }
+  })
+  monaco.languages.register({ id: 'makefile' })
+  monaco.languages.setMonarchTokensProvider('makefile', {
+    tokenizer: {
+      root: [
+        [/#.*$/, 'comment'],
+        [/^\s*(?:include|sinclude|ifdef|ifndef|ifeq|ifneq|else|endif|define|endef|export|unexport)\b/, 'keyword'],
+        [/^\s*[\w.-]+(?=\s*[:+?]?=)/, 'variable'],
+        [/^[^#=\s:]+(?=\s*:(?!=))/, 'type.identifier'],
+        [/\$\([^)]+\)|\$\{[^}]+\}|\$[@%<?^+*|]/, 'variable']
+      ]
+    }
+  })
 }
 
 export function monacoLanguageForPath(path: string): string {
+  const buildLanguage = buildLanguageForPath(path)
+  if (buildLanguage) return buildLanguage
   const semantic = codeLanguageForPath(path)
-  // Monaco 没有独立的 C 语言，C 与 C++ 共用 cpp 语法
-  if (semantic) return semantic === 'c' ? 'cpp' : semantic
+  switch (semantic) {
+    case 'c': return 'cpp'
+    case 'objective-cpp': return 'objective-c'
+    case 'typescriptreact': return 'typescript'
+    case 'javascriptreact': return 'javascript'
+    case null: break
+    default: return semantic
+  }
   const ext = path.split('.').pop()?.toLowerCase()
   const languages: Record<string, string> = {
     go: 'go', py: 'python', pyi: 'python', rs: 'rust', java: 'java', kt: 'kotlin', kts: 'kotlin',
-    c: 'c', h: 'c', cc: 'cpp', cp: 'cpp', cpp: 'cpp', cxx: 'cpp', 'c++': 'cpp', hpp: 'cpp', hh: 'cpp',
-    hxx: 'cpp', 'h++': 'cpp', ipp: 'cpp', inl: 'cpp', tpp: 'cpp', txx: 'cpp', cu: 'cpp', cuh: 'cpp',
-    m: 'objective-c', mm: 'objective-c', cmake: 'ini', mk: 'ini', cs: 'csharp',
+    cs: 'csharp',
     rb: 'ruby', php: 'php', swift: 'swift', dart: 'dart', scala: 'scala', clj: 'clojure',
     ex: 'elixir', exs: 'elixir', lua: 'lua', pl: 'perl', r: 'r', sh: 'shell', bash: 'shell', zsh: 'shell',
     ps1: 'powershell', bat: 'bat', cmd: 'bat', css: 'css', scss: 'scss', sass: 'sass', less: 'less',

@@ -14,7 +14,7 @@ func TestParseKimiToolProgress(t *testing.T) {
 		t.Fatalf("expected one tool event, got %#v", events)
 	}
 	event := events[0]
-	if event.Stage != "tool" || event.Status != "running" || event.Label != "执行只读命令" || event.Detail != "pwd" || event.ToolID != "tool_1" {
+	if event.Stage != "tool" || event.Status != "running" || event.Label != "执行命令" || event.Detail != "pwd" || event.ToolID != "tool_1" {
 		t.Fatalf("unexpected tool event: %#v", event)
 	}
 	done := parseAiCliProgress("kimi", `{"role":"tool","tool_call_id":"tool_1","content":"/tmp\n"}`)
@@ -34,6 +34,13 @@ func TestParseCodexCommandProgress(t *testing.T) {
 	}
 }
 
+func TestParseCodexAnswerIncludesPreview(t *testing.T) {
+	events := parseAiCliProgress("codex", `{"type":"item.completed","item":{"id":"msg_1","type":"agent_message","text":"正在生成架构图"}}`)
+	if len(events) != 1 || events[0].Detail != "正在生成架构图" {
+		t.Fatalf("missing Codex answer preview: %#v", events)
+	}
+}
+
 func TestCliPipeWriterStreamsCompleteLines(t *testing.T) {
 	raw := &aiCliRawOutput{}
 	var events []aiArchProgress
@@ -49,6 +56,9 @@ func TestCliPipeWriterStreamsCompleteLines(t *testing.T) {
 	writer.finish()
 	if len(events) != 1 || events[0].Stage != "answer" {
 		t.Fatalf("missing streamed answer event: %#v", events)
+	}
+	if events[0].Detail != `{"answer":"OK"}` {
+		t.Fatalf("missing streamed answer preview: %#v", events[0])
 	}
 	if raw.String() != line {
 		t.Fatalf("raw output changed: %q", raw.String())

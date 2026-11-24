@@ -7,3 +7,5 @@ allowBuilds:
   es5-ext: false
   esbuild: true
 verifyDepsBeforeRun: false
+patchedDependencies:
+  monaco-editor@0.52.2: patches/monaco-editor@0.52.2.patch

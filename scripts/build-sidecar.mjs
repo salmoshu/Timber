@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outDir = join(root, 'sidecar', 'bin')
+const windows = process.platform === 'win32'
 
 function findGo() {
-  const local = join(root, '.toolchain', 'go', 'bin', 'go.exe')
+  const local = join(root, '.toolchain', 'go', 'bin', windows ? 'go.exe' : 'go')
   if (existsSync(local)) return local
   try {
     execFileSync('go', ['version'], { stdio: 'pipe' })
@@ -20,15 +21,17 @@ function findGo() {
 
 const go = findGo()
 if (!go) {
-  console.warn('[build-sidecar] 未找到 go 工具链，跳过 sidecar 构建（阅读器将无法扫描/批注）')
-  process.exit(0)
+  throw new Error('[build-sidecar] 未找到 Go 工具链')
 }
 
 mkdirSync(outDir, { recursive: true })
 
-// Windows 本地服务 + Linux amd64/arm64 部署包（WSL/SSH 远程接入时推送到远端运行）
+// 本地服务和 WSL/SSH 使用的 Linux 部署包。
+const goos = { win32: 'windows', darwin: 'darwin', linux: 'linux' }[process.platform]
+const goarch = { x64: 'amd64', arm64: 'arm64' }[process.arch]
+if (!goos || !goarch) throw new Error(`Unsupported sidecar target: ${process.platform}/${process.arch}`)
 const targets = [
-  { out: 'timberd.exe', env: {} },
+  { out: windows ? 'timberd.exe' : 'timberd', env: { GOOS: goos, GOARCH: goarch } },
   { out: 'timberd-linux-amd64', env: { GOOS: 'linux', GOARCH: 'amd64', CGO_ENABLED: '0' } },
   { out: 'timberd-linux-arm64', env: { GOOS: 'linux', GOARCH: 'arm64', CGO_ENABLED: '0' } }
 ]
@@ -38,7 +41,7 @@ for (const t of targets) {
   execFileSync(go, ['build', '-o', join(outDir, t.out), '.'], {
     cwd: join(root, 'sidecar'),
     stdio: 'inherit',
-    env: { ...process.env, GOTOOLCHAIN: 'local', ...t.env }
+    env: { ...process.env, GOTOOLCHAIN: 'local', CGO_ENABLED: '0', ...t.env }
   })
 }
 console.log('[build-sidecar] 完成')
