@@ -6,6 +6,7 @@ import { sanitizeRenderedHtml, upgradeInlineHtml } from './sanitizeHtml'
 import { applyImageMetas } from './imageSizes'
 import { askConfirm, askPath } from './dialogs'
 import { htmlToDocxBase64 } from './docxExport'
+import { getMarkdownEditor } from './markdownEditorRuntime'
 
 export const A4_CONTENT_WIDTH = 680
 const A4_MERMAID_MAX_HEIGHT = 900
@@ -160,24 +161,26 @@ function staticPagedDocument(pagesHtml: string, title: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${EXPORT_PAGE_CSS}\n${embeddedKatexCss()}\n${generatedCss}\n${printCss}</style></head><body>${pagesHtml}</body></html>`
 }
 
-async function ensurePagedPreview(): Promise<void> {
-  if (!document.querySelector('.paged-preview')) window.dispatchEvent(new Event('timber:paged-preview'))
+async function pagedExportHtml(docPath: string, projectId: string, markdown: string, title: string): Promise<string> {
+  const activePreview = (): HTMLElement | null => {
+    const state = useStore.getState()
+    if (state.activeProjectId !== projectId || state.activeDoc?.path !== docPath || state.draft !== markdown) {
+      throw new Error('文档或内容已切换，请重新导出')
+    }
+    const preview = document.querySelector<HTMLElement>('.paged-preview')
+    return preview?.dataset.docPath === docPath && preview.dataset.projectId === projectId ? preview : null
+  }
+  if (!activePreview()) window.dispatchEvent(new Event('timber:paged-preview'))
   const deadline = Date.now() + 60_000
   while (Date.now() < deadline) {
-    const pages = document.querySelectorAll('.paged-preview .pagedjs_page').length
-    const loading = document.querySelector('.paged-preview-meta')?.textContent?.includes('正在分页') ?? false
-    if (pages > 0 && !loading) return
-    const error = document.querySelector('.paged-preview .re-error-desc')?.textContent
+    const preview = activePreview()
+    const pages = preview?.querySelector('.pagedjs_pages')
+    if (preview?.dataset.ready === 'true' && pages) return staticPagedDocument(pages.outerHTML, title)
+    const error = preview?.querySelector('.re-error-desc')?.textContent
     if (error) throw new Error(error)
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error('分页预览超时，请重试')
-}
-
-function pagedHtml(title: string): string {
-  const existing = document.querySelector('.paged-preview .pagedjs_pages')
-  if (!existing) throw new Error('分页预览尚未就绪')
-  return staticPagedDocument(existing.outerHTML, title)
 }
 
 let exporting = false
@@ -214,6 +217,7 @@ export async function portableDocumentHtml(body: string, title: string, projectI
 export type DocumentExportKind = 'pdf' | 'word' | 'image' | 'html'
 
 export async function exportActiveDocument(kind: DocumentExportKind): Promise<void> {
+  getMarkdownEditor()?.flush()
   const state = useStore.getState()
   const doc = state.activeDoc
   const projectId = state.activeProjectId
@@ -233,16 +237,16 @@ export async function exportActiveDocument(kind: DocumentExportKind): Promise<vo
     if (!path) return
     const overwrite = await bridge.pathExists(path)
     if (overwrite && !await askConfirm(`「${path}」已存在。是否用导出的${label}覆盖？`, { title: '覆盖已有文件', confirmLabel: '覆盖' })) return
-    const body = await renderMarkdownForExport(state.draft, doc.path, projectId)
-    await waitForHtmlImages(body)
-    if (kind === 'pdf') await ensurePagedPreview()
-    const result = kind === 'html'
-      ? await bridge.exportHtml({ html: await portableDocumentHtml(body, name, projectId), path, overwrite })
-      : kind === 'pdf'
-      ? await bridge.exportPdf({ html: pagedHtml(name), path, overwrite })
-      : kind === 'image'
-        ? await bridge.exportImage({ html: continuousHtml(body, name), path, overwrite })
-        : await bridge.exportBinary({ data: await htmlToDocxBase64(body, name), path, overwrite })
+    const result = kind === 'pdf'
+      ? await bridge.exportPdf({ html: await pagedExportHtml(doc.path, projectId, state.draft, name), path, overwrite })
+      : await (async () => {
+          const body = await renderMarkdownForExport(state.draft, doc.path, projectId)
+          if (kind === 'html') return bridge.exportHtml({ html: await portableDocumentHtml(body, name, projectId), path, overwrite })
+          await waitForHtmlImages(body)
+          return kind === 'image'
+            ? bridge.exportImage({ html: continuousHtml(body, name), path, overwrite })
+            : bridge.exportBinary({ data: await htmlToDocxBase64(body, name), path, overwrite })
+        })()
     if (result.ok) state.toast('ok', `已导出${label}：${result.path}`)
     else state.toast('err', `导出${label}失败：${result.error ?? '未知错误'}`)
   } catch (err) {

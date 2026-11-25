@@ -15,34 +15,42 @@ import { useWritingPreferences } from '../utils/writingPreferences'
 import { clipboardImageFiles, saveMarkdownImages } from '../utils/markdownImages'
 import { applyCodeMirrorCommand, applyCodeMirrorEdit, createSourceRuntime } from '../utils/sourceEditorRuntime'
 import { getMarkdownEditor, registerMarkdownEditor } from '../utils/markdownEditorRuntime'
+import { LONG_MARKDOWN_LENGTH } from '../utils/parseLongMarkdown'
 
 interface SourceSession {
   value: string
   history: ReturnType<CodeMirror.Editor['getHistory']>
   selections: ReturnType<CodeMirror.Editor['listSelections']>
+  scroll: { left: number; top: number }
 }
 const savedSessions = new Map<string, SourceSession>()
 
-/** CodeMirror source view; the outer reader owns scrolling just like the Muya view. */
+/** Short documents scroll with the reader. Long source files give CodeMirror its own virtual viewport. */
 export default function EditorPane() {
   const hostRef = useRef<HTMLDivElement>(null)
   const cmRef = useRef<CodeMirror.Editor | null>(null)
   const tabId = useStore((state) => state.activeTabId)
   const docPath = useStore((state) => state.activeDoc?.path)
+  const projectId = useStore((state) => state.activeProjectId)
   const isMarkdown = useStore((state) => /^(md|markdown|mdown|mkd)$/.test(state.activeDoc?.ext ?? ''))
 
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
+    const isActive = (state: ReturnType<typeof useStore.getState>): boolean =>
+      state.activeProjectId === projectId && state.activeTabId === tabId && state.activeDoc?.path === docPath
     const initialValue = useStore.getState().draft
     const editorSettings = useStore.getState().settings
-    const saved = tabId ? savedSessions.get(tabId) : undefined
+    const key = JSON.stringify([projectId, tabId, docPath])
+    const saved = savedSessions.get(key)
+    const large = initialValue.length >= LONG_MARKDOWN_LENGTH
+    host.classList.toggle('virtual-source', large)
     const cm = CodeMirror(host, {
       value: saved?.value ?? initialValue,
       mode: isMarkdown ? 'markdown' : 'htmlmixed',
       lineNumbers: editorSettings.sourceCodeLineNumbers,
       lineWrapping: editorSettings.wrapCodeBlocks,
-      viewportMargin: Infinity,
+      viewportMargin: large ? 12 : Infinity,
       styleActiveLine: true,
       autofocus: true,
       indentUnit: editorSettings.tabSize,
@@ -61,23 +69,42 @@ export default function EditorPane() {
     cm.getWrapperElement().classList.add('editor-plain', 'timber-source-editor')
     cm.getWrapperElement().setAttribute('data-editor', 'source')
     cm.getWrapperElement().setAttribute('aria-label', '原文编辑器')
+    let scroll = saved?.scroll ?? { left: 0, top: 0 }
+    const rememberScroll = (): void => {
+      // Passive effect cleanup can run after React detached the scroller, when scrollTop reads as zero.
+      if (!cm.getWrapperElement().isConnected) return
+      const { left, top } = cm.getScrollInfo()
+      scroll = { left, top }
+    }
+    if (large) {
+      cm.refresh()
+      cm.scrollTo(scroll.left, scroll.top)
+      cm.on('scroll', rememberScroll)
+    }
     const runtime = createSourceRuntime(cm)
     registerMarkdownEditor(runtime)
 
     const onChange = (): void => {
-      if (useStore.getState().draft !== cm.getValue()) useStore.getState().setDraft(cm.getValue())
+      const state = useStore.getState()
+      const value = cm.getValue()
+      if (isActive(state) && state.draft !== value) state.setDraft(value)
     }
     cm.on('change', onChange)
     let refreshFrame = 0
+    const refresh = (): void => {
+      cancelAnimationFrame(refreshFrame)
+      refreshFrame = requestAnimationFrame(() => cm.refresh())
+    }
+    const observer = large ? new ResizeObserver(refresh) : null
+    observer?.observe(host)
     const unsubscribe = useStore.subscribe((state, previous) => {
-      if (state.activeTabId !== tabId) return
+      if (!isActive(state)) return
       if (state.settings !== previous.settings) {
         cm.setOption('lineWrapping', state.settings.wrapCodeBlocks)
         cm.setOption('lineNumbers', state.settings.sourceCodeLineNumbers)
         cm.setOption('tabSize', state.settings.tabSize)
         cm.setOption('indentUnit', state.settings.tabSize)
-        cancelAnimationFrame(refreshFrame)
-        refreshFrame = requestAnimationFrame(() => cm.refresh())
+        refresh()
       }
       if (state.draft === previous.draft) return
       if (state.draft !== cm.getValue()) {
@@ -175,8 +202,11 @@ export default function EditorPane() {
     })
 
     return () => {
-      if (tabId) savedSessions.set(tabId, { value: cm.getValue(), history: cm.getHistory(), selections: cm.listSelections() })
+      if (large) rememberScroll()
+      cm.off('scroll', rememberScroll)
+      savedSessions.set(key, { value: cm.getValue(), history: cm.getHistory(), selections: cm.listSelections(), scroll })
       unsubscribe()
+      observer?.disconnect()
       cancelAnimationFrame(refreshFrame)
       window.removeEventListener('timber:insert-images', onImages)
       window.removeEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
@@ -188,7 +218,7 @@ export default function EditorPane() {
       wrapper.remove()
       host.replaceChildren()
     }
-  }, [tabId, docPath, isMarkdown])
+  }, [tabId, docPath, projectId, isMarkdown])
 
   return <div className="editor-pane" ref={hostRef} />
 }

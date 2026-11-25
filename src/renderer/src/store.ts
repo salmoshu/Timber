@@ -186,6 +186,22 @@ function normalizeDocText(s: string): string {
   return stripBom(s).replace(/\r\n?/g, '\n')
 }
 
+async function readTextDoc(projectId: string, path: string, cached?: DocContent, signal?: AbortSignal): Promise<DocContent | null> {
+  const query = new URLSearchParams({ path })
+  if (cached?.mtime) {
+    query.set('knownMtime', cached.mtime)
+    query.set('knownSize', String(cached.size))
+  }
+  const result = await apiFor<DocContent | { unchanged: true }>(projectId)(
+    'GET', `/api/projects/${projectId}/doc?${query}`, undefined, { signal }
+  )
+  // Older remote sidecars ignore the conditional parameters and still return a full document.
+  if ('unchanged' in result) return null
+  return { ...result, content: stripBom(result.content) }
+}
+
+let tabRead: AbortController | null = null
+
 /** 本地与远程项目共用的轻量同步：周期校验 + 窗口聚焦立即校验。
  *  文件树按结构去重，展开状态由 Sidebar 按路径独立保存，不会因刷新折叠或闪烁。 */
 let resourceWatcherStarted = false
@@ -198,7 +214,7 @@ async function syncResources(): Promise<void> {
   resourceSyncing = true
   const tabId = s.activeTabId
   const docSnapshot = s.activeDoc
-  const shouldReadDoc = !!docSnapshot && !!tabId && !s.dirty && !s.saving && !s.docLoading && !s.docError && !BINARY_EXT_SET.has(docSnapshot.ext)
+  const shouldReadDoc = !!docSnapshot && !!tabId && !tabRead && !s.dirty && !s.saving && !s.docLoading && !s.docError && !BINARY_EXT_SET.has(docSnapshot.ext)
   try {
     const treeRequest = s.treeLoading
       ? Promise.resolve(null)
@@ -207,7 +223,7 @@ async function syncResources(): Promise<void> {
       ? Promise.resolve(null)
       : apiFor<DocNode>(projectId)('GET', `/api/projects/${projectId}/tree?exts=${encodeURIComponent(CODE_EXTS.join(','))}`).catch(() => null)
     const docRequest = shouldReadDoc && docSnapshot
-      ? apiFor<DocContent>(projectId)('GET', `/api/projects/${projectId}/doc?path=${encodeURIComponent(docSnapshot.path)}`).catch(() => null)
+      ? readTextDoc(projectId, docSnapshot.path, docSnapshot).catch(() => null)
       : Promise.resolve(null)
     const [tree, codeTree, doc] = await Promise.all([treeRequest, codeTreeRequest, docRequest])
     const cur = useStore.getState()
@@ -217,16 +233,14 @@ async function syncResources(): Promise<void> {
     if (tree && JSON.stringify(tree) !== JSON.stringify(cur.tree)) patch.tree = tree
     if (codeTree && JSON.stringify(codeTree) !== JSON.stringify(cur.codeTree)) patch.codeTree = codeTree
     if (
-      doc && tabId && activeDoc && cur.activeTabId === tabId && activeDoc.path === docSnapshot?.path &&
+      doc && tabId && activeDoc && activeDoc === docSnapshot && cur.activeTabId === tabId &&
       !cur.dirty && !cur.saving && !cur.docLoading &&
       (doc.mtime !== activeDoc.mtime || doc.size !== activeDoc.size)
     ) {
-      const content = stripBom(doc.content)
-      const fresh = { ...doc, content }
-      patch.activeDoc = fresh
-      patch.draft = content
+      patch.activeDoc = doc
+      patch.draft = doc.content
       patch.dirty = false
-      patch.tabs = cur.tabs.map((tab) => tab.id === tabId ? { ...tab, doc: fresh, draft: content, dirty: false } : tab)
+      patch.tabs = cur.tabs.map((tab) => tab.id === tabId ? { ...tab, doc, draft: doc.content, dirty: false } : tab)
     }
     if (Object.keys(patch).length > 0) useStore.setState(patch)
   } finally {
@@ -386,6 +400,7 @@ interface State {
   activeTabId: string | null
   activeDoc: DocContent | null
   docLoading: boolean
+  resourceFocused: boolean
   /** 文档打开失败的原因（呈现错误卡片与关闭按钮；null = 无错误） */
   docError: string | null
   mode: ViewMode
@@ -455,6 +470,7 @@ interface State {
   openArchDelta(base: string, head: string): void
 
   toggleSidebar(): void
+  setResourceFocus(focused: boolean): void
   setSidebarWidth(w: number): void
   setAnnPanelWidth(w: number): void
 
@@ -621,6 +637,7 @@ export const useStore = create<State>((set, get) => ({
   ...loadLayout(),
 
   view: 'resources',
+  resourceFocused: false,
   historyMode: 'commits',
   commits: [],
   commitsTotal: 0,
@@ -645,6 +662,8 @@ export const useStore = create<State>((set, get) => ({
     set({ sidebarCollapsed: next })
     saveLayout({ sidebarCollapsed: next, sidebarWidth: get().sidebarWidth, annPanelWidth: get().annPanelWidth })
   },
+
+  setResourceFocus: (resourceFocused) => set({ resourceFocused }),
 
   setSidebarWidth(w) {
     const v = clamp(w, SIDEBAR_MIN_W, sidebarDynMax(get().annPanelOpen, get().annPanelWidth))
@@ -1122,6 +1141,8 @@ export const useStore = create<State>((set, get) => ({
       projectWorkspaces.set(s.activeProjectId, { tabs, activeTabId: s.activeTabId })
     }
     persistProjectWorkspacesSoon()
+    tabRead?.abort()
+    tabRead = null
     try { localStorage.setItem(ACTIVE_PROJECT_KEY, id) } catch { /* 忽略不可用存储 */ }
     set({
       activeProjectId: id,
@@ -1131,6 +1152,9 @@ export const useStore = create<State>((set, get) => ({
       tabs: [],
       activeTabId: null,
       activeDoc: null,
+      docLoading: false,
+      docError: null,
+      resourceFocused: false,
       annotations: [],
       composeQuote: null,
       selectedDir: null,
@@ -1210,6 +1234,7 @@ export const useStore = create<State>((set, get) => ({
   async openTab(path, opts) {
     // 文档链接/外部输入可能带 Windows 反斜杠，统一为正斜杠相对路径
     path = path.replace(/\\/g, '/')
+    flushMarkdownEditor()
     const s = get()
     const projectId = s.activeProjectId
     if (!projectId) return
@@ -1254,10 +1279,12 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async activateTab(id) {
+    flushMarkdownEditor()
     const before = get()
     if (!before.tabs.some((t) => t.id === id) || before.activeTabId === id) return
     if (before.dirty) await before.saveDoc({ silent: true })
     const s = get()
+    if (s.activeProjectId !== before.activeProjectId || s.activeTabId !== before.activeTabId) return
     const target = s.tabs.find((t) => t.id === id)
     if (!target || s.activeTabId === id) return
     // 快照当前标签状态（滚动位置直接读 DOM，避免组件卸载导致监听失效）
@@ -1272,11 +1299,6 @@ export const useStore = create<State>((set, get) => ({
         )
       })
     }
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer)
-      autoSaveTimer = null
-    }
-    set({ activeTabId: id, composeQuote: null })
     await loadTabInto(target, set, get)
   },
 
@@ -1298,7 +1320,9 @@ export const useStore = create<State>((set, get) => ({
       void loadTabInto(next, set, get)
     } else {
       // 全部标签关闭：清空阅读区状态
-      set({ activeDoc: null, docError: null, draft: '', dirty: false, annotations: [], composeQuote: null })
+      tabRead?.abort()
+      tabRead = null
+      set({ activeDoc: null, docLoading: false, docError: null, draft: '', dirty: false, annotations: [], composeQuote: null, resourceFocused: false })
     }
   },
 
@@ -1355,7 +1379,9 @@ export const useStore = create<State>((set, get) => ({
       scheduleAutoSave()
       return
     }
-    set({ tabs: [], activeTabId: null, activeDoc: null, docLoading: false, docError: null, draft: '', dirty: false, annotations: [], composeQuote: null })
+    tabRead?.abort()
+    tabRead = null
+    set({ tabs: [], activeTabId: null, activeDoc: null, docLoading: false, docError: null, draft: '', dirty: false, annotations: [], composeQuote: null, resourceFocused: false })
   },
 
   pinTab(id) {
@@ -1413,8 +1439,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async saveDoc(options) {
-    const pending = flushMarkdownEditor()
-    if (pending !== undefined && get().draft !== pending) get().setDraft(pending)
+    flushMarkdownEditor()
     const s = get()
     if (!s.activeDoc || !s.activeProjectId || !s.activeTabId || !s.dirty || s.saving) return
     if (autoSaveTimer) {
@@ -1464,18 +1489,17 @@ export const useStore = create<State>((set, get) => ({
     // 图片与 Excel 经 /raw 直读文件，无文本内容可刷新（与外部变更轮询一致跳过）
     if (BINARY_EXT_SET.has(s.activeDoc.ext)) return
     if (s.dirty && !await askConfirm('当前有未保存的修改，刷新将丢弃。继续？')) return
-    if (get().activeProjectId !== s.activeProjectId || get().activeTabId !== tabId || get().draft !== s.draft) return
+    if (get().activeProjectId !== s.activeProjectId || get().activeTabId !== tabId || get().activeDoc?.path !== s.activeDoc.path || get().draft !== s.draft) return
     try {
-      const doc = await apiFor<DocContent>(s.activeProjectId)(
-        'GET',
-        `/api/projects/${s.activeProjectId}/doc?path=${encodeURIComponent(s.activeDoc.path)}`
-      )
+      const fresh = await readTextDoc(s.activeProjectId, s.activeDoc.path)
       // 等待响应期间可能已切换标签/项目：仅仍是同一标签时落地
-      if (get().activeTabId !== tabId) return
-      const content = stripBom(doc.content)
-      const fresh = { ...doc, content }
-      cacheTabDoc(tabId, fresh, set, get)
-      set({ activeDoc: fresh, draft: content, dirty: false })
+      const current = get()
+      if (!fresh || current.activeProjectId !== s.activeProjectId || current.activeTabId !== tabId ||
+        current.activeDoc?.path !== s.activeDoc.path || current.draft !== s.draft) return
+      set({
+        tabs: current.tabs.map((tab) => tab.id === tabId ? { ...tab, doc: fresh, draft: fresh.content, dirty: false } : tab),
+        activeDoc: fresh, draft: fresh.content, dirty: false
+      })
       get().toast('ok', '已刷新')
     } catch (err) {
       get().toast('err', `刷新失败：${err}`)
@@ -1695,17 +1719,31 @@ async function loadTabInto(
 ): Promise<void> {
   const projectId = get().activeProjectId
   if (!projectId) return
+  tabRead?.abort()
+  tabRead = null
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
   const ext = (tab.path.split('.').pop() ?? '').toLowerCase()
   const isBinary = BINARY_EXT_SET.has(ext)
   const cached = isBinary
     ? ({ path: tab.path, ext, content: '', size: 0, mtime: '' } as DocContent)
     : tab.doc
 
+  const controller = new AbortController()
+  if (!isBinary && !tab.dirty) tabRead = controller
+  const isCurrent = (): boolean => {
+    const current = get()
+    return !controller.signal.aborted && current.activeProjectId === projectId && current.activeTabId === tab.id &&
+      current.tabs.some((item) => item.id === tab.id && item.path === tab.path)
+  }
   set({
     activeTabId: tab.id,
     docLoading: !cached,
     activeDoc: cached ?? null,
     docError: null,
+    annotations: [],
     composeQuote: null,
     mode: tab.mode,
     draft: tab.dirty ? tab.draft : (cached?.content ?? tab.draft),
@@ -1713,70 +1751,36 @@ async function loadTabInto(
   })
 
   if (cached) {
-    // 图片与 Excel：不拉文本内容也不校验
-    if (isBinary) {
-      set({ annotations: [] })
-      cacheTabDoc(tab.id, cached, set, get)
-      pushRecentFile(projectId, tab.path)
+    pushRecentFile(projectId, tab.path)
+    if (isBinary) return
+    void get().loadAnnotations()
+    if (tab.dirty) {
+      scheduleAutoSave()
       return
     }
-    await get().loadAnnotations()
-    pushRecentFile(projectId, tab.path)
-    restoreScroll(tab, get)
   }
 
   try {
-    const doc = await apiFor<DocContent>(projectId)(
-      'GET',
-      `/api/projects/${projectId}/doc?path=${encodeURIComponent(tab.path)}`
-    )
-    // UTF-8 BOM（\uFEFF）是编码标记而非内容：加载即剥离（v0.5.7 修复 BOM 让首行
-    // `# 标题` 不解析的问题；v0.6.3 收敛为统一的 stripBom 工具）
-    doc.content = stripBom(doc.content)
-    if (get().activeProjectId !== projectId) return
-    cacheTabDoc(tab.id, doc, set, get)
-    if (get().activeTabId !== tab.id) return
-    const fresh = get().tabs.find((t) => t.id === tab.id)
-    if (!fresh) return
+    const doc = await readTextDoc(projectId, tab.path, cached, controller.signal)
+    if (!doc || !isCurrent()) return
+    const current = get()
+    if (cached && (current.dirty || current.saving || current.activeDoc !== cached ||
+      (doc.mtime === cached.mtime && doc.size === cached.size))) return
+    set({
+      tabs: current.tabs.map((item) => item.id === tab.id ? { ...item, doc, draft: doc.content, dirty: false } : item),
+      activeDoc: doc, draft: doc.content, dirty: false, docLoading: false
+    })
     if (!cached) {
-      // 首载完成：呈现并恢复滚动位置
-      const useDraft = fresh.dirty ? fresh.draft : doc.content
-      set({ activeDoc: doc, draft: useDraft, dirty: fresh.dirty, docLoading: false })
       pushRecentFile(projectId, tab.path)
-      await get().loadAnnotations()
-      restoreScroll(fresh, get)
-    } else if (!fresh.dirty && (doc.mtime !== cached.mtime || doc.size !== cached.size)) {
-      // 外部修改过：静默更新内容（不打扰未保存草稿）
-      set({ activeDoc: doc, draft: doc.content, dirty: false })
+      void get().loadAnnotations()
     }
   } catch (err) {
-    if (get().activeProjectId !== projectId || get().activeTabId !== tab.id) return
-    if (!cached) {
+    if (!cached && isCurrent()) {
       // 打开失败：保留标签，错误在正文区呈现（含关闭按钮），不再只弹一条 toast
       set({ docLoading: false, docError: String(err instanceof Error ? err.message : err) })
     }
     // 有缓存时后台校验失败保持现状（如远程刚断开）
-  }
-}
-
-/** 文档内容写入标签缓存 */
-function cacheTabDoc(
-  tabId: string,
-  doc: DocContent,
-  set: (partial: Partial<State>) => void,
-  get: () => State
-): void {
-  set({ tabs: get().tabs.map((t) => (t.id === tabId ? { ...t, doc } : t)) })
-}
-
-/** 恢复标签记忆的滚动位置（渲染完成后执行） */
-function restoreScroll(tab: DocTab, get: () => State): void {
-  const remembered = get().tabs.find((t) => t.id === tab.id)?.scrollTop ?? 0
-  if (remembered > 0) {
-    setTimeout(() => {
-      if (get().activeTabId !== tab.id) return
-      const body = document.querySelector('.reader-body')
-      if (body) body.scrollTop = remembered
-    }, 80)
+  } finally {
+    if (tabRead === controller) tabRead = null
   }
 }

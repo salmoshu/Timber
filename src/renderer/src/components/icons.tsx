@@ -67,12 +67,11 @@ export function IconPagePreview({ size = 17 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm0 0v6h6M8 13h8m-8 4h6" /></svg>
 }
 
-/** 导出文档：向下箭头落入托盘 */
-export function IconExport({ size = 15 }: { size?: number }) {
+export function IconFocusLayout({ size = 17, exit = false }: { size?: number; exit?: boolean }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v12m0 0 4-4m-4 4-4-4" />
-      <path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" />
+      <path d={exit ? 'M4 9h5V4m6 0v5h5m0 6h-5v5m-6 0v-5H4' : 'M9 4H4v5m16 0V4h-5m0 16h5v-5M4 15v5h5'} />
+      <path d="M10 12h4" />
     </svg>
   )
 }

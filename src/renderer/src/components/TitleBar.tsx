@@ -21,6 +21,8 @@ export default function TitleBar() {
   const toggleSidebar = useStore((s) => s.toggleSidebar)
   const view = useStore((s) => s.view)
   const setView = useStore((s) => s.setView)
+  const resourceFocused = useStore((s) => s.resourceFocused && !!s.activeTabId && s.view === 'resources' && !s.settingsOpen)
+  const setResourceFocus = useStore((s) => s.setResourceFocus)
   const folderProject = useStore((s) => s.projects.some((p) => p.id === s.activeProjectId && p.kind !== 'file'))
   const [version, setVersion] = useState('')
   const [maximized, setMaximized] = useState(false)
@@ -35,8 +37,13 @@ export default function TitleBar() {
     const closeOutside = (event: PointerEvent): void => {
       if (!viewNav.current?.contains(event.target as Node)) setViewMenuOpen(false)
     }
-    document.addEventListener('pointerdown', closeOutside)
-    return () => document.removeEventListener('pointerdown', closeOutside)
+    const closeOnBlur = (): void => setViewMenuOpen(false)
+    document.addEventListener('pointerdown', closeOutside, true)
+    window.addEventListener('blur', closeOnBlur)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside, true)
+      window.removeEventListener('blur', closeOnBlur)
+    }
   }, [viewMenuOpen])
 
   // 标题区版本号（Electron 环境从主进程取；纯 Web 预览不显示）
@@ -69,7 +76,7 @@ export default function TitleBar() {
   }, [b, mac])
 
   return (
-    <header className={`titlebar${mac ? ' mac-titlebar' : ''}`}>
+    <header className={`titlebar${mac ? ' mac-titlebar' : ''}`} data-view-menu-open={viewMenuOpen || undefined}>
       <div className="tb-drag">
         <Logo size={20} animated={false} />
         <span className="tb-name">Timber</span>
@@ -144,16 +151,22 @@ export default function TitleBar() {
       </div>
       <div className="tb-btns">
         <button
-          className={`tb-set ${sidebarCollapsed ? '' : 'on'}`}
-          onClick={toggleSidebar}
-          title={sidebarCollapsed ? '展开左侧边栏' : '折叠左侧边栏'}
+          className={`tb-set ${sidebarCollapsed || resourceFocused ? '' : 'on'}`}
+          onClick={() => {
+            if (resourceFocused) setResourceFocus(false)
+            if (!resourceFocused || sidebarCollapsed) toggleSidebar()
+          }}
+          title={resourceFocused ? '退出专注并显示左侧边栏' : sidebarCollapsed ? '展开左侧边栏' : '折叠左侧边栏'}
         >
           <IconPanelLeft />
         </button>
         <button
-          className={`tb-set ${annPanelOpen ? 'on' : ''}`}
-          onClick={toggleAnnPanel}
-          title={view === 'history' ? '历史记录侧栏' : view === 'architecture' ? 'AI 对话侧栏' : '右侧边栏（文件 / 搜索 / Git）'}
+          className={`tb-set ${annPanelOpen && !resourceFocused ? 'on' : ''}`}
+          onClick={() => {
+            if (resourceFocused) setResourceFocus(false)
+            if (!resourceFocused || !annPanelOpen) toggleAnnPanel()
+          }}
+          title={resourceFocused ? '退出专注并显示右侧边栏' : view === 'history' ? '历史记录侧栏' : view === 'architecture' ? 'AI 对话侧栏' : '右侧边栏（文件 / 搜索 / Git）'}
           disabled={settingsOpen}
         >
           <IconPanelRight />

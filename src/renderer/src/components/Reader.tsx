@@ -8,11 +8,9 @@ import TabsBar from './TabsBar'
 import FindBar from './FindBar'
 import PagedPreview from './PagedPreview'
 import ExcelView from './ExcelView'
-import ContextMenu, { type MenuItem } from './ContextMenu'
 import { findTextRanges, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { rawBaseFor, origProjectId } from '../store'
-import { exportActiveDocument, type DocumentExportKind } from '../utils/documentExport'
-import { IconAnnotation, IconExport, IconRead, IconSource, IconPagePreview } from './icons'
+import { IconAnnotation, IconRead, IconSource, IconPagePreview } from './icons'
 import { MarkdownInsertPalette, WritingStatus } from './WritingTools'
 import { useWritingExperience } from '../utils/useWritingExperience'
 import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
@@ -51,6 +49,7 @@ export default function Reader() {
   const activeProjectId = useStore((s) => s.activeProjectId)
   const activeTabId = useStore((s) => s.activeTabId)
   const closeTab = useStore((s) => s.closeTab)
+  const focused = useStore((s) => s.resourceFocused)
   const annotationsOpen = !marginHidden && marginExpanded
   // 标签展开与分页预览是当前文档的临时 UI 状态：打开新文档时回到连续阅读。
   useEffect(() => {
@@ -58,7 +57,6 @@ export default function Reader() {
     setMarginHidden(false)
     setPaged(false)
     setPagedEdit(false)
-    setExportMenu(null)
   }, [activeDoc?.path])
   useEffect(() => { if (composeQuote) { setMarginExpanded(true); setMarginHidden(false) } }, [composeQuote])
   useEffect(() => {
@@ -73,7 +71,6 @@ export default function Reader() {
   const [findReplace, setFindReplace] = useState(false)
   const [paged, setPaged] = useState(false)
   const [pagedEdit, setPagedEdit] = useState(false)
-  const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null)
   const [htmlError, setHtmlError] = useState<string | null>(null)
   const startMarginResize = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -136,7 +133,7 @@ export default function Reader() {
     if (pendingLocate.path !== activeDoc.path) return
     const kw = pendingLocate.keyword
     const locate = (): void => {
-      if (!document.querySelector('.prose')) return
+      if (!document.querySelector('.prose') || document.querySelector('.markdown-editor[aria-busy="true"]')) return
       useStore.getState().setPendingLocate(null)
       if (!locateKeyword(kw)) {
         useStore.getState().toast('info', '已打开文档，但未能定位到关键词位置')
@@ -189,38 +186,48 @@ export default function Reader() {
   // 切回应用窗口时若滚动被异常重置到顶部，也按记忆恢复（scrollTop===0 且记忆>0 才动手，
   // 用户自己滚到顶时记忆已被滚动监听同步成 0，不会误拉回去）
   useEffect(() => {
-    if (!activeTabId) return
-    const tabId = activeTabId
+    if (!activeTabId || !activeDoc || paged) return
+    const key = JSON.stringify([activeProjectId, activeTabId, activeDoc.path])
     const body = proseWrapRef.current
     if (!body) return
-    let raf = 0
+    // 同一个预览标签可能复用为别的文件，滚动记忆必须包含路径。
+    let remembered = scrollMem.get(key) ?? 0
+    let restoring = remembered > 0
     const onScroll = (): void => {
-      cancelAnimationFrame(raf)
-      raf = requestAnimationFrame(() => scrollMem.set(tabId, body.scrollTop))
+      if (restoring) return
+      if (scrollMem.size >= 80 && !scrollMem.has(key)) scrollMem.delete(scrollMem.keys().next().value!)
+      scrollMem.set(key, body.scrollTop)
     }
+    const release = (): void => { restoring = false }
+    const restore = (complete: boolean): void => {
+      if (!restoring) return
+      if (!complete && body.scrollHeight - body.clientHeight < remembered) return
+      body.scrollTop = remembered
+      restoring = false
+    }
+    const afterRender = (): void => restore(true)
+    // 首批内容不足以恢复深处滚动时保持记忆，正文就绪后再跳转。用户主动滚动优先。
+    const t = setTimeout(() => restore(false), 100)
     body.addEventListener('scroll', onScroll, { passive: true })
-    const remembered = scrollMem.get(tabId) ?? 0
-    const restore = (): void => {
-      if (remembered > 0 && body.scrollTop === 0) body.scrollTop = remembered
-    }
-    // 等正文渲染出来再恢复（图片等晚加载资源造成的后续位移不追）
-    const t1 = setTimeout(restore, 120)
-    const t2 = setTimeout(restore, 600)
-    window.addEventListener('markdown-rendered', restore, { once: true })
+    body.addEventListener('pointerdown', release)
+    body.addEventListener('wheel', release, { passive: true })
+    body.addEventListener('keydown', release)
+    window.addEventListener('markdown-rendered', afterRender, { once: true })
     const onFocus = (): void => {
-      const mem = scrollMem.get(tabId) ?? 0
-      if (mem > 0 && body.scrollTop === 0) body.scrollTop = mem
+      remembered = scrollMem.get(key) ?? 0
+      if (!restoring && remembered > 0 && body.scrollTop === 0) body.scrollTop = remembered
     }
     window.addEventListener('focus', onFocus)
     return () => {
       body.removeEventListener('scroll', onScroll)
-      window.removeEventListener('markdown-rendered', restore)
+      body.removeEventListener('pointerdown', release)
+      body.removeEventListener('wheel', release)
+      body.removeEventListener('keydown', release)
+      window.removeEventListener('markdown-rendered', afterRender)
       window.removeEventListener('focus', onFocus)
-      cancelAnimationFrame(raf)
-      clearTimeout(t1)
-      clearTimeout(t2)
+      clearTimeout(t)
     }
-  }, [activeTabId, activeDoc])
+  }, [activeTabId, activeProjectId, activeDoc?.path, paged])
 
 
   if (!activeDoc) {
@@ -251,15 +258,26 @@ export default function Reader() {
   // 面包屑分段（VSCode 风格：目录 › 目录 › 文件）
   const crumbs = activeDoc.path.split('/')
   const hasModeTools = isMd || activeDoc.ext === 'txt' || isHtml
-  const exportItems: MenuItem[] = (['pdf', 'word', 'image', 'html'] as DocumentExportKind[]).map((kind) => ({
-    key: kind,
-    label: kind === 'pdf' ? '导出 PDF（按分页预览）' : kind === 'word' ? '导出 Word (.docx)' : kind === 'html' ? '导出 HTML（含本地图片）' : '导出长图 (.png)',
-    onClick: () => void exportActiveDocument(kind)
-  }))
+  const annotationButton = hasModeTools && (
+    <div className="rt-tool-group">
+      <button
+        className={`rt-btn ${annotationsOpen ? 'active' : ''}`}
+        title={annotationsOpen ? `收起批注（${annotations.length}）` : `展开批注（${annotations.length}）`}
+        aria-label={annotationsOpen ? '收起批注' : '展开批注'}
+        aria-expanded={annotationsOpen}
+        onClick={() => {
+          setMarginExpanded(!annotationsOpen)
+          setMarginHidden(annotationsOpen)
+        }}
+      >
+        <IconAnnotation />
+      </button>
+    </div>
+  )
 
   return (
     <div className={`reader resource-reader ${writingClass}`}>
-      <TabsBar>
+      <TabsBar afterFocus={annotationButton}>
         {hasModeTools && (
           <div className="rt-tool-group">
             <div className="reader-mode-controls">
@@ -284,43 +302,6 @@ export default function Reader() {
             </div>
           </div>
         )}
-        {isMd && window.timber && (
-          <div className="rt-tool-group">
-            <button
-              className="rt-btn"
-              title="导出 PDF / Word / 长图 / HTML"
-              aria-label="导出文档"
-              aria-expanded={!!exportMenu}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect()
-                setExportMenu({ x: rect.left, y: rect.bottom + 4 })
-              }}
-            >
-              <IconExport />
-            </button>
-          </div>
-        )}
-        {hasModeTools && (
-          <div className="rt-tool-group">
-            <button
-              className={`rt-btn ${annotationsOpen ? 'active' : ''}`}
-              title={annotationsOpen ? `收起批注（${annotations.length}）` : `展开批注（${annotations.length}）`}
-              aria-label={annotationsOpen ? '收起批注' : '展开批注'}
-              aria-expanded={annotationsOpen}
-              onClick={() => {
-                if (annotationsOpen) {
-                  setMarginExpanded(false)
-                  setMarginHidden(true)
-                } else {
-                  setMarginExpanded(true)
-                  setMarginHidden(false)
-                }
-              }}
-            >
-              <IconAnnotation />
-            </button>
-          </div>
-        )}
       </TabsBar>
 
       <div className="rt-breadcrumb" title={activeDoc.path}>
@@ -335,11 +316,12 @@ export default function Reader() {
       {isMd && !paged && <MarkdownInsertPalette />}
       {findOpen && <FindBar replace={findReplace} onClose={() => setFindOpen(false)} />}
 
-      <div className={`document-workspace ${!paged && (activeDoc.ext === 'md' || mode === 'source') ? 'with-outline' : ''}`}>
-      {!paged && <DocumentOutline />}
+      <div className={`document-workspace ${isMd && (!paged || focused) ? 'with-outline' : ''}`}>
+      {isMd && (!paged || focused) && <DocumentOutline focused={focused} paged={paged} />}
       <div
         className="reader-body"
         ref={proseWrapRef}
+        key={`${activeProjectId}/${activeTabId}/${activeDoc.path}`}
       >
         {paged && isMd ? (
           pagedEdit ? (
@@ -422,9 +404,6 @@ export default function Reader() {
       </div>
       </div>
       {isMd && !paged && <WritingStatus />}
-      {exportMenu && (
-        <ContextMenu x={exportMenu.x} y={exportMenu.y} items={exportItems} onClose={() => setExportMenu(null)} />
-      )}
     </div>
   )
 }

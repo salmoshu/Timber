@@ -80,7 +80,8 @@ export function createSourceRuntime(cm: CodeMirror.Editor): MarkdownEditorRuntim
       cm.scrollIntoView(position, 120)
     },
     viewportLine: () => {
-      const body = cm.getWrapperElement().closest<HTMLElement>('.reader-body')
+      const wrapper = cm.getWrapperElement()
+      const body = wrapper.closest('.virtual-source') ? cm.getScrollerElement() : wrapper.closest<HTMLElement>('.reader-body')
       if (!body) return null
       const rect = body.getBoundingClientRect()
       return cm.coordsChar({ left: rect.left + 32, top: rect.top + body.clientHeight / 2 }, 'window').line

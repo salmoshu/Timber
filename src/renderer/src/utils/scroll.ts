@@ -20,7 +20,7 @@ export function smoothScrollTo(container: HTMLElement, targetTop: number, durati
 
 /** 滚动阅读区使元素可见：默认顶部对齐，center 时居中 */
 export function scrollToEl(el: Element, opts?: { center?: boolean; duration?: number }): void {
-  const container = el.closest('.reader-body') as HTMLElement | null
+  const container = el.closest<HTMLElement>('.paged-preview, .paged-editor-col, .reader-body')
   if (!container) {
     el.scrollIntoView({ block: opts?.center ? 'center' : 'start' })
     return
@@ -28,8 +28,9 @@ export function scrollToEl(el: Element, opts?: { center?: boolean; duration?: nu
   const bodyRect = container.getBoundingClientRect()
   const elRect = el.getBoundingClientRect()
   const current = elRect.top - bodyRect.top + container.scrollTop
+  const stickyHeader = container.matches('.paged-preview') ? container.querySelector<HTMLElement>('.paged-preview-meta')?.offsetHeight ?? 0 : 0
   const target = opts?.center
     ? current - container.clientHeight / 2 + elRect.height / 2
-    : current - 12
+    : current - stickyHeader - 12
   smoothScrollTo(container, Math.max(0, target), opts?.duration ?? 120)
 }

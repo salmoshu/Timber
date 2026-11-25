@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const maxDocBytes = 8 << 20 // 8MB
@@ -218,7 +220,8 @@ func (s *server) handleReadDoc(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
-	abs, err := resolveDoc(p.Path, r.URL.Query().Get("path"))
+	query := r.URL.Query()
+	abs, err := resolveDoc(p.Path, query.Get("path"))
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -232,13 +235,20 @@ func (s *server) handleReadDoc(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 413, "文档过大（>8MB），暂不支持")
 		return
 	}
+	// A polling reader or cached tab only needs the body when metadata changes.
+	knownTime, timeErr := time.Parse(time.RFC3339Nano, query.Get("knownMtime"))
+	knownSize, sizeErr := strconv.ParseInt(query.Get("knownSize"), 10, 64)
+	if timeErr == nil && sizeErr == nil && knownSize == info.Size() && knownTime.Equal(info.ModTime()) {
+		writeJSON(w, 200, map[string]bool{"unchanged": true})
+		return
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"path":    r.URL.Query().Get("path"),
+		"path":    query.Get("path"),
 		"ext":     strings.ToLower(strings.TrimPrefix(filepath.Ext(abs), ".")),
 		"content": string(data),
 		"size":    info.Size(),

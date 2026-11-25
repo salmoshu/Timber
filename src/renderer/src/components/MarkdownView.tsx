@@ -4,7 +4,7 @@ import {
   CodeBlockLanguageSelector, EmojiSelector, FootnoteTool, ImageEditTool, ImageResizeBar, ImageToolBar,
   InlineFormatToolbar, LinkTools, Muya, ParagraphFrontButton, ParagraphFrontMenu, ParagraphQuickInsertMenu,
   PreviewToolBar, TableChessboard, TableColumnToolbar, TableDragBar, TableRowColumMenu, zhCN,
-  type IPreviewDiagramPayload, type ISerializedHistory, type TSelectionState
+  type IPreviewDiagramPayload, type ISerializedHistory, type TSelectionState, type TState
 } from '@muyajs/core'
 import type { Annotation } from '@shared/types'
 import { origProjectId, rawBaseFor, useStore } from '../store'
@@ -16,6 +16,7 @@ import { saveMarkdownImages, saveMarkdownImageSource } from '../utils/markdownIm
 import { createMuyaRuntime, executeMuyaCommand, insertMarkdownInMuya } from '../utils/muyaRuntime'
 import { getMarkdownEditor, registerMarkdownEditor } from '../utils/markdownEditorRuntime'
 import { useWritingPreferences } from '../utils/writingPreferences'
+import { LONG_MARKDOWN_LENGTH, MARKDOWN_PARSE_OPTIONS, parseLongMarkdown } from '../utils/parseLongMarkdown'
 
 interface Props {
   annotations: Annotation[]
@@ -169,17 +170,11 @@ function enhanceCodeBlocks(root: HTMLElement): void {
     const gutter = pre.querySelector<HTMLElement>('.mu-line-numbers-rows')
     if (!collapsible) {
       pre.classList.remove('code-collapsed')
-      code.style.maxHeight = ''
-      code.style.removeProperty('overflow-y')
       if (gutter) gutter.style.transform = ''
       pre.querySelector<HTMLElement>('[data-code-expand]')?.remove()
       return
     }
     pre.classList.add('code-collapsed')
-    const computed = getComputedStyle(code)
-    const lineH = Number.parseFloat(computed.lineHeight) || Number.parseFloat(computed.fontSize) * 1.6 || 22
-    code.style.maxHeight = `${Math.ceil(lineH * CODE_PREVIEW_LINES)}px`
-    code.style.overflowY = 'auto'
     if (!code.dataset.gutterSync) {
       code.dataset.gutterSync = '1'
       code.addEventListener('scroll', () => {
@@ -274,7 +269,7 @@ function DiagramLightbox({ payload, onClose }: { payload: IPreviewDiagramPayload
 }
 
 interface SavedMuyaState {
-  markdown: string
+  draft: string
   history: ISerializedHistory
   selection: TSelectionState | null
 }
@@ -309,6 +304,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
   const [diagram, setDiagram] = useState<IPreviewDiagramPayload | null>(null)
   const [codeViewer, setCodeViewer] = useState<CodeViewerInfo | null>(null)
   const [error, setError] = useState('')
+  const [progressive, setProgressive] = useState(false)
   const docPath = useStore((state) => state.activeDoc?.path)
   const projectId = useStore((state) => state.activeProjectId)
   const tabId = useStore((state) => state.activeTabId)
@@ -334,38 +330,54 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
     if (!docPath || !projectId || !tabId || !hostRef.current) return
     const host = hostRef.current
     let disposed = false
+    const controller = new AbortController()
+    let initializing: Muya | null = null
     let disposeEditor: (() => void) | undefined
+    const key = JSON.stringify([projectId, tabId, docPath])
+    const isActive = (state: ReturnType<typeof useStore.getState>): boolean =>
+      state.activeProjectId === projectId && state.activeTabId === tabId && state.activeDoc?.path === docPath
     setError('')
     setCodeViewer(null)
-    void rawBaseFor(projectId).then((rawBase) => {
-      if (disposed) return
+    const saved = savedStates.get(key)
+    const before = useStore.getState()
+    const shouldBatch = (draft: string): boolean => draft.length >= LONG_MARKDOWN_LENGTH && (!saved || saved.draft === draft)
+    setProgressive(shouldBatch(before.draft))
+    host.setAttribute('aria-busy', 'true')
+    void rawBaseFor(projectId).then(async (rawBase) => {
+      if (disposed || !isActive(useStore.getState())) return
+      let state = useStore.getState()
+      let initialMarkdown = state.draft
+      let parsed: TState[] | undefined
+      const batch = shouldBatch(initialMarkdown)
+      if (batch) {
+        host.dataset.loadingStage = 'parse'
+        try { parsed = await parseLongMarkdown(initialMarkdown, controller.signal) }
+        catch { if (disposed) return } // Older web hosts can still use the same parser locally.
+        if (disposed || !isActive(useStore.getState())) return
+        state = useStore.getState()
+        if (initialMarkdown !== state.draft) {
+          initialMarkdown = state.draft
+          parsed = undefined
+        }
+      }
       const mount = document.createElement('div')
       mount.className = 'prose timber-muya'
       host.replaceChildren(mount)
-      const state = useStore.getState()
       const project = state.projects.find((item) => item.id === projectId)
-      const initialMarkdown = state.draft
-      const saved = savedStates.get(tabId)
       const resolveImage = (src: string): string => {
         if (!src || /^(?:https?:|data:|blob:)/i.test(src)) return src
         const resolved = resolveDocLink(docPath, src, project?.path)
         if (!resolved || !rawBase) return ''
         return `${rawBase}/raw/${origProjectId(projectId)}/${resolved.split('/').map(encodeURIComponent).join('/')}`
       }
-      let muya: Muya
-      try {
-        muya = new Muya(mount, {
-          markdown: saved?.markdown ?? initialMarkdown,
-          frontMatter: true,
-          footnote: true,
+      const muya = initializing = new Muya(mount, {
+          ...(parsed ? { json: parsed } : { markdown: saved?.draft ?? initialMarkdown }),
+          ...MARKDOWN_PARSE_OPTIONS,
           superSubScript: true,
-          texMathGfm: true,
-          githubAlerts: true,
           cjkEmphasis: true,
           ...muyaAppearance(state.settings),
           ...muyaWritingOptions(),
           spellcheckEnabled: false,
-          trimUnnecessaryCodeBlockEmptyLines: false,
           bulletListMarker: '-',
           orderListDelimiter: '.',
           frontmatterType: '-',
@@ -374,20 +386,28 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
           imageAction: persistImageForActiveDocument,
           resolveImageSrc: resolveImage,
           getPathForFile: () => ''
-        } as ConstructorParameters<typeof Muya>[1])
-        muya.locale(zhCN)
+      } as ConstructorParameters<typeof Muya>[1])
+      muya.locale(zhCN)
+      if (batch) {
+        host.dataset.loadingStage = 'render'
+        await muya.initProgressively(controller.signal)
+      } else {
         muya.init({ focus: false })
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : String(cause))
-        return
       }
+      if (disposed || !isActive(useStore.getState())) return
       muya.domNode.setAttribute('data-editor', 'muya')
       muya.domNode.setAttribute('aria-label', 'Markdown 所见即所得编辑器')
       if (saved) {
         muya.setHistory(saved.history)
         if (saved.selection) muya.setSelection(saved.selection)
-        muya.replaceContent(initialMarkdown)
+        if (saved.draft !== initialMarkdown) muya.replaceContent(initialMarkdown)
       }
+      // If an external save arrived during mounting, never register the stale draft as editable.
+      let appliedDraft = useStore.getState().draft
+      if (appliedDraft !== initialMarkdown) muya.setContent(appliedDraft)
+      host.setAttribute('aria-busy', 'false')
+      delete host.dataset.loadingStage
+      setProgressive(false)
       const runtime = createMuyaRuntime(muya)
       registerMarkdownEditor(runtime)
       let frame = 0
@@ -402,8 +422,9 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       }
       const syncDraft = (): void => {
         const current = useStore.getState()
-        if (current.activeTabId !== tabId) return
+        if (!isActive(current)) return
         const markdown = muya.getMarkdown()
+        appliedDraft = markdown
         if (current.draft !== markdown) current.setDraft(markdown)
         rendered()
       }
@@ -417,12 +438,13 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         useStore.getState().toast('err', `图片插入失败：${payload instanceof Error ? payload.message : String(payload)}`)
       })
       const unsubscribe = useStore.subscribe((next, previous) => {
-        if (next.activeTabId !== tabId) return
+        if (!isActive(next)) return
         if (next.settings !== previous.settings) {
           muya.setOptions(muyaAppearance(next.settings), next.settings.codeBlockLineNumbers !== previous.settings.codeBlockLineNumbers)
           rendered()
         }
-        if (next.draft === previous.draft || next.draft === muya.getMarkdown()) return
+        if (next.draft === previous.draft || next.draft === appliedDraft) return
+        appliedDraft = next.draft
         muya.setContent(next.draft)
         rendered()
       })
@@ -491,7 +513,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         if (!current.activeProjectId || !current.activeDoc) return
         try {
           const markdown = await saveMarkdownImages(files, current.activeProjectId, current.activeDoc.path)
-          if (!disposed && current.activeTabId === useStore.getState().activeTabId) insertMarkdownInMuya(muya, markdown)
+          if (!disposed && isActive(useStore.getState())) insertMarkdownInMuya(muya, markdown)
         } catch (cause) {
           current.toast('err', `图片插入失败：${cause instanceof Error ? cause.message : cause}`)
         }
@@ -532,13 +554,13 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
       window.addEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
       window.addEventListener('timber:insert-images', onImages)
       rendered()
+      initializing = null
       disposeEditor = () => {
         unsubscribe()
         unsubscribeWriting()
         cancelAnimationFrame(frame)
         muya.flush()
-        const markdown = muya.getMarkdown()
-        savedStates.set(tabId, { markdown, history: muya.getHistory(), selection: muya.getSelectionState() })
+        savedStates.set(key, { draft: appliedDraft, history: muya.getHistory(), selection: muya.getSelectionState() })
         // flush() commits pending edits through json-change. Merely unmounting must
         // preserve the source draft, including its exact trailing newlines.
         window.removeEventListener(MARKDOWN_COMMAND_EVENT, onCommand)
@@ -551,9 +573,19 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
         setTextHighlight('ann-flash', [])
         muya.destroy()
       }
-    }).catch((cause) => { if (!disposed) setError(cause instanceof Error ? cause.message : String(cause)) })
+    }).catch((cause) => {
+      if (disposed) return
+      initializing?.destroy()
+      initializing = null
+      host.setAttribute('aria-busy', 'false')
+      delete host.dataset.loadingStage
+      setProgressive(false)
+      setError(cause instanceof Error ? cause.message : String(cause))
+    })
     return () => {
       disposed = true
+      controller.abort()
+      initializing?.destroy()
       disposeEditor?.()
       host.replaceChildren()
     }
@@ -561,6 +593,7 @@ function MarkdownView({ annotations, onSelectAnn }: Props) {
 
   const closeOverlays = useCallback(() => { setLightbox(null); setDiagram(null) }, [])
   return <>
+    {progressive && <div className="markdown-progress" role="status">正在加载长文档，可继续切换标签</div>}
     <div className="markdown-editor" ref={hostRef}>
       {error && <div className="re-error timber-editor-error">
         <div className="re-error-icon">⚠</div>

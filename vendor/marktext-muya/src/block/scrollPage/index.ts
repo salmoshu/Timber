@@ -41,16 +41,13 @@ export class ScrollPage extends Parent {
 
     static create(muya: Muya, state: TState[]) {
         const scrollPage = new ScrollPage(muya);
-
-        scrollPage.append(
-            ...state.map((block) => {
-                return this.loadBlock(block.name).create(muya, block);
-            }),
-        );
-
+        scrollPage.appendState(state);
         scrollPage.parent!.domNode!.appendChild(scrollPage.domNode!);
-
         return scrollPage;
+    }
+
+    appendState(state: TState[]) {
+        this.append(...state.map(block => ScrollPage.loadBlock(block.name).create(this.muya, block)));
     }
 
     override get path() {
@@ -88,11 +85,7 @@ export class ScrollPage extends Parent {
         const { muya } = this;
         muya.ui.hideAllFloatTools();
         this.empty();
-        this.append(
-            ...state.map((block) => {
-                return ScrollPage.loadBlock(block.name).create(muya, block);
-            }),
-        );
+        this.appendState(state);
     }
 
     /** One undo step, preserving adjacent block instances; the caller restores the replacement's selection. */

@@ -9,6 +9,7 @@ const projectDir = path.join(temp, 'folder with spaces')
 const first = path.join(projectDir, '首次打开 & 空格.md')
 const second = path.join(projectDir, 'second.markdown')
 const extraDocs = Array.from({ length: 18 }, (_, index) => `overflow-${String(index + 1).padStart(2, '0')}.md`)
+const longDoc = 'progressive.md'
 
 if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
   fs.mkdirSync(temp, { recursive: true })
@@ -45,6 +46,14 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
     fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(projectDir, 'large.png'))
     fs.writeFileSync(path.join(projectDir, 'index.ts'), 'export const answer = 42\n')
     for (const name of extraDocs) fs.writeFileSync(path.join(projectDir, name), `# ${name}\n`)
+    fs.writeFileSync(path.join(projectDir, longDoc), [
+      '# Long document', 'Read the [shared reference][example] below.',
+      ...Array.from({ length: 12 }, (_, section) => [
+        `## Section ${section + 1}`,
+        ...Array.from({ length: 110 }, (_, i) => `Paragraph ${i + 1}. **Bold text** and ` + '`code`' + ' in a longer document to exercise incremental rendering.')
+      ]).flat(),
+      '## Continuation sentinel', '[example]: https://example.com/timber'
+    ].join('\n\n'))
     const gitCommand = (args, input) => {
       const result = spawnSync('git', args, { cwd: projectDir, encoding: 'utf8', input, stdio: 'pipe' })
       if (result.status !== 0) throw new Error('Git fixture setup failed: ' + result.stderr)
@@ -174,6 +183,21 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       check(await evaluate("document.querySelector('.tb-view-trigger').dataset.view === 'resources' && [...document.querySelectorAll('.tb-view-menu button:disabled')].map(option => option.dataset.view).join(',') === 'architecture,history'"), 'Project features are enabled for a single file')
       await evaluate("document.querySelector('.tb-view-menu [aria-checked=true]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
       await wait(() => evaluate("!document.querySelector('.tb-view-menu') && document.activeElement === document.querySelector('.tb-view-trigger')"), 'Workspace menu Escape did not restore focus')
+      await openViewMenu()
+      const titleBlank = await evaluate(`(() => {
+        const area = document.querySelector('.tb-drag')
+        const rect = area.getBoundingClientRect()
+        const x = Math.round(rect.right - 20), y = Math.round(rect.top + rect.height / 2)
+        return { x, y, blank: document.elementFromPoint(x, y) === area, region: getComputedStyle(area).getPropertyValue('-webkit-app-region') }
+      })()`)
+      check(titleBlank.blank && titleBlank.region === 'no-drag', 'Titlebar blank area remains a native dragging region with the menu open')
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: titleBlank.x, y: titleBlank.y, button: 'left', clickCount: 1 })
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: titleBlank.x, y: titleBlank.y, button: 'left', clickCount: 1 })
+      await wait(() => evaluate("!document.querySelector('.tb-view-menu') && document.querySelector('.tb-view-trigger').dataset.view === 'resources' && getComputedStyle(document.querySelector('.tb-drag')).getPropertyValue('-webkit-app-region') === 'drag'"), 'Native click on titlebar whitespace did not dismiss the menu')
+      await openViewMenu()
+      await evaluate("document.querySelector('.app-body').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))")
+      await wait(() => evaluate("!document.querySelector('.tb-view-menu')"), 'Click on workspace whitespace did not dismiss the menu')
+      checks.push('workspace dropdown closes on native titlebar whitespace and outside the menu')
       check(await evaluate("!document.querySelector('.writing-toolbar, .ann-pop')"), 'Removed Timber toolbars remain')
       check(await evaluate("document.querySelector('[aria-label=\"源码模式\"]')?.getAttribute('role') === 'switch' && document.querySelector('[aria-label=\"源码模式\"]')?.querySelectorAll('svg').length === 2 && document.querySelector('[aria-label=\"源码模式\"]')?.textContent.trim() === '' && document.querySelector('[aria-label=\"分页预览\"]')?.tagName === 'BUTTON' && document.querySelector('[aria-label=\"分页预览\"]')?.hasAttribute('aria-pressed') && document.querySelector('[aria-label=\"分页预览\"]')?.querySelector('svg') && document.querySelector('[aria-label=\"分页预览\"]')?.textContent.trim() === ''"), 'Read/source switch and page preview are not accessible icon controls')
       checks.push('cold-start file argument with Chinese, spaces and ampersand; single-file feature gates')
@@ -210,7 +234,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
           const rect = button.getBoundingClientRect()
           return rect.width === preview.width && rect.height === preview.height
         })
-      })()`), 'Export and annotation buttons do not match the page-preview button size')
+      })()`), 'Focus and annotation buttons do not match the page-preview button size')
       check(await evaluate(`(() => {
         const name = document.querySelector('.doc-tab.active .tab-name').getBoundingClientRect()
         const dot = document.querySelector('.doc-tab.active .tab-close.dirty .tc-dot').getBoundingClientRect()
@@ -229,6 +253,12 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => evaluate("!!document.querySelector('.rf-item')"), 'Recent file is missing')
       await evaluate("document.querySelector('.rf-item').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:1100,clientY:210}))")
       check(await evaluate("['打开文档','复制相对路径','复制绝对路径','在资源管理器中显示','从最近记录移除'].every(label => [...document.querySelectorAll('.ctx-item')].some(item => item.textContent === label))"), 'Recent-file context menu is incomplete')
+      const exportFormats = ['导出 PDF', '导出 Word', '导出 HTML', '导出长图']
+      const hasExports = menu => evaluate(`(() => {
+        const items = [...document.querySelectorAll(${JSON.stringify(menu)} + ' .ctx-item')]
+        return ${JSON.stringify(exportFormats)}.every(format => items.some(item => item.textContent.startsWith(format)))
+      })()`)
+      check(await hasExports('.ctx-menu'), 'Recent-file context menu does not have all Markdown exports')
       await evaluate("[...document.querySelectorAll('.ctx-item')].find(button => button.textContent === '从最近记录移除').click()")
       await wait(() => evaluate("!document.querySelector('.rf-item')"), 'Removing a recent entry did not refresh the list')
       check(fs.existsSync(first), 'Removing a recent entry deleted the document')
@@ -428,10 +458,12 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
         const name = document.querySelector('.tree-doc .doc-name')?.getBoundingClientRect()
         return icon && name && Math.abs(icon.top + icon.height / 2 - name.top - name.height / 2) <= 1
       })()`), 'File-tree icon and filename are not vertically centered')
-      await evaluate("document.querySelector('.tree-doc').click()")
+      await evaluate(`document.querySelector('.tree-doc[title="overflow-01.md"]').click()`)
       await wait(() => evaluate("!!document.querySelector('.doc-tab.active')"), 'A project document tab did not open')
       await evaluate("document.querySelector('.doc-tab.active').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,cancelable:true,clientX:420,clientY:92}))")
       await wait(() => evaluate("!!document.querySelector('.ctx-menu')"), 'Tab context menu did not open')
+      check(await hasExports('.ctx-menu'), 'Markdown tab context menu does not have all export formats')
+      check(await evaluate("!document.querySelector('.tabs-actions [aria-label=导出文档]')"), 'Export is still present in the tab toolbar')
       check(await evaluate(`(() => {
         const menu = document.querySelector('.ctx-menu')
         const rect = menu.getBoundingClientRect()
@@ -474,6 +506,141 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       await wait(() => evaluate("!document.querySelector('.doc-tab, .tabs-overflow')"), 'Close all tabs left documents or controls behind')
       check(fs.readFileSync(path.join(projectDir, extraDocs.at(-1)), 'utf-8') === '# overflow-18.md\n', 'Closing all tabs wrote a discarded edit to disk')
       checks.push('scrollable overflow controls, close all tabs and unsaved changes confirmation')
+
+      await evaluate(`(() => {
+        const original = window.fetch.bind(window)
+        window.__previewRace = { started: false, aborted: false, delivered: false }
+        window.fetch = (input, init) => {
+          const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href)
+          if (!url.pathname.endsWith('/doc') || url.searchParams.get('path') !== 'overflow-01.md') return original(input, init)
+          window.__previewRace.started = true
+          init?.signal?.addEventListener('abort', () => { window.__previewRace.aborted = true }, { once: true })
+          // Simulate an obsolete result that arrives even though cancellation was requested.
+          return original(input, { ...init, signal: undefined }).then(response => new Promise(resolve => {
+            setTimeout(() => { window.__previewRace.delivered = true; window.fetch = original; resolve(response) }, 320)
+          }))
+        }
+        document.querySelector('.tree-doc[title="overflow-01.md"]').click()
+      })()`)
+      await wait(() => evaluate("window.__previewRace.started"), 'The first preview read did not start')
+      await evaluate(`document.querySelector('.tree-doc[title="overflow-02.md"]').click()`)
+      await wait(() => evaluate("window.__previewRace.delivered && document.querySelector('.prose')?.textContent.includes('overflow-02.md')"), 'An obsolete file read replaced the reused preview tab')
+      check(await evaluate("window.__previewRace.aborted && document.querySelectorAll('.doc-tab').length === 1 && document.querySelector('.doc-tab.active .tab-name')?.textContent === 'overflow-02.md'"), 'Superseded preview did not cancel or reuse its tab')
+      checks.push('rapid file selection cancels old reads and rejects late preview responses')
+
+      const rightClickFile = name => evaluate(`document.querySelector(${JSON.stringify('.tree-doc[title="' + name + '"]')}).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 930, clientY: 160 }))`)
+      await rightClickFile('second.markdown')
+      await wait(() => evaluate("!!document.querySelector('.ctx-menu')"), 'File-tree context menu did not open')
+      check(await hasExports('.ctx-menu'), 'Markdown file-tree menu does not have all export formats')
+      await evaluate("[...document.querySelectorAll('.ctx-item')].find(item => item.textContent.startsWith('导出 HTML')).click()")
+      await wait(() => evaluate("document.querySelector('.path-folders')?.getAttribute('aria-busy') === 'false' && document.querySelector('.path-filename input')?.value === 'second.html'"), 'Export from an inactive Markdown file did not select the target')
+      await fill('.path-address input', temp)
+      await evaluate("document.querySelector('.local-path-picker .btn-primary').click()")
+      const exportedHtml = path.join(temp, 'second.html')
+      await wait(() => fs.existsSync(exportedHtml) && fs.statSync(exportedHtml).size > 0, 'HTML export from the file menu did not write a file')
+      const html = fs.readFileSync(exportedHtml, 'utf8')
+      check(html.includes('second-open') && html.includes('data:image/png;base64,'), 'File-tree export used the wrong document or omitted embedded assets')
+      await rightClickFile('index.ts')
+      check(await evaluate("![...document.querySelectorAll('.ctx-menu .ctx-item')].some(item => item.textContent.startsWith('导出'))"), 'A code file displays Markdown export actions')
+      await evaluate("document.dispatchEvent(new MouseEvent('mousedown', {bubbles:true}))")
+      checks.push('four Markdown export actions in tree, recent file and tab menus; inactive-file HTML export embeds its local image')
+
+      await evaluate(`(() => {
+        const observe = window.__longRead = { workerMessages: 0, firstBatch: false, switched: false }
+        const OriginalWorker = window.Worker
+        window.__restoreLongWorker = () => { window.Worker = OriginalWorker }
+        window.Worker = new Proxy(OriginalWorker, {
+          construct(target, args) {
+            const worker = new target(...args)
+            if (String(args[0]).includes('markdownParse')) {
+              worker.addEventListener('message', event => { if (event.data.state) observe.workerMessages++ })
+            }
+            return worker
+          }
+        })
+        const observer = new MutationObserver(() => {
+          const body = document.querySelector('.markdown-editor[data-loading-stage="render"]')
+          if (!body?.querySelector('h1')?.textContent.includes('Long document')) return
+          if ([...body.querySelectorAll('h2')].some(h => h.textContent.includes('Continuation sentinel'))) return
+          observe.firstBatch = body.getAttribute('aria-busy') === 'true' && body.querySelector('.prose').inert
+          observer.disconnect()
+          const smallTab = [...document.querySelectorAll('.doc-tab')].find(tab => tab.querySelector('.tab-name').textContent === 'second.markdown')
+          smallTab.click()
+          requestAnimationFrame(() => {
+            observe.switched = smallTab.classList.contains('active') && !body.isConnected
+          })
+        })
+        observer.observe(document.querySelector('.reader-wrap'), { subtree: true, childList: true })
+        document.querySelector('.tree-doc[title="${longDoc}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+      })()`)
+      await wait(() => evaluate("window.__longRead?.switched && document.querySelector('.prose')?.textContent.includes('second-open')"), 'The reader could not switch away while a long document was still mounting')
+      const observed = await evaluate("window.__longRead")
+      check(observed.firstBatch && observed.workerMessages === 1, 'Long Markdown did not use a real parser worker and a locked first batch: ' + JSON.stringify(observed))
+      const selectTab = name => evaluate(`[...document.querySelectorAll('.doc-tab')].find(tab => tab.querySelector('.tab-name').textContent === ${JSON.stringify(name)}).click()`)
+      await selectTab(longDoc)
+      await wait(() => evaluate("document.querySelector('.markdown-editor[aria-busy=false] [data-editor=muya]')?.textContent.includes('Continuation sentinel')"), 'Remaining Markdown did not finish after returning to the long tab')
+      check(await evaluate(`!!document.querySelector('.prose a[href="https://example.com/timber"]') && window.__longRead.workerMessages === 1`), 'Long Markdown lost a late reference or reparsed unchanged content on return')
+      await evaluate("window.__restoreLongWorker()")
+
+      const beforeFocus = await evaluate("document.querySelector('.reader-wrap').getBoundingClientRect().width")
+      await evaluate("document.querySelector('.resource-focus-button').click()")
+      await wait(() => evaluate("document.querySelectorAll('.focus-outline-item').length === 14"), 'Focus mode did not expose the full document outline')
+      check(await evaluate(`(() => {
+        const app = document.querySelector('.app-body').getBoundingClientRect()
+        const reader = document.querySelector('.reader-wrap').getBoundingClientRect()
+        const header = document.querySelector('.titlebar').getBoundingClientRect()
+        return reader.width >= app.width - 1 && reader.width > ${beforeFocus} && header.height > 0 && Math.abs(reader.top - header.bottom) < 2
+      })()`), 'Focus mode did not fill the workspace under the header')
+      await fill('.focus-outline-filter input', 'Continuation sentinel')
+      await wait(() => evaluate("document.querySelectorAll('.focus-outline-item').length === 1"), 'Outline filtering did not isolate the requested heading')
+      await evaluate("document.querySelector('.focus-outline-item').click()")
+      await wait(() => evaluate("document.querySelector('.reader-body').scrollTop > 1000 && document.querySelector('.focus-outline-item[aria-current=location]')?.textContent === 'Continuation sentinel'"), 'Outline jump did not scroll to or highlight the final heading')
+      const savedTop = await evaluate("document.querySelector('.reader-body').scrollTop")
+      await evaluate("document.querySelector('.focus-outline-toggle').click()")
+      check(await evaluate("document.querySelector('.focus-outline-toggle').getAttribute('aria-expanded') === 'false' && !document.querySelector('.focus-outline-list')"), 'Focus outline cannot be collapsed')
+      await evaluate("document.querySelector('.focus-outline-toggle').click()")
+      await wait(() => evaluate("document.querySelectorAll('.focus-outline-item').length === 14"), 'Focus outline cannot be reopened')
+      await selectTab('second.markdown')
+      await wait(() => evaluate("document.querySelector('.focus-outline-item')?.textContent === 'second-open'"), 'Focus mode did not follow the active tab')
+      await selectTab(longDoc)
+      await wait(() => evaluate(`document.querySelector('.reader-body').scrollTop >= ${Math.floor(savedTop * 0.8)}`), 'Deep reading position was lost when returning to a progressive document')
+      await evaluate("document.querySelector('[aria-label=源码模式]').click()")
+      await wait(() => evaluate("!!document.querySelector('.virtual-source .CodeMirror')?.CodeMirror"), 'Long Markdown source did not mount a virtual viewport')
+      check(await evaluate(`(() => {
+        const cm = document.querySelector('.virtual-source .CodeMirror').CodeMirror
+        const { from, to } = cm.getViewport()
+        return cm.lineCount() > 2000 && to - from < 180 && cm.getScrollInfo().height > cm.getScrollInfo().clientHeight
+      })()`), 'Long source rendered beyond the visible region instead of virtualizing lines')
+      await wait(() => evaluate("document.querySelectorAll('.focus-outline-item').length === 14"), 'The source outline did not finish loading')
+      await fill('.focus-outline-filter input', 'Continuation sentinel')
+      await wait(() => evaluate("document.querySelectorAll('.focus-outline-item').length === 1 && document.querySelector('.focus-outline-item').textContent === 'Continuation sentinel'"), 'No filtered source heading available')
+      await evaluate("document.querySelector('.focus-outline-item').click()")
+      await wait(() => evaluate(`(() => {
+        const cm = document.querySelector('.virtual-source .CodeMirror').CodeMirror
+        return cm.getCursor().line > cm.lineCount() - 10 && cm.getScrollInfo().top > 1000
+      })()`), 'Outline jump did not reach the late source heading')
+      await selectTab('second.markdown')
+      await wait(() => evaluate("document.querySelector('.prose')?.textContent.includes('second-open')"), 'The source tab did not release the workspace')
+      await selectTab(longDoc)
+      await wait(() => evaluate("document.querySelector('.virtual-source .CodeMirror')?.CodeMirror.getScrollInfo().top > 1000"), 'Virtual source lost its scroll position after a tab switch')
+      await selectTab('second.markdown')
+      await evaluate("document.querySelector('[aria-label=分页预览]').click()")
+      await wait(() => evaluate("document.querySelector('.paged-preview[data-ready=true]') && document.querySelector('.focus-outline-item')?.textContent === 'second-open'"), 'The focus outline did not work in paged preview')
+      await evaluate("document.querySelector('.doc-tab.active').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 92 }))")
+      await evaluate("[...document.querySelectorAll('.ctx-item')].find(item => item.textContent.startsWith('导出 PDF')).click()")
+      await wait(() => evaluate("document.querySelector('.path-folders')?.getAttribute('aria-busy') === 'false' && document.querySelector('.path-filename input')?.value === 'second.pdf'"), 'PDF export from the tab menu did not open the save picker')
+      await fill('.path-address input', temp)
+      await evaluate("document.querySelector('.local-path-picker .btn-primary').click()")
+      const exportedPdf = path.join(temp, 'second.pdf')
+      await wait(() => fs.existsSync(exportedPdf) && fs.statSync(exportedPdf).size > 0, 'Paged PDF export did not write a file')
+      check(fs.readFileSync(exportedPdf).subarray(0, 5).toString() === '%PDF-', 'Paged export is not a PDF')
+      await evaluate("document.querySelector('.resource-focus-button').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))")
+      await wait(() => evaluate("!document.querySelector('.resource-focused, .focus-outline') && document.querySelector('.resource-focus-button').getAttribute('aria-pressed') === 'false'"), 'Escape did not restore the resource layout')
+      check(await evaluate(`Math.abs(document.querySelector('.reader-wrap').getBoundingClientRect().width - ${beforeFocus}) < 2`), 'Leaving focus mode changed sidebar layout preferences')
+      checks.push('true worker parse, cancellable progressive render, reference integrity and deep scroll restoration')
+      checks.push('virtual source scroll and outline navigation, paged outline and tab-menu PDF export')
+      checks.push('focus fills workspace with header, persistent outline, filter, jump, collapse and Escape restores sidebars')
+
       await evaluate(`(() => {
         const originalFetch = window.fetch.bind(window)
         window.fetch = (input, init) => {
@@ -675,12 +842,15 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
       app.quit()
     } catch (error) {
       if (win && !win.isDestroyed()) await screenshot('failure.png').catch(() => {})
-      const editorState = win && !win.isDestroyed() ? await evaluate(`({
-        focused: document.hasFocus(),
-        activeElement: document.activeElement?.tagName,
-        value: document.querySelector('.CodeMirror')?.CodeMirror?.getValue(),
-        input: document.querySelector('.CodeMirror textarea')?.value
-      })`).catch(() => null) : null
+      const editorState = win && !win.isDestroyed() ? await evaluate(`(() => {
+        const cm = document.querySelector('.CodeMirror')?.CodeMirror
+        return {
+          focused: document.hasFocus(), activeElement: document.activeElement?.tagName,
+          value: cm?.getValue().slice(0, 300), cursor: cm?.getCursor(), sourceScroll: cm?.getScrollInfo(),
+          outline: document.querySelector('.focus-outline-item')?.textContent,
+          input: document.querySelector('.CodeMirror textarea')?.value.slice(0, 120)
+        }
+      })()`).catch(() => null) : null
       fs.writeFileSync(path.join(temp, 'result.json'), JSON.stringify({ passed: false, checks, error: String(error.stack || error), editorState, consoleErrors, screenshots: temp }, null, 2))
       clearTimeout(timeout)
       process.exitCode = 1

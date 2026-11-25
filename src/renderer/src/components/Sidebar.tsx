@@ -7,7 +7,7 @@ import Chevron from './Chevron'
 import ContextMenu, { type MenuItem } from './ContextMenu'
 import GitPanel from './GitPanel'
 import { HistoryList } from './HistoryView'
-import { exportActiveDocument } from '../utils/documentExport'
+import { markdownExportItems } from './markdownExportItems'
 import { filterDocsForProject, filterKeyForProject } from '../utils/settings'
 import { clearRecentFiles, recentFiles, removeRecentFile } from '../utils/local-store'
 import {
@@ -761,16 +761,7 @@ export default function Sidebar({ section = 'projects' }: { section?: 'projects'
       items.push({ key: 'rename', label: '重命名', separatorBefore: true, onClick: () => onRenameNode(node) })
       items.push({ key: 'copy', label: '复制（副本）', onClick: () => void onCopyNode(node) })
     }
-    if (node.type === 'doc' && window.timber && /\.(md|markdown|mdown|mkd)$/i.test(node.path)) {
-      items.push({
-        key: 'export-pdf',
-        label: '导出 PDF…',
-        onClick: () => void (async () => {
-          await useStore.getState().openTab(node.path)
-          if (useStore.getState().activeDoc?.path === node.path) await exportActiveDocument('pdf')
-        })()
-      })
-    }
+    if (node.type === 'doc') items.push(...markdownExportItems(node.path, () => useStore.getState().openTab(node.path, { pinned: true })))
     items.push({
       key: 'reldoc',
       label: '复制相对路径',

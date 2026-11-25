@@ -6,6 +6,7 @@ import { parseInline, tokensToPlainText } from '@muyajs/core'
 import { scrollToEl } from '../utils/scroll'
 import { findAnnotationRange, scrollToRange, setTextHighlight } from '../utils/textRanges'
 import { getMarkdownEditor } from '../utils/markdownEditorRuntime'
+import { IconChevronRight, IconPanelLeft, IconSearch } from './icons'
 
 function fmtTime(s: string): string {
   try {
@@ -32,13 +33,20 @@ function tocPlainText(source: string, profile: 'atx-heading' | 'setext-heading')
   return tokensToPlainText(parseInline(source, { profile })).trim()
 }
 
-/** 从已渲染的 .prose 提取标题目录（阅读模式） */
-export function buildToc(): TocEntry[] {
-  const editorToc = getMarkdownEditor()?.getToc?.()
+const HEADING_SELECTOR = 'h1,h2,h3,h4,h5,h6'
+
+function headingElements(paged: boolean): HTMLElement[] {
+  const prose = !paged ? document.querySelector('.reader-body .prose') : document.querySelector('.paged-preview-pages')
+  const nodes = [...(prose?.querySelectorAll<HTMLElement>(HEADING_SELECTOR) ?? [])]
+  return paged ? nodes.filter((node) => !node.hasAttribute('data-split-from')) : nodes
+}
+
+/** 从已渲染的正文提取标题目录（连续阅读、分页预览） */
+export function buildToc(paged = false): TocEntry[] {
+  const editorToc = !paged && getMarkdownEditor()?.getToc?.()
   if (editorToc) return editorToc
-  const prose = document.querySelector('.prose')
-  if (!prose) return []
-  return [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el, index) => {
+  return headingElements(paged).map((el, index) => {
+    if (paged) return { index, level: Number(el.tagName.slice(1)), text: (el.textContent ?? '').trim() }
     const profile = el.querySelector('.mu-setextheading-content') ? 'setext-heading' : 'atx-heading'
     return { index, level: Number(el.tagName.slice(1)), text: tocPlainText(el.textContent ?? '', profile) }
   })
@@ -59,10 +67,8 @@ export function buildTocFromSource(src: string): TocEntry[] {
 }
 
 /** 点击目录项时现查标题节点（避免持有被重渲染替换的旧引用），滚动并返回元素 */
-export function scrollToHeading(entry: TocEntry): Element | null {
-  const prose = document.querySelector('.prose')
-  if (!prose) return null
-  const headings = [...prose.querySelectorAll('h1,h2,h3,h4,h5,h6')]
+export function scrollToHeading(entry: TocEntry, paged = false): Element | null {
+  const headings = headingElements(paged)
   const el = entry.index !== undefined ? headings[entry.index] : headings.find((h) => Number(h.tagName.slice(1)) === entry.level && (h.textContent ?? '').trim() === entry.text)
   if (!el) return null
   scrollToEl(el)
@@ -97,16 +103,34 @@ function locateInSource(quote: string): boolean {
 const MAX_COMPACT_TOC_ITEMS = 17
 const COMPACT_TOC_ITEM_HEIGHT = 10
 
-function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent | null; mode: string; compact?: boolean }) {
+function TocView({ activeDoc, mode, compact, paged }: { activeDoc: DocContent; mode: string; compact: boolean; paged: boolean }) {
   const draft = useStore((s) => s.draft)
   const [toc, setToc] = useState<TocEntry[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
   const [hoverOffset, setHoverOffset] = useState<number | null>(null)
   const [compactStart, setCompactStart] = useState(0)
+  const [query, setQuery] = useState('')
   const pointerYRef = useRef<number | null>(null)
   const railRef = useRef<HTMLElement | null>(null)
   const flyoutRef = useRef<HTMLDivElement | null>(null)
+  const expandedRef = useRef<HTMLElement>(null)
+  const matches = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase()
+    if (compact) return []
+    return toc.flatMap((heading, index) => !needle || heading.text.toLocaleLowerCase().includes(needle) ? [{ heading, index }] : [])
+  }, [toc, query, compact])
+
+  useEffect(() => {
+    if (compact || query) return
+    const list = expandedRef.current
+    const item = list?.querySelector<HTMLElement>('[aria-current="location"]')
+    if (!list || !item || (list.contains(document.activeElement) && document.activeElement !== item)) return
+    const listRect = list.getBoundingClientRect()
+    const itemRect = item.getBoundingClientRect()
+    if (itemRect.top < listRect.top) list.scrollTop -= listRect.top - itemRect.top
+    else if (itemRect.bottom > listRect.bottom) list.scrollTop += itemRect.bottom - listRect.bottom
+  }, [activeIndex, compact, query, toc])
 
   useEffect(() => {
     setCompactStart(Math.round((railRef.current?.scrollTop ?? 0) / COMPACT_TOC_ITEM_HEIGHT))
@@ -116,42 +140,49 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   // （编辑模式由下方源码提取 effect 负责，这里若不跳过，60ms 后会把源码目录清空）
   useEffect(() => {
     if (mode === 'source') return
-    const t = setTimeout(() => setToc(buildToc()), 60)
-    const refresh = (): void => setToc(buildToc())
-    window.addEventListener('markdown-rendered', refresh)
+    const refresh = (): void => setToc(buildToc(paged))
+    const t = setTimeout(refresh, 60)
+    const event = paged ? 'timber:paged-rendered' : 'markdown-rendered'
+    window.addEventListener(event, refresh)
     return () => {
       clearTimeout(t)
-      window.removeEventListener('markdown-rendered', refresh)
+      window.removeEventListener(event, refresh)
     }
-  }, [activeDoc?.path, activeDoc?.content, mode])
+  }, [activeDoc.path, mode, paged])
 
   useEffect(() => {
     if (mode !== 'source') return
     const timer = window.setTimeout(() => setToc(buildTocFromSource(draft)), 50)
     return () => window.clearTimeout(timer)
-  }, [mode, draft, activeDoc?.path])
+  }, [mode, draft, activeDoc.path])
 
   // 滚动时高亮当前所在章节（阅读模式取视口内最后一个标题；编辑模式按行号推算）
   useEffect(() => {
-    const body = document.querySelector('.reader-body')
+    const body = paged
+      ? document.querySelector<HTMLElement>('.paged-preview')
+      : document.querySelector<HTMLElement>('.virtual-source .CodeMirror-scroll') ?? document.querySelector<HTMLElement>('.reader-body')
     if (!body || toc.length === 0) return
+    const headings = mode === 'source' ? [] : headingElements(paged)
     let raf = 0
-    const activeRef = { current: 0 }
     const update = (): void => {
       raf = 0
-      if (mode === 'source') {
-        const currentLine = getMarkdownEditor()?.viewportLine()
-        if (currentLine === null || currentLine === undefined) return
-        let current = 0
-        toc.forEach((h, index) => { if (h.line !== undefined && h.line <= currentLine) current = index })
-        if (activeRef.current !== current) { activeRef.current = current; setActiveIndex(current) }
-        return
+      const sourceLine = mode === 'source' ? getMarkdownEditor()?.viewportLine() : null
+      if (mode === 'source' && sourceLine == null) return
+      const readingLine = body.getBoundingClientRect().top + 80
+      // 已按文档位置排序，查找已越过的最后一个标题，避免每帧重新遍历和测量整个正文。
+      let lo = 0
+      let hi = mode === 'source' ? toc.length : headings.length
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1
+        const passed = sourceLine != null
+          ? (toc[mid].line ?? 0) <= sourceLine
+          : headings[mid].getBoundingClientRect().top <= readingLine
+        if (passed) lo = mid + 1
+        else hi = mid
       }
-      const headings = document.querySelectorAll('.prose h1,.prose h2,.prose h3,.prose h4,.prose h5,.prose h6')
-      const line = body.getBoundingClientRect().top + 80
-      let current = 0
-      headings.forEach((h, index) => { if (h.getBoundingClientRect().top <= line) current = index })
-      if (activeRef.current !== current) { activeRef.current = current; setActiveIndex(current) }
+      // 最后一节很短时可能无法滚到阅读线，但滚到底依然应高亮它。
+      const atBottom = body.scrollTop > 0 && body.scrollHeight - body.clientHeight - body.scrollTop < 2
+      setActiveIndex(atBottom ? toc.length - 1 : Math.max(0, lo - 1))
     }
     const onScroll = (): void => {
       if (!raf) raf = requestAnimationFrame(update)
@@ -159,10 +190,10 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
     body.addEventListener('scroll', onScroll, { passive: true })
     update()
     return () => { body.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf) }
-  }, [toc, mode])
+  }, [toc, mode, paged])
 
   if (toc.length === 0) {
-    return compact ? null : <div className="ap-empty">当前文档没有可用的标题目录。</div>
+    return compact ? null : <p className="focus-outline-empty">{paged ? '分页完成后会显示标题。' : '这里会列出文档中的标题。'}</p>
   }
 
   const selectAtPointer = (nav: HTMLElement): void => {
@@ -184,10 +215,10 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   // 层级按相对深度归一（v0.6.3）：文档从 h2/h3 起笔时顶层仍从零缩进起。
   // dep 类输出真实深度（0-5，v0.6.4 不再封顶两层）；--toc-pad 为纯层级缩进量，
   // 展开态只作用于标题文字（线段列固定在一条竖线上）。
-  const minLv = Math.min(...toc.map((h) => h.level))
+  const minLv = toc.reduce((min, heading) => Math.min(min, heading.level), 6)
   const jumpTo = (entry: TocEntry, index: number): void => {
     if (mode === 'source') scrollToSourceHeading(entry)
-    else scrollToHeading(entry)
+    else scrollToHeading(entry, paged)
     setActiveIndex(index)
   }
   const clearHover = (): void => {
@@ -207,13 +238,32 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   }
   if (!compact) {
     return (
-      <nav className="toc-list" aria-label="文档目录">
-        {toc.map((h, i) => (
-          <button key={i} className={`toc-item ${activeIndex === i ? 'active' : ''}`} onClick={() => jumpTo(h, i)}>
-            {h.text || '(无标题)'}
-          </button>
-        ))}
-      </nav>
+      <>
+        {(toc.length > 8 || query) && (
+          <label className="focus-outline-filter">
+            <IconSearch size={14} />
+            <input type="search" aria-label="筛选文档标题" placeholder="筛选标题" value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape' && query) { event.stopPropagation(); event.preventDefault(); setQuery('') }
+                if (event.key === 'Enter' && matches[0]) { event.preventDefault(); jumpTo(matches[0].heading, matches[0].index) }
+              }}
+            />
+          </label>
+        )}
+        <nav className="focus-outline-list" aria-label="文档目录" ref={expandedRef}>
+          {matches.map(({ heading: h, index: i }) => (
+            <button type="button" key={i} className={`focus-outline-item${h.level === minLv ? ' top-level' : ''}`}
+              style={{ '--toc-depth': h.level - minLv } as React.CSSProperties}
+              aria-current={activeIndex === i ? 'location' : undefined}
+              title={h.text || '无标题'}
+              onClick={() => jumpTo(h, i)}>
+              {h.text || '(无标题)'}
+            </button>
+          ))}
+          {matches.length === 0 && <p className="focus-outline-empty">没有匹配的标题。</p>}
+        </nav>
+      </>
     )
   }
   // 只渲染当前窗口内的横线，滚动到行间时也不多露出第 18 根；浮层保留完整目录。
@@ -298,10 +348,27 @@ function TocView({ activeDoc, mode, compact = false }: { activeDoc: DocContent |
   )
 }
 
-export function DocumentOutline() {
+export function DocumentOutline({ focused = false, paged = false }: { focused?: boolean; paged?: boolean }) {
   const activeDoc = useStore((s) => s.activeDoc)
   const mode = useStore((s) => s.mode)
-  return <div className="document-outline"><TocView activeDoc={activeDoc} mode={mode} compact /></div>
+  const [collapsed, setCollapsed] = useState(false)
+  useEffect(() => { if (!focused) setCollapsed(false) }, [focused])
+  if (!activeDoc) return null
+  const toc = <TocView key={JSON.stringify([activeDoc.path, mode, paged])} activeDoc={activeDoc} mode={paged ? 'read' : mode} compact={!focused} paged={paged} />
+  if (!focused) return <div className="document-outline">{toc}</div>
+  return (
+    <aside className={`focus-outline${collapsed ? ' collapsed' : ''}`} aria-label="专注模式目录">
+      <div className="focus-outline-header">
+        {!collapsed && <span><IconPanelLeft size={15} />文档目录</span>}
+        <button type="button" className="focus-outline-toggle"
+          title={collapsed ? '展开目录' : '收起目录'} aria-label={collapsed ? '展开目录' : '收起目录'}
+          aria-controls="focus-outline-content" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>
+          <IconChevronRight size={14} />
+        </button>
+      </div>
+      <div id="focus-outline-content" hidden={collapsed}>{!collapsed && toc}</div>
+    </aside>
+  )
 }
 
 /** 类型图标/文字统一拆分渲染（v0.6.4）：面板拖窄后容器查询隐藏文字，仅留图标，避免换行挤压 */

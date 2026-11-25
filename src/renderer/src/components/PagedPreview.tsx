@@ -21,6 +21,10 @@ export default function PagedPreview({ docPath, projectId, editOn = false, onTog
   const [scale, setScale] = useState(1)
 
   useEffect(() => {
+    if (pages > 0) window.dispatchEvent(new Event('timber:paged-rendered'))
+  }, [pages])
+
+  useEffect(() => {
     const host = scrollRef.current
     if (!host) return
     const update = () => setScale(Math.min(1, Math.max(0.35, (host.clientWidth - 36) / A4_WIDTH)))
@@ -62,7 +66,7 @@ export default function PagedPreview({ docPath, projectId, editOn = false, onTog
   }, [markdown, docPath, projectId, editOn])
 
   return (
-    <div className="paged-preview" ref={scrollRef}>
+    <div className="paged-preview" ref={scrollRef} data-doc-path={docPath} data-project-id={projectId} data-ready={pages > 0}>
       <div className="paged-preview-meta">
         <span className="paged-preview-count">A4 分页预览{pages > 0 ? ` · 共 ${pages} 页` : ' · 正在分页…'}</span>
         <span className="paged-preview-hint">PDF 将严格按此分页导出</span>

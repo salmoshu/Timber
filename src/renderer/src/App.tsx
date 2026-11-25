@@ -16,6 +16,7 @@ import Logo from './components/Logo'
 
 export default function App() {
   const { init, ready, fatalError, annPanelOpen, annPanelWidth, extPageUrl, closeExtPage, settingsOpen, view, activeProjectId } = useStore()
+  const resourceFocused = useStore((s) => s.resourceFocused && !!s.activeTabId && s.view === 'resources' && !s.settingsOpen)
   const [archAiHost, setArchAiHost] = useState<HTMLDivElement | null>(null)
 
   /** 架构 AI 复用右侧栏的宽度偏好与左缘拖拽调宽。 */
@@ -55,6 +56,19 @@ export default function App() {
 
   // 主进程拦截到的外链（导航 / window.open）转应用内浮层；浮层未挂载也能收到
   useEffect(() => window.timber?.onOpenExternalPage((url) => useStore.getState().openExtPage(url)), [])
+
+  useEffect(() => {
+    if (!resourceFocused) return
+    const exitFocus = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || hasDialog() ||
+        document.querySelector('[aria-modal="true"], .ctx-menu, .tb-view-menu, .img-lightbox, .mm-lightbox')) return
+      event.preventDefault()
+      useStore.getState().setResourceFocus(false)
+      document.querySelector<HTMLButtonElement>('.resource-focus-button')?.focus({ preventScroll: true })
+    }
+    window.addEventListener('keydown', exitFocus)
+    return () => window.removeEventListener('keydown', exitFocus)
+  }, [resourceFocused])
 
   // 标签快捷键（主进程 before-input-event 拦截后转发）：Ctrl+W 关闭、Ctrl+Tab 切换
   useEffect(
@@ -102,7 +116,7 @@ export default function App() {
     <div className="app">
       <div className="app-surface">
         <TitleBar />
-        <div className="app-body">
+        <div className={`app-body${resourceFocused ? ' resource-focused' : ''}`}>
           {settingsOpen ? <SettingsView /> : (
             <>
               <Sidebar />

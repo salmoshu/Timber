@@ -53,7 +53,7 @@ export default function LocalPathPicker({ kind, defaultName, extension = '.pdf',
       <span className="path-selection-path" title={directory}>{directory || '尚未选择目录'}</span>
       <span className="path-selection-meta">{listing?.folders.length ?? 0} 个子文件夹</span>
     </div>}
-    {kind === 'save' && <label className="path-filename">文件名<input aria-label="PDF 文件名" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit() } }} /></label>}
+    {kind === 'save' && <label className="path-filename">文件名<input aria-label={`${extension.slice(1).toUpperCase()} 文件名`} value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit() } }} /></label>}
     {error && <p role="alert" className="path-error">{error}</p>}
     <div className="app-dialog-actions"><button data-cancel className="btn-ghost" onClick={() => onFinish(null)}>取消</button><button className="btn-primary" disabled={busy || !directory.trim()} onClick={() => void submit()}>{kind === 'folder' ? '选择此目录' : '保存'}</button></div>
   </div>

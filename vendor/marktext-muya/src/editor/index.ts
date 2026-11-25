@@ -34,6 +34,22 @@ import { EditTransactions } from './transactions';
 
 const debug = logger('editor:');
 
+function nextRenderFrame(signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+        if (signal.aborted) {
+            resolve();
+            return;
+        }
+        const complete = () => {
+            window.cancelAnimationFrame(frame);
+            signal.removeEventListener('abort', complete);
+            resolve();
+        };
+        const frame = window.requestAnimationFrame(complete);
+        signal.addEventListener('abort', complete, { once: true });
+    });
+}
+
 // The pick/drop walkers operate on live block-tree nodes (ScrollPage,
 // Parent, Content). The tree's instance methods (queryBlock, find,
 // insertBefore, etc.) are not all exposed on a single TS type, and
@@ -330,11 +346,38 @@ export class Editor {
 
     init(options: { focus?: boolean } = {}) {
         registerBlocks();
+        this.scrollPage = ScrollPage.create(this._muya, this.jsonState.getState());
+        this._listenForEdits(options);
+    }
 
+    /** Mount the existing complete model in bounded groups without activating partial editing. */
+    async initProgressively(signal: AbortSignal) {
+        signal.throwIfAborted();
+        registerBlocks();
         const muya = this._muya;
+        const page = this.scrollPage = muya.runDocumentUpdate(() => ScrollPage.create(muya, []));
         const state = this.jsonState.getState();
+        for (let i = 0; i < state.length;) {
+            signal.throwIfAborted();
+            const start = performance.now();
+            muya.runDocumentUpdate(() => {
+                // Let the first group paint, then let pointer/keyboard input run between frames.
+                // Each group keeps complete block trees (lists, tables, etc.) intact.
+                do {
+                    const end = Math.min(i + 8, state.length);
+                    page.appendState(state.slice(i, end));
+                    i = end;
+                } while (i < state.length && performance.now() - start < 6);
+            });
+            if (i < state.length)
+                await nextRenderFrame(signal);
+        }
+        signal.throwIfAborted();
+        this._listenForEdits({ focus: false });
+    }
 
-        this.scrollPage = ScrollPage.create(muya, state);
+    private _listenForEdits(options: { focus?: boolean }) {
+        const muya = this._muya;
 
         this._dispatchEvents();
         // Hovering a rendered link wrapper dispatches `muya-link-tools` so the

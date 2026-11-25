@@ -1,9 +1,9 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { isDocumentTabPath, useStore, type DocTab } from '../store'
 import ContextMenu, { type MenuItem } from './ContextMenu'
-import { exportActiveDocument } from '../utils/documentExport'
 import { filterDocsForProject } from '../utils/settings'
-import { IconChevronRight } from './icons'
+import { IconChevronRight, IconFocusLayout } from './icons'
+import { markdownExportItems } from './markdownExportItems'
 
 /** 文档标签栏（VSCode 语义：斜体 = 预览标签，随单击复用；双击固定）；
  *  children 渲染为行右端操作区（阅读模式|编辑模式 / 标签等）。
@@ -11,9 +11,11 @@ import { IconChevronRight } from './icons'
  *  右端操作区固定在可视区，不被挤走；激活 tab 自动滚入可视范围。
  *  支持拖拽 tab 调整先后顺序（插入位置以强调色竖线提示）。
  *  右键 tab 弹出 VSCode 风格菜单（关闭 / 关闭其他 / 关闭右侧 / 复制路径等）。 */
-export default function TabsBar({ children }: { children?: ReactNode }) {
+export default function TabsBar({ children, afterFocus }: { children?: ReactNode; afterFocus?: ReactNode }) {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
+  const focused = useStore((s) => s.resourceFocused)
+  const setResourceFocus = useStore((s) => s.setResourceFocus)
   const activeProjectId = useStore((s) => s.activeProjectId)
   const projects = useStore((s) => s.projects)
   const settings = useStore((s) => s.settings)
@@ -102,17 +104,7 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
         }
       }
     ]
-    if (window.timber && /\.(md|markdown|mdown|mkd)$/i.test(t.path)) {
-      items.push({
-        key: 'export-pdf',
-        label: '导出 PDF…',
-        separatorBefore: true,
-        onClick: () => void (async () => {
-          if (useStore.getState().activeTabId !== t.id) await activateTab(t.id)
-          if (useStore.getState().activeDoc?.path === t.path) await exportActiveDocument('pdf')
-        })()
-      })
-    }
+    items.push(...markdownExportItems(t.path, () => activateTab(t.id)))
     if (project && !project.remoteId) {
       items.push({
         key: 'reveal',
@@ -216,7 +208,23 @@ export default function TabsBar({ children }: { children?: ReactNode }) {
           </button>
         </div>
       )}
-      {children && <div className="tabs-actions">{children}</div>}
+      <div className="tabs-actions">
+        {children}
+        <div className="rt-tool-group">
+          <button
+            type="button"
+            className={`rt-btn resource-focus-button${focused ? ' active' : ''}`}
+            aria-label="专注模式"
+            aria-pressed={focused}
+            title={focused ? '退出专注模式（Esc）' : '专注模式 · 隐藏侧栏并展开文档目录'}
+            onClick={() => setResourceFocus(!focused)}
+          >
+            <IconFocusLayout exit={focused} />
+            {focused && <span aria-hidden="true">退出专注</span>}
+          </button>
+        </div>
+        {afterFocus}
+      </div>
       {menu && menuTab && (
         <ContextMenu x={menu.x} y={menu.y} items={tabMenuItems(menuTab)} onClose={() => setMenu(null)} />
       )}

@@ -245,6 +245,19 @@ export class Muya {
 
     init(options: { focus?: boolean } = {}) {
         this.runDocumentUpdate(() => this.editor.init({ ...options, focus: !this.isReadOnly && options.focus !== false }));
+        this._finishInit();
+    }
+
+    /** Opt-in first mount for large documents. The caller must destroy aborted instances. */
+    async initProgressively(signal: AbortSignal) {
+        this.domNode.inert = true;
+        await this.editor.initProgressively(signal);
+        signal.throwIfAborted();
+        this._finishInit();
+        this.domNode.inert = false;
+    }
+
+    private _finishInit() {
         this._refreshReadingPresentation();
         if (Muya.plugins.length) {
             for (const { plugin: Plugin, options: opts } of Muya.plugins)

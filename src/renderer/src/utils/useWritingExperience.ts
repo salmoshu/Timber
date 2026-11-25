@@ -60,7 +60,10 @@ export function useWritingExperience(enabled: boolean, paged: boolean): string {
           if (!range.collapsed) shouldCenter = false
         }
       }
-      if (typewriter && shouldCenter && caret) body.scrollTop += caret.top - body.getBoundingClientRect().top - body.clientHeight * 0.45
+      if (typewriter && shouldCenter && caret) {
+        const scroller = body.querySelector<HTMLElement>('.virtual-source .CodeMirror-scroll') ?? body
+        scroller.scrollTop += caret.top - scroller.getBoundingClientRect().top - scroller.clientHeight * 0.45
+      }
       shouldCenter = false
     }
     const schedule = (event?: Event): void => {

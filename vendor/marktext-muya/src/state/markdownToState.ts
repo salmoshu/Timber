@@ -14,7 +14,9 @@ import { firstWordOfInfo, parseFenceLine } from '../utils';
 import { createDiagramState, diagramTypeOfLang } from '../utils/diagram/fence';
 import { toListDelimiter } from '../utils/listMarker';
 import logger from '../utils/logger';
-import { lexBlock } from '../utils/marked';
+// Use the block lexer directly; the barrel also loads Prism, which registers
+// its own message handler when this parser runs in a worker.
+import { lexBlock } from '../utils/marked/lexBlock';
 
 const debug = logger('import markdown: ');
 

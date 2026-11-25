@@ -57,8 +57,6 @@ export function getMarkdownEditor(): MarkdownEditorRuntime | null {
 }
 
 /** Persist pending Muya transactions before draft snapshots and mode changes. */
-export function flushMarkdownEditor(): string | undefined {
-  if (!activeEditor) return undefined
-  activeEditor.flush()
-  return activeEditor.getValue()
+export function flushMarkdownEditor(): void {
+  activeEditor?.flush()
 }
